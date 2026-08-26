@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+{% block breadcrumb %}<div class="crumb" data-i18n="hint.sku_blank">Leave the SKU blank to generate one automatically.</div>{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-9">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-box-seam me-1"></i>
+          <span data-i18n="product.details">Product Details</span></div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="description,image" %}
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'inventory:product_list' %}" class="btn btn-outline-secondary btn-sm"
+             data-i18n="action.cancel">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>
+            <span data-i18n="action.save_product">Save Product</span></button>
+        </div>
+      </div>
+    </form>
+
+    {# Autocomplete sources for the free-text Category / Supplier boxes #}
+    <datalist id="categoryOptions">
+      {% for name in form.category_options %}<option value="{{ name }}"></option>{% endfor %}
+    </datalist>
+    <datalist id="supplierOptions">
+      {% for name in form.supplier_options %}<option value="{{ name }}"></option>{% endfor %}
+    </datalist>
+  </div>
+
+  <div class="col-lg-3">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i>
+        <span data-i18n="common.notes">Notes</span></div>
+      <div class="card-body small text-muted">
+        <p><strong data-i18n="field.category">Category</strong> and
+           <strong data-i18n="field.supplier">Supplier</strong> are free text.
+           Start typing to pick an existing one, or enter a new name and it will be
+           created automatically when you save. Matching ignores capitalisation.</p>
+        <p><strong data-i18n="field.stock_quantity">Stock quantity</strong> is not editable here.
+           Stock only changes through restocks, sales and adjustments, so the ledger and the
+           running total can never disagree.</p>
+        {% if user.can_view_financials %}
+          <p><strong data-i18n="field.cost_price">Cost price</strong> feeds margin reporting.
+             It is refreshed automatically whenever you record a restock with a unit cost.</p>
+        {% else %}
+          <p>Cost price and margins are visible to administrators only.</p>
+        {% endif %}
+        <p class="mb-0"><strong data-i18n="field.low_stock_threshold">Low-stock threshold</strong>
+           drives the alert badge in the sidebar.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

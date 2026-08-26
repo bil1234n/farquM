@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Transactions{% endblock %}
+{% block page_title %}Transactions{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ result_count }} transaction{{ result_count|pluralize }} matching your filters</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-cart-plus me-1"></i> New Sale
+  </a>
+  <a href="{% url 'reports:export_sales_csv' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-download me-1"></i> Export CSV
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="stat-card accent-primary">
+      <div class="label">Revenue (filtered)</div>
+      <div class="value money">{{ sum_revenue|money }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card accent-success">
+      <div class="label">Collected</div>
+      <div class="value money">{{ sum_collected|money }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card accent-danger">
+      <div class="label">Outstanding</div>
+      <div class="value money">{{ sum_outstanding|money }}</div>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label">Search</label>{{ filter_form.q }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Status</label>{{ filter_form.status }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">From</label>{{ filter_form.date_from }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">To</label>{{ filter_form.date_to }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Sold by</label>{{ filter_form.seller }}
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Reference</th><th>Customer</th><th class="num">Items</th>
+          <th class="num">Total</th><th class="num">Paid</th><th class="num">Balance</th>
+          <th>Status</th><th>Sold by</th><th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in transactions %}
+          <tr class="{% if t.is_voided %}table-secondary{% endif %}">
+            <td>
+              <a href="{% url 'sales:transaction_detail' t.pk %}" class="mono fw-semibold">{{ t.reference }}</a>
+              <div class="text-muted-sm">{{ t.created_at|date:"d M Y, H:i" }}</div>
+            </td>
+            <td>
+              {{ t.customer_display }}
+              {% if t.is_overdue %}
+                <div><span class="badge text-bg-danger">Overdue</span></div>
+              {% endif %}
+            </td>
+            <td class="num">{{ t.line_count }}</td>
+            <td class="num money fw-semibold">{{ t.total_amount|money }}</td>
+            <td class="num money text-success">{{ t.amount_paid|money }}</td>
+            <td class="num money {% if t.balance_due > 0 %}text-danger fw-semibold{% else %}text-muted{% endif %}">
+              {{ t.balance_due|money }}
+            </td>
+            <td>
+              {% if t.is_voided %}
+                <span class="badge text-bg-dark">Voided</span>
+              {% else %}
+                <span class="badge text-bg-{{ t.status_class }}">{{ t.get_payment_status_display }}</span>
+              {% endif %}
+            </td>
+            <td class="text-muted-sm">{{ t.sold_by.display_name|default:"&mdash;" }}</td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <a href="{% url 'sales:transaction_detail' t.pk %}" class="btn btn-outline-secondary" title="View">
+                  <i class="bi bi-eye"></i>
+                </a>
+                <a href="{% url 'sales:transaction_print' t.pk %}" class="btn btn-outline-secondary" title="Print" target="_blank">
+                  <i class="bi bi-printer"></i>
+                </a>
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="9">
+            <div class="empty-state">
+              <i class="bi bi-receipt"></i>
+              <p class="mb-3">No transactions match your filters.</p>
+              <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">Record a sale</a>
+            </div>
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

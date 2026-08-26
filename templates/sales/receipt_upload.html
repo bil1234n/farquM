@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Attach Receipt{% endblock %}
+{% block page_title %}Attach Receipt{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ txn.reference }} &middot; {{ txn.customer_display }}</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-paperclip me-1"></i> Upload Proof</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="file,caption" %}
+          <div class="alert alert-info small mt-3 mb-0">
+            <i class="bi bi-info-circle me-1"></i>
+            Accepted: JPG, PNG, WEBP or PDF, up to 5&nbsp;MB.
+            Attach the signed paper receipt, a bank slip, or a mobile-money confirmation.
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'sales:transaction_detail' txn.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-upload me-1"></i> Upload</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

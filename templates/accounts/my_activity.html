@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}My Activity{% endblock %}
+{% block page_title %}My Activity{% endblock %}
+{% block breadcrumb %}<div class="crumb">Everything you have done in the system</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'accounts:profile' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-person me-1"></i> Back to Profile</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-clock-history me-1"></i> Activity Log</div>
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>When</th><th>Action</th><th>Record</th><th>Description</th></tr></thead>
+      <tbody>
+        {% for e in entries %}
+          <tr>
+            <td class="text-muted-sm">{{ e.created_at|date:"d M Y" }}<div>{{ e.created_at|date:"H:i:s" }}</div></td>
+            <td><span class="badge text-bg-{% if e.action == 'DELETE' or e.action == 'VOID' %}danger
+              {% elif e.action == 'OVERRIDE' %}warning{% elif e.action == 'CREATE' or e.action == 'PAYMENT' %}success
+              {% elif e.action == 'LOGIN' or e.action == 'LOGOUT' %}light text-dark{% else %}info{% endif %}">
+              {{ e.get_action_display }}</span></td>
+            <td class="text-muted-sm">{% if e.model_name %}{{ e.model_name }}
+              <div class="mono">{{ e.object_repr|truncatechars:28 }}</div>{% else %}&mdash;{% endif %}</td>
+            <td>{{ e.description }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4"><div class="empty-state"><i class="bi bi-clock-history"></i>
+            No activity recorded yet.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

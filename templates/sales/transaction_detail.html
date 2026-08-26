@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{{ txn.reference }}{% endblock %}
+{% block page_title %}{{ txn.reference }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    {{ txn.created_at|date:"l, d F Y \a\t H:i" }} &middot; sold by {{ txn.sold_by.display_name|default:"unknown" }}
+  </div>
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'sales:transaction_print' txn.pk %}" target="_blank" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-printer me-1"></i> Print
+  </a>
+  <a href="{% url 'sales:receipt_upload' txn.pk %}" class="btn btn-outline-primary btn-sm">
+    <i class="bi bi-paperclip me-1"></i> Attach Receipt
+  </a>
+  {% if debt and debt.is_open %}
+    <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm">
+      <i class="bi bi-cash-coin me-1"></i> Record Payment
+    </a>
+  {% endif %}
+  {% if user.can_delete_records and not txn.is_voided %}
+    <a href="{% url 'sales:transaction_void' txn.pk %}" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-x-octagon me-1"></i> Void
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if txn.is_voided %}
+  <div class="alert alert-dark">
+    <h6 class="mb-1"><i class="bi bi-x-octagon-fill me-1"></i> This transaction was voided</h6>
+    <div class="small mb-0">
+      Voided by <strong>{{ txn.voided_by.display_name|default:"unknown" }}</strong>
+      on {{ txn.voided_at|date:"d M Y, H:i" }}. Stock was returned and any linked debt cancelled.
+      <div class="mt-1"><strong>Reason:</strong> {{ txn.void_reason }}</div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="row g-3">
+
+  {# ---------------- Line items ---------------- #}
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-list-ul me-1"></i> Items Sold</div>
+      <div class="table-responsive">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Product</th><th class="num">Qty</th><th class="num">Unit price</th>
+              {% if user.can_view_financials %}<th class="num">Unit cost</th>{% endif %}
+              <th class="num">Discount</th><th class="num">Line total</th>
+              {% if user.can_view_financials %}<th class="num">Profit</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in txn.items.all %}
+              <tr>
+                <td>
+                  <a href="{% url 'inventory:product_detail' item.product_id %}">{{ item.product_name }}</a>
+                  <div class="text-muted-sm mono">{{ item.product_sku }}</div>
+                </td>
+                <td class="num">{{ item.quantity }}</td>
+                <td class="num money">{{ item.unit_price|money }}</td>
+                {% if user.can_view_financials %}
+                  <td class="num money text-muted">{{ item.unit_cost|money }}</td>
+                {% endif %}
+                <td class="num money text-danger">{{ item.line_discount|money }}</td>
+                <td class="num money fw-semibold">{{ item.line_total|money }}</td>
+                {% if user.can_view_financials %}
+                  <td class="num money {% if item.line_profit > 0 %}text-success{% else %}text-danger{% endif %}">
+                    {{ item.line_profit|money }}
+                  </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if user.can_view_financials %}
+        <div class="card-footer bg-light small d-flex justify-content-between">
+          <span class="text-muted">
+            <i class="bi bi-info-circle me-1"></i>
+            Cost figures are snapshots taken at the time of sale, so historical margins stay accurate.
+          </span>
+          <span>
+            COGS <strong class="money">{{ txn.total_cost|money }}</strong> &middot;
+            Gross profit <strong class="money text-success">{{ txn.gross_profit|money }}</strong>
+            ({{ txn.profit_margin }}%)
+          </span>
+        </div>
+      {% endif %}
+    </div>
+
+    {# ---------------- Receipts ---------------- #}
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-paperclip me-1"></i> Attached Receipts &amp; Proof</span>
+        <a href="{% url 'sales:receipt_upload' txn.pk %}" class="btn btn-sm btn-outline-primary">Upload</a>
+      </div>
+      <div class="card-body">
+        {% if txn.receipts.all %}
+          <div class="row g-3">
+            {% for r in txn.receipts.all %}
+              <div class="col-6 col-md-3">
+                <div class="border rounded p-2 h-100">
+                  {% if r.is_image %}
+                    <a href="{{ r.file.url }}" target="_blank">
+                      <img src="{{ r.file.url }}" class="receipt-thumb mb-2" alt="{{ r.caption }}">
+                    </a>
+                  {% else %}
+                    <a href="{{ r.file.url }}" target="_blank"
+                       class="d-grid receipt-thumb mb-2 bg-light text-center align-content-center text-decoration-none">
+                      <i class="bi bi-file-earmark-pdf" style="font-size:2rem"></i>
+                      <span class="small">PDF</span>
+                    </a>
+                  {% endif %}
+                  <div class="small fw-semibold text-truncate">{{ r.get_kind_display }}</div>
+                  <div class="text-muted-sm text-truncate">{{ r.caption|default:r.filename }}</div>
+                  <div class="text-muted-sm">{{ r.created_at|date:"d M Y" }}</div>
+                  {% if user.can_delete_records %}
+                    <a href="{% url 'sales:receipt_delete' r.pk %}" class="btn btn-sm btn-outline-danger w-100 mt-2">
+                      <i class="bi bi-trash"></i>
+                    </a>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty-state py-4">
+            <i class="bi bi-paperclip"></i>
+            No receipt attached yet.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ---------------- Summary ---------------- #}
+  <div class="col-lg-4">
+    <div class="pos-total mb-3">
+      <div class="line"><span>Subtotal</span><span class="money">{{ txn.subtotal|money }}</span></div>
+      <div class="line"><span>Discount</span><span class="money text-danger">-{{ txn.discount_amount|money }}</span></div>
+      <div class="line"><span>Tax</span><span class="money">{{ txn.tax_amount|money }}</span></div>
+      <div class="line grand"><span>Total</span><span class="money">{{ txn.total_amount|money }}</span></div>
+      <div class="line"><span>Amount paid</span><span class="money text-success">{{ txn.amount_paid|money }}</span></div>
+      <div class="line fw-bold">
+        <span>Balance due</span>
+        <span class="money {% if txn.balance_due > 0 %}text-danger{% endif %}">{{ txn.balance_due|money }}</span>
+      </div>
+      <div class="text-center mt-3">
+        <span class="badge text-bg-{{ txn.status_class }} px-3 py-2">{{ txn.get_payment_status_display }}</span>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-person me-1"></i> Customer</div>
+      <div class="card-body">
+        {% if txn.customer %}
+          <div class="fw-semibold">
+            <a href="{% url 'sales:customer_detail' txn.customer.pk %}">{{ txn.customer.name }}</a>
+          </div>
+          <div class="text-muted-sm mb-2">
+            <i class="bi bi-telephone me-1"></i>{{ txn.customer.phone }}
+          </div>
+          {% if txn.customer.outstanding_balance > 0 %}
+            <div class="alert alert-warning py-2 px-3 small mb-0">
+              Total debt across all sales:
+              <strong class="money">{{ txn.customer.outstanding_balance|money }}</strong>
+              <a href="{% url 'credit:borrower_detail' txn.customer.pk %}" class="d-block mt-1">View borrower profile</a>
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="text-muted">Walk-in customer (no record kept).</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if debt %}
+      <div class="card mb-3 border-warning">
+        <div class="card-header bg-warning-subtle">
+          <i class="bi bi-cash-stack me-1"></i> Linked Debt
+        </div>
+        <div class="card-body">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted-sm">Reference</span>
+            <a href="{% url 'credit:debt_detail' debt.pk %}" class="mono">{{ debt.reference }}</a>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted-sm">Principal</span><span class="money">{{ debt.principal|money }}</span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted-sm">Repaid</span>
+            <span class="money text-success">{{ debt.amount_repaid|money }}</span>
+          </div>
+          <div class="d-flex justify-content-between mb-2 fw-bold">
+            <span>Balance</span><span class="money text-danger">{{ debt.balance|money }}</span>
+          </div>
+          <div class="progress mb-2">
+            <div class="progress-bar bg-success" style="width:{{ debt.repayment_percent }}%"></div>
+          </div>
+          <div class="d-flex justify-content-between text-muted-sm mb-3">
+            <span>Due {{ debt.due_date|date:"d M Y" }}</span>
+            <span class="badge text-bg-{{ debt.status_class }}">{{ debt.display_status }}</span>
+          </div>
+          {% if debt.is_open %}
+            <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm w-100">
+              <i class="bi bi-cash-coin me-1"></i> Record Payment
+            </a>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i> Details</div>
+      <div class="card-body small">
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">Payment method</span><span>{{ txn.get_payment_method_display }}</span>
+        </div>
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">Sold by</span><span>{{ txn.sold_by.display_name|default:"&mdash;" }}</span>
+        </div>
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">Recorded</span><span>{{ txn.created_at|date:"d M Y, H:i" }}</span>
+        </div>
+        {% if txn.due_date %}
+          <div class="d-flex justify-content-between py-1">
+            <span class="text-muted">Due date</span><span>{{ txn.due_date|date:"d M Y" }}</span>
+          </div>
+        {% endif %}
+        {% if txn.notes %}
+          <hr class="my-2">
+          <div class="text-muted mb-1">Notes</div>
+          <div>{{ txn.notes|linebreaksbr }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

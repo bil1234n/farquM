@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Write Off Debt{% endblock %}
+{% block page_title %}Write Off Debt{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ debt.reference }} &middot; {{ debt.customer.name }} &middot; administrator override</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white"><i class="bi bi-slash-circle me-1"></i> Declare this debt uncollectable</div>
+      <div class="card-body">
+        <p>You are writing off <strong class="money">{{ debt.balance|money }}</strong> owed by
+           <strong>{{ debt.customer.name }}</strong> ({{ debt.customer.phone }}).</p>
+
+        <table class="table table-sm mb-3">
+          <tr><th class="text-muted">Principal</th><td class="money">{{ debt.principal|money }}</td></tr>
+          <tr><th class="text-muted">Repaid so far</th><td class="money text-success">{{ debt.amount_repaid|money }}</td></tr>
+          <tr><th class="text-muted">Being written off</th><td class="money fw-bold text-danger">{{ debt.balance|money }}</td></tr>
+          <tr><th class="text-muted">Due date</th><td>{{ debt.due_date|date:"d M Y" }}
+            {% if debt.is_overdue %}<span class="badge text-bg-danger ms-1">{{ debt.days_overdue }} days late</span>{% endif %}</td></tr>
+        </table>
+
+        <div class="alert alert-warning small">
+          <strong>This is an accounting loss.</strong>
+          <ul class="mb-0 mt-1 ps-3">
+            <li>The debt leaves accounts receivable and stops appearing in aging reports.</li>
+            <li>The record stays visible forever with your name and reason attached.</li>
+            <li>No further payments can be accepted unless an administrator restores it.</li>
+            <li>Consider blocking this customer's credit as well if the debt is being written off for non-payment.</li>
+          </ul>
+        </div>
+
+        <form method="post" novalidate>
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.reason.id_for_label }}">
+              {{ form.reason.label }} <span class="required-mark">*</span></label>
+            {{ form.reason }}
+            <div class="form-text">{{ form.reason.help_text }}</div>
+            {% for e in form.reason.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-check mb-3">
+            {{ form.confirm }}
+            <label class="form-check-label" for="{{ form.confirm.id_for_label }}">{{ form.confirm.label }}</label>
+            {% for e in form.confirm.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'credit:debt_detail' debt.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+            <button class="btn btn-danger btn-sm"><i class="bi bi-slash-circle me-1"></i> Write Off {{ debt.balance|money }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Low Stock{% endblock %}
+{% block page_title %}Stock Needing Attention{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ out_count }} out of stock &middot; {{ low_count }} running low</div>{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-md-6"><div class="stat-card accent-danger">
+    <div class="label">Out of Stock</div><div class="value">{{ out_count }}</div>
+    <div class="hint">Cannot be sold until restocked</div></div></div>
+  <div class="col-md-6"><div class="stat-card accent-warning">
+    <div class="label">Low Stock</div><div class="value">{{ low_count }}</div>
+    <div class="hint">At or below the alert threshold</div></div></div>
+</div>
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-exclamation-triangle me-1"></i> Reorder List</div>
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Supplier</th>
+        <th class="num">In stock</th><th class="num">Threshold</th><th class="num">Shortfall</th>
+        <th>Status</th><th class="text-end"></th></tr></thead>
+      <tbody>
+        {% for p in products %}
+          <tr>
+            <td><a href="{% url 'inventory:product_detail' p.pk %}" class="fw-semibold">{{ p.name }}</a></td>
+            <td class="mono text-muted">{{ p.sku }}</td>
+            <td>{{ p.category.name|default:"&mdash;" }}</td>
+            <td class="text-muted-sm">{{ p.supplier.name|default:"&mdash;" }}
+              {% if p.supplier.phone %}<div>{{ p.supplier.phone }}</div>{% endif %}</td>
+            <td class="num fw-semibold {% if p.is_out_of_stock %}text-danger{% endif %}">{{ p.stock_quantity }}</td>
+            <td class="num text-muted">{{ p.low_stock_threshold }}</td>
+            <td class="num text-danger fw-semibold">{{ p.low_stock_threshold|subtract:p.stock_quantity }}</td>
+            <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
+            <td class="text-end">
+              <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-sm btn-success">
+                <i class="bi bi-plus-circle me-1"></i> Restock</a>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="9"><div class="empty-state py-5">
+            <i class="bi bi-check-circle text-success"></i>
+            <h2 class="h6">All stock levels are healthy</h2>
+            <p class="text-muted-sm mb-0">Nothing is at or below its reorder threshold.</p>
+          </div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

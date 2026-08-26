@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Customers{% endblock %}
+{% block page_title %}Customers{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">{{ total_customers }} registered &middot; {{ debtor_count }} currently owe money</div>
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'sales:customer_create' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-person-plus me-1"></i> Add Customer
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-6">
+      <label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Name, phone number or email...">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Filter</label>
+      <select name="filter" class="form-select form-select-sm">
+        <option value="">All customers</option>
+        <option value="debtors" {% if selected_filter == 'debtors' %}selected{% endif %}>With outstanding debt</option>
+        <option value="credit" {% if selected_filter == 'credit' %}selected{% endif %}>Credit approved</option>
+        <option value="inactive" {% if selected_filter == 'inactive' %}selected{% endif %}>Inactive</option>
+      </select>
+    </div>
+    <div class="col-md-2 d-grid">
+      <button class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i> Filter</button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Customer</th><th>Phone</th><th>Type</th>
+          <th class="num">Outstanding</th><th class="num">Credit limit</th>
+          <th>Credit</th><th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in customers %}
+          <tr>
+            <td>
+              <a href="{% url 'sales:customer_detail' c.pk %}" class="fw-semibold">{{ c.name }}</a>
+              {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
+              {% if c.email %}<div class="text-muted-sm">{{ c.email }}</div>{% endif %}
+            </td>
+            <td class="mono">{{ c.phone }}</td>
+            <td><span class="badge text-bg-light text-dark">{{ c.get_customer_type_display }}</span></td>
+            <td class="num money {% if c.outstanding_balance > 0 %}text-danger fw-semibold{% else %}text-muted{% endif %}">
+              {{ c.outstanding_balance|money }}
+            </td>
+            <td class="num money text-muted">
+              {% if c.credit_limit > 0 %}{{ c.credit_limit|money }}{% else %}&mdash;{% endif %}
+            </td>
+            <td>
+              {% if c.credit_account.is_blocked %}
+                <span class="badge text-bg-dark">Blocked</span>
+              {% elif c.is_credit_approved %}
+                <span class="badge text-bg-{{ c.credit_account.risk_class }}">
+                  {{ c.credit_account.risk_label }}
+                </span>
+              {% else %}
+                <span class="badge text-bg-light text-dark">Cash only</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                {% if c.outstanding_balance > 0 %}
+                  <a href="{% url 'credit:borrower_detail' c.pk %}" class="btn btn-outline-warning" title="Borrower profile">
+                    <i class="bi bi-cash-stack"></i>
+                  </a>
+                {% endif %}
+                <a href="{% url 'sales:customer_detail' c.pk %}" class="btn btn-outline-secondary" title="View">
+                  <i class="bi bi-eye"></i>
+                </a>
+                <a href="{% url 'sales:customer_update' c.pk %}" class="btn btn-outline-secondary" title="Edit">
+                  <i class="bi bi-pencil"></i>
+                </a>
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7">
+            <div class="empty-state">
+              <i class="bi bi-people"></i>
+              <p class="mb-3">No customers found.</p>
+              <a href="{% url 'sales:customer_create' %}" class="btn btn-primary btn-sm">Register a customer</a>
+            </div>
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

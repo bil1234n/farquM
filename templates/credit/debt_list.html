@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Debts{% endblock %}
+{% block page_title %}Debt Records{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ result_count }} record{{ result_count|pluralize }} matching your filters</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-speedometer2 me-1"></i> Credit Dashboard
+  </a>
+  <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-download me-1"></i> Export
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="stat-card accent-primary">
+      <div class="label">Principal (filtered)</div>
+      <div class="value money">{{ sum_principal|money }}</div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="stat-card accent-danger">
+      <div class="label">Balance Outstanding (filtered)</div>
+      <div class="value money">{{ sum_balance|money }}</div>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5"><label class="form-label">Search</label>{{ filter_form.q }}</div>
+    <div class="col-md-3"><label class="form-label">Status</label>{{ filter_form.status }}</div>
+    <div class="col-md-3"><label class="form-label">Age</label>{{ filter_form.bucket }}</div>
+    <div class="col-md-1 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Debt</th><th>Customer</th><th class="num">Principal</th>
+          <th class="num">Repaid</th><th class="num">Balance</th>
+          <th style="width:120px">Progress</th><th>Due</th><th>Status</th><th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in debts %}
+          <tr>
+            <td>
+              <a href="{% url 'credit:debt_detail' d.pk %}" class="mono fw-semibold">{{ d.reference }}</a>
+              {% if d.transaction %}
+                <div class="text-muted-sm">
+                  <a href="{% url 'sales:transaction_detail' d.transaction.pk %}">{{ d.transaction.reference }}</a>
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{% url 'credit:borrower_detail' d.customer.pk %}">{{ d.customer.name }}</a>
+              <div class="text-muted-sm">{{ d.customer.phone }}</div>
+            </td>
+            <td class="num money">{{ d.principal|money }}</td>
+            <td class="num money text-success">{{ d.amount_repaid|money }}</td>
+            <td class="num money fw-semibold {% if d.balance > 0 %}text-danger{% endif %}">{{ d.balance|money }}</td>
+            <td>
+              <div class="progress"><div class="progress-bar bg-success" style="width:{{ d.repayment_percent }}%"></div></div>
+              <div class="text-muted-sm">{{ d.repayment_percent }}%</div>
+            </td>
+            <td class="text-muted-sm">
+              {{ d.due_date|date:"d M Y" }}
+              {% if d.is_overdue %}<div class="text-danger">{{ d.days_overdue }}d late</div>{% endif %}
+            </td>
+            <td><span class="badge text-bg-{{ d.status_class }}">{{ d.display_status }}</span></td>
+            <td class="text-end">
+              {% if d.is_open %}
+                <a href="{% url 'credit:repayment_create' d.pk %}" class="btn btn-sm btn-success">
+                  <i class="bi bi-cash-coin"></i>
+                </a>
+              {% else %}
+                <a href="{% url 'credit:debt_detail' d.pk %}" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-eye"></i>
+                </a>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="9"><div class="empty-state">
+            <i class="bi bi-journal-check"></i>No debt records match your filters.
+          </div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

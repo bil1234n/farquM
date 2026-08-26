@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ customer.name }} &mdash; Borrower{% endblock %}
+{% block page_title %}{{ customer.name }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">Borrower profile &middot; {{ customer.phone }} &middot;
+    {{ repayment_count }} payment{{ repayment_count|pluralize }} on record</div>
+{% endblock %}
+
+{% block page_actions %}
+  {% if account.outstanding_balance > 0 %}
+    <a href="{% url 'credit:bulk_repayment' customer.pk %}" class="btn btn-success btn-sm">
+      <i class="bi bi-cash-coin me-1"></i> Collect Payment</a>
+  {% endif %}
+  <a href="{% url 'sales:customer_detail' customer.pk %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-person me-1"></i> Customer Record</a>
+  {% if user.is_admin %}
+    <a href="{% url 'credit:account_update' account.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-sliders me-1"></i> Credit Terms</a>
+    <a href="{% url 'credit:account_block' account.pk %}" class="btn btn-outline-{% if account.is_blocked %}success{% else %}danger{% endif %} btn-sm">
+      <i class="bi bi-slash-circle me-1"></i> {% if account.is_blocked %}Unblock{% else %}Block{% endif %}</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if account.is_blocked %}
+  <div class="alert alert-dark">
+    <strong><i class="bi bi-slash-circle me-1"></i> Credit blocked</strong> &mdash;
+    no further credit sales will be accepted for this customer.
+    <div class="small mt-1"><strong>Reason:</strong> {{ account.block_reason|default:"not specified" }}</div>
+  </div>
+{% elif account.is_over_limit %}
+  <div class="alert alert-danger">
+    <strong><i class="bi bi-exclamation-octagon-fill me-1"></i> Over credit limit</strong> &mdash;
+    owes {{ account.outstanding_balance|money }} against a limit of {{ account.credit_limit|money }}.
+  </div>
+{% elif account.has_overdue %}
+  <div class="alert alert-warning">
+    <strong><i class="bi bi-exclamation-triangle-fill me-1"></i> Has overdue debt</strong> &mdash;
+    {{ account.overdue_amount|money }} is past its due date.
+  </div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="stat-card accent-danger">
+    <div class="label">Outstanding</div><div class="value money">{{ account.outstanding_balance|money }}</div>
+    <div class="hint">{{ open_debts|length }} open debt{{ open_debts|length|pluralize }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-primary">
+    <div class="label">Total Borrowed</div><div class="value money">{{ total_borrowed|money }}</div>
+    <div class="hint">Lifetime credit extended</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-success">
+    <div class="label">Total Repaid</div><div class="value money">{{ total_repaid|money }}</div>
+    <div class="hint">Last payment {{ account.last_payment_date|date:"d M Y"|default:"never" }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-{{ account.risk_class }}">
+    <div class="label">Credit Standing</div><div class="value" style="font-size:1.1rem">{{ account.risk_label }}</div>
+    <div class="hint">
+      {% if account.credit_limit > 0 %}{{ account.utilisation_percent }}% of limit used
+      {% else %}No limit set{% endif %}</div></div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-journal-text me-1"></i> Debt Records</div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Debt</th><th class="num">Principal</th><th class="num">Repaid</th>
+            <th class="num">Balance</th><th style="width:110px">Progress</th><th>Due</th><th>Status</th><th class="text-end"></th></tr></thead>
+          <tbody>
+            {% for d in debts %}
+              <tr>
+                <td><a href="{% url 'credit:debt_detail' d.pk %}" class="mono fw-semibold">{{ d.reference }}</a>
+                  <div class="text-muted-sm">{{ d.issued_date|date:"d M Y" }}</div></td>
+                <td class="num money">{{ d.principal|money }}</td>
+                <td class="num money text-success">{{ d.amount_repaid|money }}</td>
+                <td class="num money fw-semibold {% if d.balance > 0 %}text-danger{% endif %}">{{ d.balance|money }}</td>
+                <td><div class="progress"><div class="progress-bar bg-success" style="width:{{ d.repayment_percent }}%"></div></div></td>
+                <td class="text-muted-sm">{{ d.due_date|date:"d M Y" }}</td>
+                <td><span class="badge text-bg-{{ d.status_class }}">{{ d.display_status }}</span></td>
+                <td class="text-end">
+                  {% if d.is_open %}
+                    <a href="{% url 'credit:repayment_create' d.pk %}" class="btn btn-sm btn-success">
+                      <i class="bi bi-cash-coin"></i></a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="8"><div class="empty-state py-4"><i class="bi bi-journal"></i>
+                This customer has never bought on credit.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-cash-coin me-1"></i> Repayment History</span>
+        <span class="text-muted-sm">Every installment, across all debts</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Payment</th><th>Debt</th><th>Method</th><th class="num">Amount</th>
+            <th class="num">Balance after</th><th>Received by</th><th>Proof</th><th class="text-end"></th></tr></thead>
+          <tbody>
+            {% for p in repayments %}
+              <tr class="{% if p.is_reversed %}table-secondary{% endif %}">
+                <td><span class="mono {% if p.is_reversed %}text-decoration-line-through{% endif %}">{{ p.reference }}</span>
+                  <div class="text-muted-sm">{{ p.paid_at|date:"d M Y, H:i" }}</div>
+                  {% if p.is_reversed %}<span class="badge text-bg-danger">Reversed</span>{% endif %}</td>
+                <td><a href="{% url 'credit:debt_detail' p.debt.pk %}" class="mono">{{ p.debt.reference }}</a></td>
+                <td class="text-muted-sm">{{ p.get_method_display }}
+                  {% if p.external_reference %}<div class="mono">{{ p.external_reference }}</div>{% endif %}</td>
+                <td class="num money fw-semibold {% if p.is_reversed %}text-muted text-decoration-line-through{% else %}text-success{% endif %}">
+                  {{ p.amount|money }}</td>
+                <td class="num money text-muted">{{ p.balance_after|money }}</td>
+                <td class="text-muted-sm">{{ p.received_by.display_name|default:"&mdash;" }}</td>
+                <td>
+                  {% if p.proofs.all %}
+                    {% for proof in p.proofs.all %}
+                      <a href="{{ proof.file.url }}" target="_blank" class="badge text-bg-light text-dark">
+                        <i class="bi bi-paperclip"></i></a>
+                    {% endfor %}
+                  {% else %}<span class="text-muted-sm">&mdash;</span>{% endif %}
+                </td>
+                <td class="text-end">
+                  {% if user.can_delete_records and not p.is_reversed %}
+                    <a href="{% url 'credit:repayment_reverse' p.pk %}" class="btn btn-sm btn-outline-danger" title="Reverse">
+                      <i class="bi bi-arrow-counterclockwise"></i></a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="8"><div class="empty-state py-4"><i class="bi bi-cash"></i>
+                No repayments recorded.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% if account.outstanding_balance > 0 %}
+      <div class="card mb-3 border-success">
+        <div class="card-header bg-success-subtle"><i class="bi bi-cash-coin me-1"></i> Lump-Sum Payment</div>
+        <form method="post" action="{% url 'credit:bulk_repayment' customer.pk %}" enctype="multipart/form-data">
+          {% csrf_token %}
+          <div class="card-body">
+            <div class="mb-2"><label class="form-label">Total received</label>{{ bulk_form.amount }}
+              <div class="form-text">{{ bulk_form.amount.help_text }}</div></div>
+            <div class="mb-2"><label class="form-label">Method</label>{{ bulk_form.method }}</div>
+            <div class="mb-3"><label class="form-label">Proof</label>{{ bulk_form.proof }}</div>
+            <button class="btn btn-success btn-sm w-100"><i class="bi bi-check-lg me-1"></i> Apply Payment</button>
+            <div class="form-text mt-2">Applied to the oldest debt first.</div>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-hourglass-split me-1"></i> Aging</div>
+      <div class="card-body">
+        {% if aging.total %}
+          {% for bucket, amount in aging.buckets.items %}
+            {% if amount %}
+              <div class="d-flex justify-content-between small py-1">
+                <span>{% if bucket == 'CURRENT' %}Not yet due{% elif bucket == '90+' %}Over 90 days{% else %}{{ bucket }} days late{% endif %}</span>
+                <span class="money fw-semibold">{{ amount|money }}</span>
+              </div>
+            {% endif %}
+          {% endfor %}
+          <div class="d-flex justify-content-between border-top pt-2 mt-2 fw-bold">
+            <span>Total</span><span class="money">{{ aging.total|money }}</span></div>
+        {% else %}
+          <div class="text-center text-muted py-3"><i class="bi bi-check-circle text-success d-block mb-2" style="font-size:1.6rem"></i>
+            No outstanding debt.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-sliders me-1"></i> Credit Terms</div>
+      <div class="card-body small">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Approved for credit</span>
+          <span>{% if customer.is_credit_approved %}<span class="badge text-bg-success">Yes</span>
+                {% else %}<span class="badge text-bg-secondary">No</span>{% endif %}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Credit limit</span>
+          <span class="money">{% if account.credit_limit > 0 %}{{ account.credit_limit|money }}{% else %}Not set{% endif %}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Available credit</span>
+          <span class="money">{{ account.available_credit|money }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Payment terms</span>
+          <span>{{ account.default_terms_days }} days</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Last purchase</span>
+          <span>{{ account.last_purchase_date|date:"d M Y"|default:"&mdash;" }}</span></div>
+        {% if account.notes %}<hr class="my-2"><div class="text-muted mb-1">Notes</div>
+          <div>{{ account.notes|linebreaksbr }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

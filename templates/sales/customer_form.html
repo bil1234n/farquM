@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">The phone number is the customer's unique identifier and must not repeat.</div>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-9">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-person-vcard me-1"></i> Customer Details</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="address,notes" %}
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'sales:customer_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save Customer</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-3">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i> About credit approval</div>
+      <div class="card-body small text-muted">
+        <p>A customer can only buy on <strong>"Pay Later"</strong> terms once an administrator
+        ticks <em>credit approved</em>.</p>
+        <p>Their credit limit is then set on the borrower profile. A sale that would push
+        them past that limit is refused at the point of sale, before any stock moves.</p>
+        <p class="mb-0">Managers can register customers but cannot grant credit approval.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

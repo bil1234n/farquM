@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ product.name }}{% endblock %}
+{% block page_title %}{{ product.name }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">SKU {{ product.sku }}{% if product.barcode %} &middot; barcode {{ product.barcode }}{% endif %}
+  {% if product.category %} &middot; {{ product.category.name }}{% endif %}</div>
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'inventory:product_restock' product.pk %}" class="btn btn-success btn-sm">
+    <i class="bi bi-plus-circle me-1"></i> Restock</a>
+  <a href="{% url 'inventory:product_adjust' product.pk %}" class="btn btn-outline-warning btn-sm">
+    <i class="bi bi-sliders me-1"></i> Adjust</a>
+  <a href="{% url 'inventory:product_update' product.pk %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-pencil me-1"></i> Edit</a>
+  {% if user.can_delete_records %}
+    <a href="{% url 'inventory:product_delete' product.pk %}" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-archive me-1"></i> Archive</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-{{ product.stock_status_class }}">
+      <div class="label">Current Stock</div>
+      <div class="value">{{ product.stock_quantity }}</div>
+      <div class="hint">{{ product.stock_status_label }} &middot; alert at {{ product.low_stock_threshold }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label">Selling Price</div>
+      <div class="value money">{{ product.selling_price|money }}</div>
+      <div class="hint">per {{ product.get_unit_display|lower }}</div>
+    </div>
+  </div>
+  {% if user.can_view_financials %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-info">
+        <div class="label">Cost Price <span class="badge text-bg-secondary">Admin</span></div>
+        <div class="value money">{{ product.cost_price|money }}</div>
+        <div class="hint">Profit {{ product.profit_per_unit|money }} / unit</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-success">
+        <div class="label">Stock Value</div>
+        <div class="value money">{{ product.stock_value|money }}</div>
+        <div class="hint">Margin {{ product.margin_percent }}% &middot; markup {{ product.markup_percent }}%</div>
+      </div>
+    </div>
+  {% else %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-info">
+        <div class="label">Unit</div><div class="value" style="font-size:1.1rem">{{ product.get_unit_display }}</div>
+      </div>
+    </div>
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-success">
+        <div class="label">Status</div>
+        <div class="value" style="font-size:1.1rem">{% if product.is_active %}Active{% else %}Inactive{% endif %}</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-arrow-left-right me-1"></i> Stock Movement Ledger</span>
+        <span class="text-muted-sm">Append-only &mdash; corrections are new entries</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Date</th><th>Type</th><th class="num">Change</th>
+            <th class="num">Before</th><th class="num">After</th><th>Reference / reason</th><th>By</th></tr></thead>
+          <tbody>
+            {% for m in movements %}
+              <tr>
+                <td class="text-muted-sm">{{ m.created_at|date:"d M Y, H:i" }}</td>
+                <td><span class="badge text-bg-{% if m.is_inbound %}success{% else %}danger{% endif %}">
+                  {{ m.get_movement_type_display }}</span></td>
+                <td class="num fw-semibold {% if m.is_inbound %}text-success{% else %}text-danger{% endif %}">
+                  {% if m.is_inbound %}+{% endif %}{{ m.quantity_delta }}</td>
+                <td class="num text-muted">{{ m.quantity_before }}</td>
+                <td class="num fw-semibold">{{ m.quantity_after }}</td>
+                <td class="text-muted-sm">
+                  {% if m.reference %}<span class="mono">{{ m.reference }}</span><br>{% endif %}
+                  {{ m.reason }}</td>
+                <td class="text-muted-sm">{{ m.performed_by.display_name|default:"&mdash;" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-arrow-left-right"></i>No stock movements yet.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-receipt me-1"></i> Recent Sales</div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Transaction</th><th>Customer</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">Total</th></tr></thead>
+          <tbody>
+            {% for s in recent_sales %}
+              <tr>
+                <td><a href="{% url 'sales:transaction_detail' s.transaction.pk %}" class="mono">{{ s.transaction.reference }}</a>
+                    <div class="text-muted-sm">{{ s.transaction.created_at|date:"d M Y" }}</div></td>
+                <td>{{ s.transaction.customer_display }}</td>
+                <td class="num">{{ s.quantity }}</td>
+                <td class="num money">{{ s.unit_price|money }}</td>
+                <td class="num money fw-semibold">{{ s.line_total|money }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5"><div class="empty-state py-4"><i class="bi bi-receipt"></i>Not sold yet.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% if product.image %}
+      <div class="card mb-3"><img src="{{ product.image.url }}" class="card-img-top" alt="{{ product.name }}"></div>
+    {% endif %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i> Details</div>
+      <div class="card-body small">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">SKU</span><span class="mono">{{ product.sku }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Barcode</span><span class="mono">{{ product.barcode|default:"&mdash;" }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Category</span><span>{{ product.category.name|default:"&mdash;" }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Supplier</span><span>{{ product.supplier.name|default:"&mdash;" }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Unit</span><span>{{ product.get_unit_display }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Back-orders</span>
+          <span>{% if product.allow_negative_stock %}Allowed{% else %}Blocked{% endif %}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Added</span><span>{{ product.created_at|date:"d M Y" }}</span></div>
+        {% if product.description %}<hr class="my-2">
+          <div class="text-muted mb-1">Description</div><div>{{ product.description|linebreaksbr }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

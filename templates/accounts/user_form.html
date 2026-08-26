@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-8">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-person-gear me-1"></i> Account Details</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="notes" %}
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'accounts:user_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save User</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-shield-lock me-1"></i> Choosing a role</div>
+      <div class="card-body small text-muted">
+        <p><strong>Administrator</strong> &mdash; full access. Can manage users, see cost prices
+           and profit margins, void sales, write off debts, set credit limits and change settings.</p>
+        <p><strong>Manager</strong> &mdash; operational access. Records sales, manages products,
+           customers and debt collection. Cannot see cost or margin data, cannot delete or
+           override anything, cannot manage users.</p>
+        <p class="mb-0"><strong>Note:</strong> the system will not let you demote or deactivate
+           the last remaining active administrator, so you can never lock yourself out.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

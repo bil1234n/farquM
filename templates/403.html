@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Access denied{% endblock %}
+{% block page_title %}Access denied{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="empty-state py-5">
+    <i class="bi bi-shield-lock text-danger"></i>
+    <h2 class="h5 mb-2">You do not have permission to view this page</h2>
+    <p class="mb-1">Your role is <strong>{{ user.get_role_display }}</strong>.</p>
+    <p class="text-muted-sm mb-4">
+      Financial reports, user management and record deletion are restricted to administrators.
+      If you believe you need access, ask an administrator to review your role.
+    </p>
+    <a href="{% url 'reports:dashboard' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i> Back to dashboard
+    </a>
+  </div>
+</div>
+{% endblock %}

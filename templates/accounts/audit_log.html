@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Audit Log{% endblock %}
+{% block page_title %}Audit Log{% endblock %}
+{% block breadcrumb %}<div class="crumb">Immutable record of every action taken in the system</div>{% endblock %}
+
+{% block content %}
+<div class="alert alert-secondary small">
+  <i class="bi bi-shield-check me-1"></i>
+  Entries here can never be edited or deleted, by anyone, including administrators.
+  Logins, failed login attempts, stock changes, payments, voids and overrides are all captured.
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4"><label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Description or record..."></div>
+    <div class="col-md-2"><label class="form-label">Action</label>
+      <select name="action" class="form-select form-select-sm">
+        <option value="">All actions</option>
+        {% for value, label in actions %}
+          <option value="{{ value }}" {% if selected_action == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="col-md-2"><label class="form-label">User</label>
+      <select name="user" class="form-select form-select-sm">
+        <option value="">All users</option>
+        {% for u in all_users %}
+          <option value="{{ u.pk }}" {% if selected_user == u.pk|stringformat:"s" %}selected{% endif %}>{{ u.username }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="col-md-2"><label class="form-label">Record type</label>
+      <select name="model" class="form-select form-select-sm">
+        <option value="">All types</option>
+        {% for m in models %}
+          <option value="{{ m }}" {% if selected_model == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i> Filter</button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>When</th><th>User</th><th>Action</th><th>Record</th><th>Description</th><th>IP</th></tr></thead>
+      <tbody>
+        {% for e in entries %}
+          <tr>
+            <td class="text-muted-sm">{{ e.created_at|date:"d M Y" }}<div>{{ e.created_at|date:"H:i:s" }}</div></td>
+            <td>{{ e.user.display_name|default:e.username_snapshot|default:"system" }}
+              {% if e.user %}<div class="text-muted-sm">{{ e.user.get_role_display }}</div>{% endif %}</td>
+            <td><span class="badge text-bg-{% if e.action == 'DELETE' or e.action == 'VOID' or e.action == 'LOGIN_FAILED' %}danger
+              {% elif e.action == 'OVERRIDE' %}warning{% elif e.action == 'CREATE' or e.action == 'PAYMENT' %}success
+              {% elif e.action == 'LOGIN' or e.action == 'LOGOUT' %}light text-dark{% else %}info{% endif %}">
+              {{ e.get_action_display }}</span></td>
+            <td class="text-muted-sm">{% if e.model_name %}{{ e.model_name }}
+              <div class="mono">{{ e.object_repr|truncatechars:30 }}</div>{% else %}&mdash;{% endif %}</td>
+            <td style="max-width:420px">{{ e.description }}
+              {% if e.changes %}
+                <details class="mt-1"><summary class="text-muted-sm">Field changes</summary>
+                  <table class="table table-sm mt-1 mb-0">
+                    {% for field, change in e.changes.items %}
+                      <tr><td class="text-muted-sm">{{ field }}</td>
+                        <td class="text-muted-sm"><s>{{ change.from }}</s> &rarr; <strong>{{ change.to }}</strong></td></tr>
+                    {% endfor %}
+                  </table>
+                </details>
+              {% endif %}</td>
+            <td class="text-muted-sm mono">{{ e.ip_address|default:"&mdash;" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6"><div class="empty-state"><i class="bi bi-shield-check"></i>No log entries match your filters.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Delete receipt{% endblock %}
+{% block page_title %}Delete Receipt{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white">
+        <i class="bi bi-trash me-1"></i> Confirm deletion
+      </div>
+      <div class="card-body">
+        <p>Delete <strong>{{ receipt.filename }}</strong> from
+           <strong class="mono">{{ receipt.transaction.reference }}</strong>?</p>
+        <div class="alert alert-warning small">
+          Removing proof of payment is permanent and is recorded in the audit log against your name.
+          Consider whether the file should be kept for the record instead.
+        </div>
+        {% if receipt.is_image %}
+          <img src="{{ receipt.file.url }}" class="img-fluid rounded border mb-3" alt="">
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'sales:transaction_detail' receipt.transaction.pk %}"
+               class="btn btn-outline-secondary btn-sm">Cancel</a>
+            <button class="btn btn-danger btn-sm">Delete permanently</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

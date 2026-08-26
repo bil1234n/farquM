@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Profit &amp; Margins{% endblock %}
+{% block page_title %}Profit &amp; Margins{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">{{ start|date:"d M Y" }} &ndash; {{ end|date:"d M Y" }}
+    &middot; <span class="badge text-bg-secondary">Administrator only</span></div>
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'reports:export_sales_csv' %}?date_from={{ start|date:'Y-m-d' }}&date_to={{ end|date:'Y-m-d' }}"
+     class="btn btn-primary btn-sm"><i class="bi bi-download me-1"></i> Export CSV</a>
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> Print</button>
+{% endblock %}
+
+{% block content %}
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4"><label class="form-label">From</label>
+      <input type="date" name="date_from" value="{{ start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <div class="col-md-4"><label class="form-label">To</label>
+      <input type="date" name="date_to" value="{{ end|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i> Apply</button></div>
+    <div class="col-md-2 d-grid"><a href="{% url 'reports:profit_report' %}" class="btn btn-outline-secondary btn-sm">Reset</a></div>
+  </div>
+</form>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="stat-card accent-primary">
+    <div class="label">Revenue</div><div class="value money">{{ profit.revenue|money }}</div>
+    <div class="hint">{{ profit.count }} sale{{ profit.count|pluralize }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-warning">
+    <div class="label">Cost of Goods Sold</div><div class="value money">{{ profit.cogs|money }}</div>
+    <div class="hint">From per-line cost snapshots</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-success">
+    <div class="label">Gross Profit</div><div class="value money text-success">{{ profit.gross_profit|money }}</div>
+    <div class="hint">Revenue minus COGS</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-info">
+    <div class="label">Gross Margin</div><div class="value">{{ profit.margin_percent }}%</div>
+    <div class="hint">Discounts given {{ profit.discounts|money }}</div></div></div>
+</div>
+
+<div class="alert alert-info small">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong>How these figures are produced.</strong> Each sale line stores the product's cost
+  <em>at the moment it was sold</em>. Changing a product's cost price today does not rewrite
+  last month's margins &mdash; historical profit stays accurate. Voided transactions are excluded
+  throughout. Money still owed on credit is counted as revenue but has not yet been collected;
+  compare against the receivables report.
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-trophy me-1"></i> Product Profitability</div>
+      <div class="table-responsive" style="max-height:560px;overflow:auto">
+        <table class="table table-hover">
+          <thead><tr><th>Product</th><th class="num">Units</th><th class="num">Revenue</th>
+            <th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th></tr></thead>
+          <tbody>
+            {% for p in top_products %}
+              <tr>
+                <td><a href="{% url 'inventory:product_detail' p.product_id %}">{{ p.name|truncatechars:36 }}</a>
+                  <div class="text-muted-sm mono">{{ p.sku }}</div></td>
+                <td class="num">{{ p.units }}</td>
+                <td class="num money">{{ p.revenue|money }}</td>
+                <td class="num money text-muted">{{ p.cost|money }}</td>
+                <td class="num money fw-semibold {% if p.profit > 0 %}text-success{% else %}text-danger{% endif %}">
+                  {{ p.profit|money }}</td>
+                <td class="num"><span class="badge text-bg-{% if p.margin >= 25 %}success{% elif p.margin > 0 %}warning{% else %}danger{% endif %}">
+                  {{ p.margin }}%</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6"><div class="empty-state py-4"><i class="bi bi-graph-up"></i>No sales in this period.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-bar-chart me-1"></i> Daily Revenue</div>
+      <div class="card-body">
+        {% if chart %}
+          {% with peak=chart|dictsortreversed:"revenue"|first %}
+            <div class="chart">
+              <div class="chart-peak">{{ peak.revenue|money }}</div>
+              {% for d in chart %}
+                <div class="bar" data-value="{{ d.label }}: {{ d.revenue|money }}">
+                  <span style="height:{% if peak.revenue %}{% widthratio d.revenue peak.revenue 100 %}{% else %}0{% endif %}%"></span>
+                </div>
+              {% endfor %}
+            </div>
+            <div class="chart-labels">{% for d in chart %}<div>{{ d.label }}</div>{% endfor %}</div>
+          {% endwith %}
+        {% else %}<div class="empty-state py-4"><i class="bi bi-bar-chart"></i>No data.</div>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-box-seam me-1"></i> Inventory Valuation</div>
+      <div class="card-body small">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Stock at cost</span>
+          <span class="money fw-semibold">{{ valuation.cost_value|money }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Stock at retail</span>
+          <span class="money">{{ valuation.retail_value|money }}</span></div>
+        <div class="d-flex justify-content-between py-1 border-top pt-2 mt-1 fw-bold">
+          <span>Unrealised profit</span><span class="money text-success">{{ valuation.potential_profit|money }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Units on hand</span>
+          <span>{{ valuation.units }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Active SKUs</span>
+          <span>{{ valuation.skus }}</span></div>
+        <div class="text-muted-sm mt-2">
+          Unrealised profit assumes every unit sells at full price with no discount or shrinkage.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Users{% endblock %}
+{% block page_title %}Users &amp; Roles{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ admin_count }} administrator{{ admin_count|pluralize }}
+  &middot; {{ manager_count }} manager{{ manager_count|pluralize }} active</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'accounts:user_create' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-person-plus me-1"></i> Add User</a>
+  <a href="{% url 'accounts:audit_log' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-shield-check me-1"></i> Audit Log</a>
+{% endblock %}
+
+{% block content %}
+<div class="alert alert-info small">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong>Administrators</strong> have full access: user management, financial reports, system
+  settings and record deletion. <strong>Managers</strong> handle day-to-day operations &mdash;
+  products, sales, customers and debt collection &mdash; but cannot see cost prices or profit margins.
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5"><label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Username, name, email or phone..."></div>
+    <div class="col-md-3"><label class="form-label">Role</label>
+      <select name="role" class="form-select form-select-sm">
+        <option value="">All roles</option>
+        {% for value, label in roles %}
+          <option value="{{ value }}" {% if selected_role == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="col-md-3"><label class="form-label">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All</option>
+        <option value="active" {% if selected_status == 'active' %}selected{% endif %}>Active</option>
+        <option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>Deactivated</option>
+      </select></div>
+    <div class="col-md-1 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>User</th><th>Role</th><th>Contact</th><th>Last login</th><th>Status</th><th class="text-end"></th></tr></thead>
+      <tbody>
+        {% for u in users %}
+          <tr class="{% if not u.is_active %}table-secondary{% endif %}">
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="avatar" style="width:30px;height:30px;font-size:.68rem">{{ u|initials }}</div>
+                <div>
+                  <a href="{% url 'accounts:user_detail' u.pk %}" class="fw-semibold">{{ u.display_name }}</a>
+                  <div class="text-muted-sm">@{{ u.username }}
+                    {% if u.pk == user.pk %}<span class="badge text-bg-info ms-1">You</span>{% endif %}</div>
+                </div>
+              </div>
+            </td>
+            <td><span class="badge text-bg-{% if u.is_admin %}primary{% else %}secondary{% endif %}">
+              {{ u.get_role_display }}</span></td>
+            <td class="text-muted-sm">{{ u.email|default:"&mdash;" }}
+              {% if u.phone %}<div>{{ u.phone }}</div>{% endif %}</td>
+            <td class="text-muted-sm">{{ u.last_login|date:"d M Y, H:i"|default:"Never" }}</td>
+            <td>{% if u.is_active %}<span class="badge text-bg-success">Active</span>
+                {% else %}<span class="badge text-bg-dark">Deactivated</span>{% endif %}
+              {% if u.must_change_password %}<div><span class="badge text-bg-warning mt-1">Must reset password</span></div>{% endif %}</td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <a href="{% url 'accounts:user_update' u.pk %}" class="btn btn-outline-secondary" title="Edit">
+                  <i class="bi bi-pencil"></i></a>
+                <a href="{% url 'accounts:user_reset_password' u.pk %}" class="btn btn-outline-secondary" title="Reset password">
+                  <i class="bi bi-key"></i></a>
+                {% if u.pk != user.pk %}
+                  <a href="{% url 'accounts:user_toggle' u.pk %}"
+                     class="btn btn-outline-{% if u.is_active %}danger{% else %}success{% endif %}"
+                     title="{% if u.is_active %}Deactivate{% else %}Reactivate{% endif %}">
+                    <i class="bi bi-{% if u.is_active %}person-slash{% else %}person-check{% endif %}"></i></a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6"><div class="empty-state"><i class="bi bi-people"></i>No users match your filters.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

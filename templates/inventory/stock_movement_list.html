@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Stock Movements{% endblock %}
+{% block page_title %}Stock Movement Ledger{% endblock %}
+{% block breadcrumb %}<div class="crumb">Every stock change ever recorded. Entries are never edited or deleted.</div>{% endblock %}
+
+{% block content %}
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-6">
+      <label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Product name, SKU, reference or reason...">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Movement type</label>
+      <select name="type" class="form-select form-select-sm">
+        <option value="">All types</option>
+        {% for value, label in movement_types %}
+          <option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i> Filter</button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>Date</th><th>Product</th><th>Type</th><th class="num">Change</th>
+        <th class="num">Before</th><th class="num">After</th><th>Reference / reason</th><th>By</th></tr></thead>
+      <tbody>
+        {% for m in movements %}
+          <tr>
+            <td class="text-muted-sm">{{ m.created_at|date:"d M Y" }}<div>{{ m.created_at|date:"H:i" }}</div></td>
+            <td><a href="{% url 'inventory:product_detail' m.product.pk %}">{{ m.product.name }}</a>
+                <div class="text-muted-sm mono">{{ m.product.sku }}</div></td>
+            <td><span class="badge text-bg-{% if m.is_inbound %}success{% else %}danger{% endif %}">
+              {{ m.get_movement_type_display }}</span></td>
+            <td class="num fw-semibold {% if m.is_inbound %}text-success{% else %}text-danger{% endif %}">
+              {% if m.is_inbound %}+{% endif %}{{ m.quantity_delta }}</td>
+            <td class="num text-muted">{{ m.quantity_before }}</td>
+            <td class="num fw-semibold">{{ m.quantity_after }}</td>
+            <td class="text-muted-sm">
+              {% if m.reference %}<span class="mono">{{ m.reference }}</span><br>{% endif %}{{ m.reason }}</td>
+            <td class="text-muted-sm">{{ m.performed_by.display_name|default:"&mdash;" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="8"><div class="empty-state"><i class="bi bi-arrow-left-right"></i>No movements match your filters.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

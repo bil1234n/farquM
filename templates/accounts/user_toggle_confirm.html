@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{% if target_user.is_active %}Deactivate{% else %}Reactivate{% endif %} User{% endblock %}
+{% block page_title %}{% if target_user.is_active %}Deactivate{% else %}Reactivate{% endif %} User{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card border-{% if target_user.is_active %}danger{% else %}success{% endif %}">
+      <div class="card-header {% if target_user.is_active %}bg-danger{% else %}bg-success{% endif %} text-white">
+        <i class="bi bi-person-{% if target_user.is_active %}slash{% else %}check{% endif %} me-1"></i> Confirm
+      </div>
+      <div class="card-body">
+        {% if target_user.is_active %}
+          <p>Deactivate <strong>{{ target_user.display_name }}</strong> (@{{ target_user.username }})?</p>
+          <div class="alert alert-info small">
+            <strong>Accounts are never deleted, only deactivated.</strong>
+            <ul class="mb-0 mt-1 ps-3">
+              <li>They can no longer sign in.</li>
+              <li>Every sale, stock movement and payment they recorded stays linked to their name.</li>
+              <li>You can reactivate them at any time.</li>
+            </ul>
+          </div>
+        {% else %}
+          <p>Reactivate <strong>{{ target_user.display_name }}</strong> (@{{ target_user.username }})?</p>
+          <div class="alert alert-info small">
+            They will be able to sign in again with their existing password and
+            <strong>{{ target_user.get_role_display }}</strong> permissions.
+          </div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'accounts:user_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+            <button class="btn btn-{% if target_user.is_active %}danger{% else %}success{% endif %} btn-sm">
+              {% if target_user.is_active %}Deactivate{% else %}Reactivate{% endif %} Account
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

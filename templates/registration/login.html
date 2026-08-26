@@ -1,0 +1,112 @@
+{% load static widget_tweaks %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in &middot; {{ BUSINESS_NAME }}</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("faruq.theme");
+        if (!t) {
+          t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-bs-theme", t);
+      } catch (e) {
+        document.documentElement.setAttribute("data-bs-theme", "light");
+      }
+    })();
+  </script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{% static 'css/app.css' %}" rel="stylesheet">
+</head>
+<body>
+<div class="login-wrap position-relative">
+
+  {# Theme + language controls, available before sign-in #}
+  <div class="position-absolute top-0 end-0 p-3 topbar-tools">
+    <div class="dropdown">
+      <button class="btn btn-sm btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+        <i class="bi bi-translate me-1"></i><span id="langLabel">English</span>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end lang-menu">
+        <li><a class="dropdown-item" href="#" data-lang-option="en"><span class="me-2">EN</span> English</a></li>
+        <li><a class="dropdown-item" href="#" data-lang-option="am"><span class="me-2">አማ</span> አማርኛ</a></li>
+      </ul>
+    </div>
+    <button class="btn btn-sm btn-outline-light" type="button" id="themeToggle" title="Switch theme">
+      <i class="bi bi-moon-stars" id="themeIcon"></i>
+    </button>
+  </div>
+
+  <div class="login-card">
+    <div class="text-center mb-4">
+      <div class="mx-auto mb-3 d-grid" style="width:52px;height:52px;border-radius:13px;
+           background:var(--brand);color:#fff;place-items:center;font-weight:700;font-size:1.15rem;">
+        {{ BUSINESS_NAME|slice:":2"|upper }}
+      </div>
+      <h1 class="h5 fw-semibold mb-1">{{ BUSINESS_NAME }}</h1>
+      <p class="text-muted small mb-0">Inventory, Sales &amp; Credit Management</p>
+    </div>
+
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger py-2 px-3 small">
+        {% for error in form.non_field_errors %}
+          <i class="bi bi-exclamation-octagon-fill me-1"></i>{{ error }}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      <div class="mb-3">
+        <label class="form-label" for="{{ form.username.id_for_label }}" data-i18n="field.username">Username</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-person text-muted"></i></span>
+          {% render_field form.username class="form-control border-start-0 ps-0" placeholder="Enter your username" %}
+        </div>
+        {% for error in form.username.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="{{ form.password.id_for_label }}" data-i18n="field.password">Password</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-lock text-muted"></i></span>
+          {% render_field form.password class="form-control border-start-0 ps-0" placeholder="Enter your password" id="pw" %}
+          <button class="btn btn-outline-secondary" type="button" onclick="togglePw()" tabindex="-1">
+            <i class="bi bi-eye" id="pwIcon"></i>
+          </button>
+        </div>
+        {% for error in form.password.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+      </div>
+
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit" class="btn btn-primary w-100 py-2 mt-2">
+        <i class="bi bi-box-arrow-in-right me-1"></i> <span data-i18n="action.sign_in">Sign in</span>
+      </button>
+    </form>
+
+    <p class="text-center text-muted mt-4 mb-0" style="font-size:.72rem">
+      Forgot your password? Contact your system administrator.
+    </p>
+  </div>
+</div>
+
+<script>window.I18N_BASE_URL = "{% static 'i18n/' %}";</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{% static 'js/theme.js' %}"></script>
+<script src="{% static 'js/ethiopian-date.js' %}"></script>
+<script src="{% static 'js/i18n.js' %}"></script>
+<script>
+function togglePw(){
+  const f = document.getElementById('pw'), i = document.getElementById('pwIcon');
+  const show = f.type === 'password';
+  f.type = show ? 'text' : 'password';
+  i.className = show ? 'bi bi-eye-slash' : 'bi bi-eye';
+}
+</script>
+</body>
+</html>

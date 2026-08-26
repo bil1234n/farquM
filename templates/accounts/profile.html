@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}My Profile{% endblock %}
+{% block page_title %}My Profile{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ user.get_role_display }} &middot; @{{ user.username }}</div>{% endblock %}
+
+{% block content %}
+{% if user.must_change_password %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+    <strong>Password change required.</strong> An administrator reset your password.
+    Please choose a new one below.
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-body text-center">
+        <div class="avatar mx-auto mb-3" style="width:72px;height:72px;font-size:1.5rem">{{ user|initials }}</div>
+        <h2 class="h6 mb-1">{{ user.display_name }}</h2>
+        <div class="text-muted-sm mb-2">@{{ user.username }}</div>
+        <span class="badge text-bg-{% if user.is_admin %}primary{% else %}secondary{% endif %}">
+          {{ user.get_role_display }}</span>
+      </div>
+      <div class="card-footer bg-light small">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Employee ID</span>
+          <span>{{ user.employee_id|default:"&mdash;" }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Joined</span>
+          <span>{{ user.date_joined|date:"d M Y" }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">Last login</span>
+          <span>{{ user.last_login|date:"d M Y, H:i"|default:"&mdash;" }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-key me-1"></i> What your role allows</div>
+      <div class="card-body small">
+        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Record sales and manage customers</div>
+        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Create and edit products</div>
+        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Collect debt repayments</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user.can_view_financials %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
+          View cost prices and profit margins</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user.can_manage_users %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
+          Manage users and roles</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user.can_delete_records %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
+          Void sales, write off debts, delete records</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user.can_change_settings %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
+          Change system settings</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-person me-1"></i> Personal Details</div>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=profile_form %}
+          <div class="form-text mt-2">
+            Your role and account status can only be changed by an administrator.
+          </div>
+        </div>
+        <div class="card-footer bg-light text-end">
+          <button name="save_profile" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save Details</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-shield-lock me-1"></i> Change Password</div>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=password_form %}
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between align-items-center">
+          <a href="{% url 'accounts:my_activity' %}" class="small">
+            <i class="bi bi-clock-history me-1"></i>View my activity log</a>
+          <button name="change_password" class="btn btn-primary btn-sm">
+            <i class="bi bi-key me-1"></i> Change Password</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

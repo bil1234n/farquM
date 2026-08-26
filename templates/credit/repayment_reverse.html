@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Reverse Payment{% endblock %}
+{% block page_title %}Reverse Payment{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ repayment.reference }} &middot; administrator override</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white"><i class="bi bi-arrow-counterclockwise me-1"></i> Reverse this payment</div>
+      <div class="card-body">
+        <table class="table table-sm mb-3">
+          <tr><th class="text-muted">Payment</th><td class="mono">{{ repayment.reference }}</td></tr>
+          <tr><th class="text-muted">Amount</th><td class="money fw-bold">{{ repayment.amount|money }}</td></tr>
+          <tr><th class="text-muted">Method</th><td>{{ repayment.get_method_display }}</td></tr>
+          <tr><th class="text-muted">Received</th><td>{{ repayment.paid_at|date:"d M Y, H:i" }}
+            by {{ repayment.received_by.display_name|default:"unknown" }}</td></tr>
+          <tr><th class="text-muted">Debt</th><td>
+            <a href="{% url 'credit:debt_detail' repayment.debt.pk %}" class="mono">{{ repayment.debt.reference }}</a>
+            &mdash; {{ repayment.debt.customer.name }}</td></tr>
+          <tr><th class="text-muted">Balance at the time</th>
+            <td>{{ repayment.balance_before|money }} &rarr; {{ repayment.balance_after|money }}</td></tr>
+        </table>
+
+        <div class="alert alert-warning small">
+          <strong>What reversing does:</strong>
+          <ul class="mb-0 mt-1 ps-3">
+            <li>The payment row is <strong>kept</strong> and flagged as reversed &mdash; nothing is deleted.</li>
+            <li>{{ repayment.amount|money }} is added back to the debt balance.</li>
+            <li>The customer's total outstanding and the sale's payment status update automatically.</li>
+            <li>Your name and reason are stored permanently against the entry.</li>
+          </ul>
+        </div>
+
+        <form method="post" novalidate>
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.reason.id_for_label }}">
+              {{ form.reason.label }} <span class="required-mark">*</span></label>
+            {{ form.reason }}
+            <div class="form-text">{{ form.reason.help_text }}</div>
+            {% for e in form.reason.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-check mb-3">
+            {{ form.confirm }}
+            <label class="form-check-label" for="{{ form.confirm.id_for_label }}">{{ form.confirm.label }}</label>
+            {% for e in form.confirm.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'credit:debt_detail' repayment.debt.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+            <button class="btn btn-danger btn-sm"><i class="bi bi-arrow-counterclockwise me-1"></i> Reverse Payment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

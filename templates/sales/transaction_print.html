@@ -1,0 +1,99 @@
+{% load core_extras %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ txn.reference }}</title>
+  <style>
+    body{font-family:"Segoe UI",Arial,sans-serif;font-size:12px;color:#000;max-width:800px;margin:0 auto;padding:24px}
+    h1{font-size:20px;margin:0 0 2px}
+    .muted{color:#555;font-size:11px}
+    .head{display:flex;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px}
+    table{width:100%;border-collapse:collapse;margin:14px 0}
+    th{background:#f0f0f0;text-align:left;padding:6px;border-bottom:1px solid #999;font-size:11px;text-transform:uppercase}
+    td{padding:6px;border-bottom:1px solid #eee}
+    .num{text-align:right}
+    .totals{width:280px;margin-left:auto}
+    .totals td{border:none;padding:3px 6px}
+    .grand{border-top:2px solid #000;font-weight:bold;font-size:14px}
+    .stamp{margin-top:18px;padding:8px 12px;border:2px solid #000;display:inline-block;font-weight:bold}
+    .foot{margin-top:32px;border-top:1px solid #ccc;padding-top:10px;font-size:10px;color:#666;text-align:center}
+    @media print{.no-print{display:none}}
+  </style>
+</head>
+<body onload="window.print()">
+
+  <div class="head">
+    <div>
+      <h1>{{ BUSINESS_NAME }}</h1>
+      <div class="muted">{{ BUSINESS_ADDRESS }}</div>
+      <div class="muted">{{ BUSINESS_PHONE }}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:16px;font-weight:bold">
+        {% if txn.balance_due > 0 %}INVOICE{% else %}RECEIPT{% endif %}
+      </div>
+      <div class="muted">{{ txn.reference }}</div>
+      <div class="muted">{{ txn.created_at|date:"d M Y, H:i" }}</div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <div>
+      <strong>Bill to</strong><br>
+      {{ txn.customer_display }}<br>
+      {% if txn.customer.address %}<span class="muted">{{ txn.customer.address }}</span>{% endif %}
+    </div>
+    <div style="text-align:right">
+      <strong>Served by</strong><br>{{ txn.sold_by.display_name|default:"&mdash;" }}<br>
+      {% if txn.due_date %}<span class="muted">Payment due {{ txn.due_date|date:"d M Y" }}</span>{% endif %}
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>#</th><th>Description</th><th class="num">Qty</th>
+          <th class="num">Unit price</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for item in txn.items.all %}
+        <tr>
+          <td>{{ forloop.counter }}</td>
+          <td>{{ item.product_name }}<br><span class="muted">{{ item.product_sku }}</span></td>
+          <td class="num">{{ item.quantity }}</td>
+          <td class="num">{{ item.unit_price|money }}</td>
+          <td class="num">{{ item.line_total|money }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="num">{{ txn.subtotal|money }}</td></tr>
+    {% if txn.discount_amount %}<tr><td>Discount</td><td class="num">-{{ txn.discount_amount|money }}</td></tr>{% endif %}
+    {% if txn.tax_amount %}<tr><td>Tax</td><td class="num">{{ txn.tax_amount|money }}</td></tr>{% endif %}
+    <tr class="grand"><td>Total</td><td class="num">{{ txn.total_amount|money }}</td></tr>
+    <tr><td>Amount paid</td><td class="num">{{ txn.amount_paid|money }}</td></tr>
+    <tr style="font-weight:bold"><td>Balance due</td><td class="num">{{ txn.balance_due|money }}</td></tr>
+  </table>
+
+  <div class="stamp">
+    {% if txn.is_voided %}VOIDED
+    {% elif txn.balance_due > 0 %}{{ txn.get_payment_status_display|upper }} &mdash; BALANCE {{ txn.balance_due|money }}
+    {% else %}PAID IN FULL{% endif %}
+  </div>
+
+  {% if txn.notes %}<p class="muted" style="margin-top:14px"><strong>Notes:</strong> {{ txn.notes }}</p>{% endif %}
+
+  <div class="foot">
+    {% if txn.balance_due > 0 %}
+      Goods supplied on credit remain payable by the due date shown above.<br>
+    {% endif %}
+    Thank you for your business. &middot; Generated {{ txn.created_at|date:"d M Y" }}
+  </div>
+
+  <div class="no-print" style="text-align:center;margin-top:20px">
+    <button onclick="window.print()">Print</button>
+    <button onclick="window.close()">Close</button>
+  </div>
+</body>
+</html>

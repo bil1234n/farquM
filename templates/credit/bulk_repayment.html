@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Lump-Sum Payment{% endblock %}
+{% block page_title %}Collect Payment{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ customer.name }} &middot; {{ customer.phone }} &middot; owes {{ account.outstanding_balance|money }}</div>{% endblock %}
+
+{% block content %}
+<div class="row g-3 justify-content-center">
+  <div class="col-lg-6">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-cash-stack me-1"></i> Payment Across All Debts</div>
+        <div class="card-body">
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger py-2 px-3 small">
+              {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}</div>
+          {% endif %}
+          {% include "partials/form_fields.html" with form=form wide_fields="note,proof" %}
+          <div class="alert alert-info small mt-3 mb-0">
+            <i class="bi bi-info-circle me-1"></i>
+            <strong>How this is applied:</strong> the money is allocated to the
+            <strong>oldest debt first</strong>, then the next, until it runs out.
+            Each debt gets its own ledger entry, so the trail stays clear.
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'credit:borrower_detail' customer.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-success btn-sm"><i class="bi bi-check-lg me-1"></i> Apply Payment</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="pos-total mb-3">
+      <div class="line"><span>Total borrowed</span><span class="money">{{ account.total_credit_extended|money }}</span></div>
+      <div class="line"><span>Total repaid</span><span class="money text-success">{{ account.total_repaid|money }}</span></div>
+      <div class="line grand"><span>Outstanding</span><span class="money text-danger">{{ account.outstanding_balance|money }}</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-list-ol me-1"></i> Allocation Order</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>#</th><th>Debt</th><th class="num">Balance</th><th>Due</th></tr></thead>
+          <tbody>
+            {% for d in customer.debts.open_debts %}
+              <tr>
+                <td class="text-muted">{{ forloop.counter }}</td>
+                <td><a href="{% url 'credit:debt_detail' d.pk %}" class="mono">{{ d.reference }}</a></td>
+                <td class="num money">{{ d.balance|money }}</td>
+                <td class="text-muted-sm">{{ d.due_date|date:"d M Y" }}
+                  {% if d.is_overdue %}<div class="text-danger">{{ d.days_overdue }}d late</div>{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-3">No open debts.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,424 @@
+"""
+Serializers.
+
+THE IMPORTANT RULE IN THIS FILE
+-------------------------------
+Cost prices and profit figures are removed from the response payload for a
+Manager. Not hidden by the client - removed by the server, before the JSON
+leaves the building. A client can be decompiled, patched, or replaced with
+curl; the only place a permission means anything is on the server.
+"""
+from decimal import Decimal
+
+from django.contrib.auth import authenticate
+from rest_framework import serializers
+
+from accounts.models import User
+from credit.models import CreditAccount, DebtRecord, Repayment, RepaymentProof
+from inventory.models import Category, Product, StockMovement, Supplier
+from sales.models import Customer, Receipt, Transaction, TransactionItem
+
+from .models import DeviceToken, NotificationLog
+
+
+class FinancialFieldsMixin:
+    """Strips cost/profit keys unless the requesting user may see them."""
+
+    financial_fields: tuple = ()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "can_view_financials", False):
+            for field in self.financial_fields:
+                data.pop(field, None)
+        return data
+
+
+class OwnerNameMixin:
+    """
+    Adds a read-only `owner_name` telling you whose record this is.
+
+    Populated only for someone who can see more than their own data - i.e. an
+    Admin. For a Manager every row is theirs by definition, so the label would
+    be noise; worse, printing it on every card advertises that "other people's
+    records" is a category worth poking at. Managers get null.
+
+    Declare `owner_name = serializers.SerializerMethodField()` on the
+    serializer and mix this in.
+    """
+
+    def get_owner_name(self, obj):
+        from core.scoping import sees_everything
+
+        request = self.context.get("request")
+        if not sees_everything(getattr(request, "user", None)):
+            return None
+        owner = getattr(obj, "owner", None)
+        return owner.display_name if owner else "Unassigned"
+
+
+# ---------------------------------------------------------------------------
+# Auth & users
+# ---------------------------------------------------------------------------
+class LoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+
+    def validate(self, attrs):
+        user = authenticate(
+            request=self.context.get("request"),
+            username=attrs["username"],
+            password=attrs["password"],
+        )
+        if user is None:
+            raise serializers.ValidationError("Incorrect username or password.")
+        if not user.is_active:
+            raise serializers.ValidationError(
+                "This account has been deactivated. Contact an administrator."
+            )
+        attrs["user"] = user
+        return attrs
+
+
+class UserSerializer(serializers.ModelSerializer):
+    display_name = serializers.CharField(read_only=True)
+    role_display = serializers.CharField(source="get_role_display", read_only=True)
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id", "username", "first_name", "last_name", "display_name",
+            "email", "phone", "role", "role_display", "is_active", "permissions",
+        ]
+        read_only_fields = ["id", "role", "is_active"]
+
+    def get_permissions(self, obj):
+        return {
+            "view_financials": obj.can_view_financials,
+            "manage_users": obj.can_manage_users,
+            "delete_records": obj.can_delete_records,
+            "change_settings": obj.can_change_settings,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Inventory
+# ---------------------------------------------------------------------------
+class CategorySerializer(serializers.ModelSerializer):
+    product_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Category
+        fields = ["id", "name", "description", "is_active", "product_count"]
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = ["id", "name", "contact_person", "phone", "email", "address", "is_active"]
+
+
+class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
+    financial_fields = ("cost_price", "margin_percent", "stock_value", "profit_per_unit")
+
+    category_name = serializers.CharField(source="category.name", default=None, read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", default=None, read_only=True)
+    unit_display = serializers.CharField(source="get_unit_display", read_only=True)
+    stock_status = serializers.CharField(read_only=True)
+    stock_status_label = serializers.CharField(read_only=True)
+    margin_percent = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+    stock_value = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    profit_per_unit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    image_url = serializers.SerializerMethodField()
+    owner_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            "id", "name", "sku", "barcode", "description",
+            "category", "category_name", "supplier", "supplier_name",
+            "unit", "unit_display",
+            "cost_price", "selling_price", "profit_per_unit", "margin_percent",
+            "stock_quantity", "low_stock_threshold", "stock_value",
+            "stock_status", "stock_status_label", "is_active", "image_url",
+            "owner_name",
+        ]
+        read_only_fields = ["id", "stock_quantity"]
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        url = obj.image.url
+        return request.build_absolute_uri(url) if request else url
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    movement_type_display = serializers.CharField(source="get_movement_type_display", read_only=True)
+    performed_by_name = serializers.CharField(
+        source="performed_by.display_name", default=None, read_only=True
+    )
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id", "product", "product_name", "product_sku",
+            "movement_type", "movement_type_display",
+            "quantity_delta", "quantity_before", "quantity_after",
+            "reference", "reason", "performed_by_name", "created_at",
+        ]
+
+
+class RestockSerializer(serializers.Serializer):
+    quantity = serializers.IntegerField(min_value=1)
+    unit_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    reference = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+# ---------------------------------------------------------------------------
+# Customers & credit summary
+# ---------------------------------------------------------------------------
+class CreditAccountSerializer(serializers.ModelSerializer):
+    risk_level = serializers.CharField(read_only=True)
+    risk_label = serializers.CharField(read_only=True)
+    available_credit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    utilisation_percent = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    is_over_limit = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CreditAccount
+        fields = [
+            "id", "credit_limit", "default_terms_days",
+            "total_credit_extended", "total_repaid", "outstanding_balance",
+            "available_credit", "utilisation_percent", "is_over_limit",
+            "is_blocked", "block_reason", "risk_level", "risk_label",
+            "last_purchase_date", "last_payment_date",
+        ]
+        read_only_fields = [
+            "total_credit_extended", "total_repaid", "outstanding_balance",
+            "last_purchase_date", "last_payment_date",
+        ]
+
+
+class CustomerSerializer(OwnerNameMixin, serializers.ModelSerializer):
+    outstanding_balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    credit_limit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    available_credit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    customer_type_display = serializers.CharField(source="get_customer_type_display", read_only=True)
+    credit_account = CreditAccountSerializer(read_only=True)
+    owner_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Customer
+        fields = [
+            "id", "name", "phone", "alternate_phone", "email", "address",
+            "customer_type", "customer_type_display",
+            "is_credit_approved", "is_active", "notes",
+            "outstanding_balance", "credit_limit", "available_credit", "credit_account",
+            "owner_name",
+        ]
+
+    def validate_is_credit_approved(self, value):
+        """Granting credit is a financial decision - Admin only."""
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if value and user is not None and not user.is_admin:
+            raise serializers.ValidationError(
+                "Only an administrator may approve a customer for credit."
+            )
+        return value
+
+
+# ---------------------------------------------------------------------------
+# Sales
+# ---------------------------------------------------------------------------
+class TransactionItemSerializer(FinancialFieldsMixin, serializers.ModelSerializer):
+    financial_fields = ("unit_cost", "line_cost", "line_profit")
+
+    line_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    line_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = TransactionItem
+        fields = [
+            "id", "product", "product_name", "product_sku", "quantity",
+            "unit_price", "unit_cost", "line_discount", "line_total",
+            "line_cost", "line_profit",
+        ]
+
+
+class ReceiptSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    kind_display = serializers.CharField(source="get_kind_display", read_only=True)
+
+    class Meta:
+        model = Receipt
+        fields = ["id", "file_url", "kind", "kind_display", "caption", "created_at"]
+
+    def get_file_url(self, obj):
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+
+class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
+    financial_fields = ("total_cost", "gross_profit", "profit_margin")
+
+    items = TransactionItemSerializer(many=True, read_only=True)
+    receipts = ReceiptSerializer(many=True, read_only=True)
+    customer_display = serializers.CharField(read_only=True)
+    payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
+    payment_method_display = serializers.CharField(source="get_payment_method_display", read_only=True)
+    sold_by_name = serializers.CharField(source="sold_by.display_name", default=None, read_only=True)
+    total_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    gross_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    profit_margin = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    item_count = serializers.IntegerField(read_only=True)
+    owner_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Transaction
+        fields = [
+            "id", "reference", "customer", "customer_display",
+            "subtotal", "discount_amount", "tax_amount", "total_amount",
+            "amount_paid", "balance_due",
+            "payment_status", "payment_status_display",
+            "payment_method", "payment_method_display",
+            "due_date", "notes", "sold_by_name", "created_at",
+            "is_voided", "void_reason", "is_overdue", "item_count",
+            "total_cost", "gross_profit", "profit_margin",
+            "items", "receipts", "owner_name",
+        ]
+
+
+class SaleItemInputSerializer(serializers.Serializer):
+    product = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
+    unit_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True
+    )
+    line_discount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, default=Decimal("0.00")
+    )
+
+
+class SaleCreateSerializer(serializers.Serializer):
+    """
+    Input for POST /api/sales/. Validation of stock and credit limits is NOT
+    duplicated here - it happens inside sales.services.create_sale(), which the
+    web UI uses too. One implementation, one set of rules.
+    """
+
+    items = SaleItemInputSerializer(many=True)
+    customer = serializers.IntegerField(required=False, allow_null=True)
+    amount_paid = serializers.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal("0.00")
+    )
+    discount_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal("0.00")
+    )
+    tax_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal("0.00")
+    )
+    payment_method = serializers.CharField(default="CASH")
+    due_date = serializers.DateField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError("A sale needs at least one item.")
+        return value
+
+
+# ---------------------------------------------------------------------------
+# Credit
+# ---------------------------------------------------------------------------
+class RepaymentProofSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RepaymentProof
+        fields = ["id", "file_url", "caption", "created_at"]
+
+    def get_file_url(self, obj):
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+
+class RepaymentSerializer(serializers.ModelSerializer):
+    method_display = serializers.CharField(source="get_method_display", read_only=True)
+    received_by_name = serializers.CharField(
+        source="received_by.display_name", default=None, read_only=True
+    )
+    proofs = RepaymentProofSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Repayment
+        fields = [
+            "id", "reference", "debt", "amount", "method", "method_display",
+            "paid_at", "balance_before", "balance_after", "external_reference",
+            "note", "received_by_name", "is_reversed", "reversal_reason", "proofs",
+        ]
+
+
+class DebtSerializer(OwnerNameMixin, serializers.ModelSerializer):
+    customer_name = serializers.CharField(source="customer.name", read_only=True)
+    customer_phone = serializers.CharField(source="customer.phone", read_only=True)
+    transaction_reference = serializers.CharField(
+        source="transaction.reference", default=None, read_only=True
+    )
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    display_status = serializers.CharField(read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    days_overdue = serializers.IntegerField(read_only=True)
+    repayment_percent = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+    aging_bucket = serializers.CharField(read_only=True)
+    owner_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DebtRecord
+        fields = [
+            "id", "reference", "customer", "customer_name", "customer_phone",
+            "transaction", "transaction_reference",
+            "principal", "amount_repaid", "balance",
+            "status", "status_display", "display_status",
+            "issued_date", "due_date", "settled_date",
+            "is_overdue", "days_overdue", "repayment_percent", "aging_bucket",
+            "notes", "created_at", "owner_name",
+        ]
+
+
+class RepaymentCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+    method = serializers.CharField(default="CASH")
+    external_reference = serializers.CharField(required=False, allow_blank=True, default="")
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+    proof = serializers.ListField(
+        child=serializers.FileField(), required=False, allow_empty=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Devices & notifications
+# ---------------------------------------------------------------------------
+class DeviceTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeviceToken
+        fields = ["id", "token", "platform", "device_name", "app_version", "last_seen"]
+        read_only_fields = ["id", "last_seen"]
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    is_read = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = NotificationLog
+        fields = ["id", "title", "body", "channel", "data", "created_at", "read_at", "is_read"]

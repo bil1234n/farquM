@@ -1,0 +1,37 @@
+{% load widget_tweaks %}
+{# Reusable form renderer. Include with: {% include "partials/form_fields.html" with form=form %} #}
+
+{% if form.non_field_errors %}
+  <div class="alert alert-danger py-2 px-3 small">
+    {% for error in form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  {% for field in form %}
+    {% if field.field.widget.input_type == "hidden" %}
+      {{ field }}
+    {% else %}
+      <div class="{% if field.field.widget.input_type == 'checkbox' %}col-12{% elif field.name in wide_fields %}col-12{% else %}col-md-6{% endif %}">
+        {% if field.field.widget.input_type == "checkbox" %}
+          <div class="form-check">
+            {% render_field field class="form-check-input" %}
+            <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+          </div>
+        {% else %}
+          <label class="form-label" for="{{ field.id_for_label }}">
+            {{ field.label }}{% if field.field.required %} <span class="required-mark">*</span>{% endif %}
+          </label>
+          {% if field.errors %}
+            {% render_field field class="is-invalid" %}
+          {% else %}
+            {{ field }}
+          {% endif %}
+          {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+          {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endfor %}
+</div>

@@ -1,0 +1,126 @@
+{% load core_extras %}
+<aside class="sidebar no-print">
+
+  <div class="sidebar-brand">
+    <div class="logo">{{ BUSINESS_NAME|slice:":2"|upper }}</div>
+    <div>
+      <div class="name">{{ BUSINESS_NAME }}</div>
+      <div class="sub">{{ user.get_role_display }}</div>
+    </div>
+  </div>
+
+  <nav class="nav flex-column pb-3">
+
+    <div class="nav-section">Overview</div>
+    <a class="nav-link {% if request.resolver_match.view_name == 'reports:dashboard' %}active{% endif %}"
+       href="{% url 'reports:dashboard' %}">
+      <i class="bi bi-grid-1x2"></i> Dashboard
+    </a>
+
+    <div class="nav-section">Sales</div>
+    <a class="nav-link {% if request.resolver_match.view_name == 'sales:sale_create' %}active{% endif %}"
+       href="{% url 'sales:sale_create' %}">
+      <i class="bi bi-cart-plus"></i> New Sale
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'sales:transaction_list' %}active{% endif %}"
+       href="{% url 'sales:transaction_list' %}">
+      <i class="bi bi-receipt"></i> Transactions
+    </a>
+    <a class="nav-link {% if 'customer' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'sales:customer_list' %}">
+      <i class="bi bi-people"></i> Customers
+    </a>
+
+    <div class="nav-section">Credit &amp; Borrowers</div>
+    <a class="nav-link {% if request.resolver_match.view_name == 'credit:dashboard' %}active{% endif %}"
+       href="{% url 'credit:dashboard' %}">
+      <i class="bi bi-cash-stack"></i> Credit Dashboard
+    </a>
+    <a class="nav-link {% if 'borrower' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'credit:borrower_list' %}">
+      <i class="bi bi-person-lines-fill"></i> Borrowers
+    </a>
+    <a class="nav-link {% if 'debt' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'credit:debt_list' %}">
+      <i class="bi bi-journal-text"></i> Debts
+      {% if badge_overdue_debts %}<span class="badge text-bg-danger">{{ badge_overdue_debts }}</span>{% endif %}
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'credit:aging_report' %}active{% endif %}"
+       href="{% url 'credit:aging_report' %}">
+      <i class="bi bi-hourglass-split"></i> Aging Report
+    </a>
+
+    <div class="nav-section">Inventory</div>
+    <a class="nav-link {% if 'product' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'inventory:product_list' %}">
+      <i class="bi bi-box-seam"></i> Products
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'inventory:low_stock' %}active{% endif %}"
+       href="{% url 'inventory:low_stock' %}">
+      <i class="bi bi-exclamation-triangle"></i> Low Stock
+      {% if badge_low_stock %}<span class="badge text-bg-warning">{{ badge_low_stock }}</span>{% endif %}
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'inventory:stock_movements' %}active{% endif %}"
+       href="{% url 'inventory:stock_movements' %}">
+      <i class="bi bi-arrow-left-right"></i> Stock Movements
+    </a>
+    <a class="nav-link {% if 'category' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'inventory:category_list' %}">
+      <i class="bi bi-tags"></i> Categories
+    </a>
+    <a class="nav-link {% if 'supplier' in request.resolver_match.view_name %}active{% endif %}"
+       href="{% url 'inventory:supplier_list' %}">
+      <i class="bi bi-truck"></i> Suppliers
+    </a>
+
+    <div class="nav-section">Reports</div>
+    <a class="nav-link {% if request.resolver_match.view_name == 'reports:sales_report' %}active{% endif %}"
+       href="{% url 'reports:sales_report' %}">
+      <i class="bi bi-graph-up"></i> Sales Report
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'reports:inventory_report' %}active{% endif %}"
+       href="{% url 'reports:inventory_report' %}">
+      <i class="bi bi-clipboard-data"></i> Inventory Report
+    </a>
+    <a class="nav-link {% if request.resolver_match.view_name == 'reports:receivables_report' %}active{% endif %}"
+       href="{% url 'reports:receivables_report' %}">
+      <i class="bi bi-wallet2"></i> Receivables
+    </a>
+    {% if user.can_view_financials %}
+      <a class="nav-link {% if request.resolver_match.view_name == 'reports:profit_report' %}active{% endif %}"
+         href="{% url 'reports:profit_report' %}">
+        <i class="bi bi-currency-dollar"></i> Profit &amp; Margins
+        <span class="badge text-bg-secondary">Admin</span>
+      </a>
+    {% endif %}
+
+    {% if user.can_manage_users %}
+      <div class="nav-section">Administration</div>
+      <a class="nav-link {% if 'user_' in request.resolver_match.view_name %}active{% endif %}"
+         href="{% url 'accounts:user_list' %}">
+        <i class="bi bi-person-gear"></i> Users &amp; Roles
+      </a>
+      <a class="nav-link {% if request.resolver_match.view_name == 'accounts:audit_log' %}active{% endif %}"
+         href="{% url 'accounts:audit_log' %}">
+        <i class="bi bi-shield-check"></i> Audit Log
+      </a>
+      <a class="nav-link" href="/django-admin/" target="_blank" rel="noopener">
+        <i class="bi bi-sliders"></i> System Settings
+      </a>
+    {% endif %}
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="avatar">{{ user|initials }}</div>
+    <div class="flex-grow-1 min-w-0">
+      <div class="text-white small text-truncate">{{ user.display_name }}</div>
+      <a href="{% url 'accounts:profile' %}" class="text-muted-sm" style="color:#8fa6bd">My profile</a>
+    </div>
+    <form method="post" action="{% url 'accounts:logout' %}" class="m-0">
+      {% csrf_token %}
+      <button class="btn btn-sm btn-outline-light border-0" title="Sign out">
+        <i class="bi bi-box-arrow-right"></i>
+      </button>
+    </form>
+  </div>
+</aside>

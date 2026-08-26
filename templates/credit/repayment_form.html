@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Record Payment{% endblock %}
+{% block page_title %}Record Payment{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">{{ debt.reference }} &middot; {{ debt.customer.name }} ({{ debt.customer.phone }})</div>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 justify-content-center">
+  <div class="col-lg-7">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-cash-coin me-1"></i> Payment Details</div>
+        <div class="card-body">
+
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger py-2 px-3 small">
+              {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}
+            </div>
+          {% endif %}
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.amount.id_for_label }}">
+                {{ form.amount.label }} <span class="required-mark">*</span>
+              </label>
+              {{ form.amount }}
+              <div class="form-text">{{ form.amount.help_text }}</div>
+              {% for e in form.amount.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+              <button type="button" class="btn btn-sm btn-outline-success mt-2 w-100"
+                      onclick="document.getElementById('{{ form.amount.id_for_label }}').value='{{ debt.balance }}'">
+                Settle in full ({{ debt.balance|money }})
+              </button>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.method.id_for_label }}">{{ form.method.label }}</label>
+              {{ form.method }}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.paid_at.id_for_label }}">{{ form.paid_at.label }}</label>
+              {{ form.paid_at }}
+              <div class="form-text">{{ form.paid_at.help_text }}</div>
+              {% for e in form.paid_at.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.external_reference.id_for_label }}">
+                {{ form.external_reference.label }}
+              </label>
+              {{ form.external_reference }}
+              <div class="form-text">{{ form.external_reference.help_text }}</div>
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="{{ form.proof.id_for_label }}">{{ form.proof.label }}</label>
+              {{ form.proof }}
+              <div class="form-text">{{ form.proof.help_text }}</div>
+              {% for e in form.proof.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="{{ form.note.id_for_label }}">{{ form.note.label }}</label>
+              {{ form.note }}
+            </div>
+          </div>
+
+          <div class="alert alert-info small mt-3 mb-0">
+            <i class="bi bi-shield-check me-1"></i>
+            This payment is written to a permanent ledger. It cannot be edited afterwards &mdash;
+            if you make a mistake, an administrator reverses it and the correction stays on record.
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'credit:debt_detail' debt.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-success btn-sm"><i class="bi bi-check-lg me-1"></i> Record Payment</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="pos-total">
+      <div class="line"><span>Principal</span><span class="money">{{ debt.principal|money }}</span></div>
+      <div class="line"><span>Already repaid</span><span class="money text-success">{{ debt.amount_repaid|money }}</span></div>
+      <div class="line grand"><span>Outstanding</span><span class="money text-danger">{{ debt.balance|money }}</span></div>
+      <div class="progress mt-3"><div class="progress-bar bg-success" style="width:{{ debt.repayment_percent }}%"></div></div>
+      <div class="text-center text-muted-sm mt-1">{{ debt.repayment_percent }}% repaid</div>
+      <hr>
+      <div class="d-flex justify-content-between small">
+        <span class="text-muted">Due date</span><span>{{ debt.due_date|date:"d M Y" }}</span>
+      </div>
+      {% if debt.is_overdue %}
+        <div class="alert alert-danger py-2 px-3 small mt-2 mb-0">
+          Overdue by {{ debt.days_overdue }} day{{ debt.days_overdue|pluralize }}.
+        </div>
+      {% endif %}
+    </div>
+
+    {% if debt.customer.outstanding_balance > debt.balance %}
+      <div class="alert alert-warning small mt-3">
+        <strong>{{ debt.customer.name }} owes more elsewhere.</strong><br>
+        Total across all debts: <span class="money">{{ debt.customer.outstanding_balance|money }}</span>
+        <a href="{% url 'credit:bulk_repayment' debt.customer.pk %}" class="d-block mt-2">
+          Pay a lump sum across all debts &rarr;
+        </a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

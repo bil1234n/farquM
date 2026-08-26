@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Sales Report{% endblock %}
+{% block page_title %}Sales Report{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ start|date:"d M Y" }} &ndash; {{ end|date:"d M Y" }} &middot; {{ transaction_count }} transactions</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'reports:export_sales_csv' %}?date_from={{ start|date:'Y-m-d' }}&date_to={{ end|date:'Y-m-d' }}"
+     class="btn btn-primary btn-sm"><i class="bi bi-download me-1"></i> Export CSV</a>
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> Print</button>
+{% endblock %}
+
+{% block content %}
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4"><label class="form-label">From</label>
+      <input type="date" name="date_from" value="{{ start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <div class="col-md-4"><label class="form-label">To</label>
+      <input type="date" name="date_to" value="{{ end|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i> Apply</button></div>
+    <div class="col-md-2 d-grid"><a href="{% url 'reports:sales_report' %}" class="btn btn-outline-secondary btn-sm">Reset</a></div>
+  </div>
+</form>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="stat-card accent-primary">
+    <div class="label">Revenue</div><div class="value money">{{ summary.revenue|money }}</div>
+    <div class="hint">{{ summary.count }} sale{{ summary.count|pluralize }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-success">
+    <div class="label">Collected</div><div class="value money">{{ summary.collected|money }}</div>
+    <div class="hint">Cash actually received</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-danger">
+    <div class="label">Left on Credit</div><div class="value money">{{ summary.outstanding|money }}</div>
+    <div class="hint">Still to collect</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-info">
+    <div class="label">Average Sale</div><div class="value money">{{ summary.average_sale|money }}</div>
+    <div class="hint">Discounts given {{ summary.discounts|money }}</div></div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-bar-chart me-1"></i> Daily Revenue</div>
+      <div class="card-body">
+        {% if chart %}
+          {% with peak=chart|dictsortreversed:"revenue"|first %}
+            <div class="chart">
+              <div class="chart-peak">{{ peak.revenue|money }}</div>
+              {% for d in chart %}
+                <div class="bar" data-value="{{ d.label }}: {{ d.revenue|money }} ({{ d.count }})">
+                  <span style="height:{% if peak.revenue %}{% widthratio d.revenue peak.revenue 100 %}{% else %}0{% endif %}%"></span>
+                </div>
+              {% endfor %}
+            </div>
+            <div class="chart-labels">{% for d in chart %}<div>{{ d.label }}</div>{% endfor %}</div>
+            <div class="text-muted-sm mt-2">Peak day: {{ peak.revenue|money }} on {{ peak.label }}</div>
+          {% endwith %}
+        {% else %}<div class="empty-state"><i class="bi bi-bar-chart"></i>No sales in this period.</div>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-receipt me-1"></i> Transactions</div>
+      <div class="table-responsive" style="max-height:520px;overflow:auto">
+        <table class="table table-hover">
+          <thead><tr><th>Reference</th><th>Customer</th><th class="num">Total</th>
+            <th class="num">Paid</th><th class="num">Balance</th><th>Status</th></tr></thead>
+          <tbody>
+            {% for t in transactions %}
+              <tr>
+                <td><a href="{% url 'sales:transaction_detail' t.pk %}" class="mono">{{ t.reference }}</a>
+                  <div class="text-muted-sm">{{ t.created_at|date:"d M, H:i" }}</div></td>
+                <td>{{ t.customer_display }}</td>
+                <td class="num money">{{ t.total_amount|money }}</td>
+                <td class="num money text-success">{{ t.amount_paid|money }}</td>
+                <td class="num money {% if t.balance_due > 0 %}text-danger{% endif %}">{{ t.balance_due|money }}</td>
+                <td><span class="badge text-bg-{{ t.status_class }}">{{ t.get_payment_status_display }}</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6"><div class="empty-state py-4"><i class="bi bi-receipt"></i>No transactions.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-trophy me-1"></i> Top Products</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Product</th><th class="num">Units</th><th class="num">Revenue</th>
+            {% if show_financials %}<th class="num">Profit</th>{% endif %}</tr></thead>
+          <tbody>
+            {% for p in top_products %}
+              <tr>
+                <td>{{ p.name|truncatechars:26 }}<div class="text-muted-sm mono">{{ p.sku }}</div></td>
+                <td class="num">{{ p.units }}</td>
+                <td class="num money">{{ p.revenue|money }}</td>
+                {% if show_financials %}
+                  <td class="num money text-success">{{ p.profit|money }}<div class="text-muted-sm">{{ p.margin }}%</div></td>
+                {% endif %}
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-3">No sales yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if show_staff_table %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-people me-1"></i> By Manager</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Manager</th><th class="num">Sales</th><th class="num">Revenue</th>
+            <th class="num">Owed</th></tr></thead>
+          <tbody>
+            {% for s in by_staff %}
+              <tr>
+                <td>{{ s.name }}</td>
+                <td class="num">{{ s.count }}</td>
+                <td class="num money">{{ s.revenue|money }}</td>
+                <td class="num money {% if s.outstanding > 0 %}text-danger{% endif %}">{{ s.outstanding|money }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-3">No data.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not show_financials %}
+      <div class="alert alert-secondary small mt-3 mb-0">
+        <i class="bi bi-lock me-1"></i>
+        Cost, profit and margin figures are visible to administrators only.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

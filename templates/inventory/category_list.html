@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Categories{% endblock %}
+{% block page_title %}Categories{% endblock %}
+{% block page_actions %}
+  <a href="{% url 'inventory:category_create' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i> Add Category</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr><th>Name</th><th>Description</th><th class="num">Products</th><th>Status</th><th class="text-end"></th></tr></thead>
+      <tbody>
+        {% for c in categories %}
+          <tr>
+            <td><a href="{% url 'inventory:product_list' %}?category={{ c.pk }}" class="fw-semibold">{{ c.name }}</a></td>
+            <td class="text-muted">{{ c.description|default:"&mdash;"|truncatechars:80 }}</td>
+            <td class="num">{{ c.product_count }}</td>
+            <td>{% if c.is_active %}<span class="badge text-bg-success">Active</span>
+                {% else %}<span class="badge text-bg-secondary">Inactive</span>{% endif %}</td>
+            <td class="text-end">
+              <a href="{% url 'inventory:category_update' c.pk %}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-pencil"></i></a>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5"><div class="empty-state"><i class="bi bi-tags"></i>
+            <p class="mb-3">No categories yet.</p>
+            <a href="{% url 'inventory:category_create' %}" class="btn btn-primary btn-sm">Add one</a></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

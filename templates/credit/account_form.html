@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Credit Terms{% endblock %}
+{% block page_title %}Credit Terms{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ object.customer.name }} &middot; {{ object.customer.phone }} &middot; administrator only</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center g-3">
+  <div class="col-lg-6">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-sliders me-1"></i> Limit &amp; Terms</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="notes,block_reason" %}
+          <div class="alert alert-warning small mt-3 mb-0">
+            <i class="bi bi-shield-exclamation me-1"></i>
+            The credit limit is enforced at the point of sale. A sale that would push this
+            customer past the limit is refused <strong>before</strong> any stock moves,
+            so you never end up with goods gone and no way to record the debt.
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'credit:borrower_detail' object.customer.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save Terms</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-4">
+    <div class="pos-total">
+      <div class="line"><span>Current debt</span><span class="money text-danger">{{ object.outstanding_balance|money }}</span></div>
+      <div class="line"><span>Current limit</span><span class="money">
+        {% if object.credit_limit > 0 %}{{ object.credit_limit|money }}{% else %}Not set{% endif %}</span></div>
+      <div class="line"><span>Available</span><span class="money">{{ object.available_credit|money }}</span></div>
+      {% if object.credit_limit > 0 %}
+        <div class="progress mt-3">
+          <div class="progress-bar {% if object.is_over_limit %}bg-danger{% elif object.utilisation_percent > 75 %}bg-warning{% else %}bg-success{% endif %}"
+               style="width:{% if object.utilisation_percent > 100 %}100{% else %}{{ object.utilisation_percent }}{% endif %}%"></div>
+        </div>
+        <div class="text-center text-muted-sm mt-1">{{ object.utilisation_percent }}% utilised</div>
+      {% endif %}
+      <div class="text-center mt-3">
+        <span class="badge text-bg-{{ object.risk_class }} px-3 py-2">{{ object.risk_label }}</span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

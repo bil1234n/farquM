@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Archive product{% endblock %}
+{% block page_title %}Archive Product{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white"><i class="bi bi-archive me-1"></i> Confirm</div>
+      <div class="card-body">
+        <p>Archive <strong>{{ product.name }}</strong> (SKU <span class="mono">{{ product.sku }}</span>)?</p>
+        <div class="alert alert-info small">
+          <strong>This is a soft delete.</strong> The product is hidden from lists and can no longer
+          be sold, but the record and all its sales history stay intact so past transactions and
+          reports remain accurate. Nothing is physically removed from the database.
+        </div>
+        {% if product.stock_quantity > 0 %}
+          <div class="alert alert-warning small">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
+            This product still has <strong>{{ product.stock_quantity }}</strong> units in stock
+            worth {{ product.stock_value|money }} at cost. Consider writing the stock off first
+            so your inventory valuation stays correct.
+          </div>
+        {% endif %}
+        <form method="post">
+          {% csrf_token %}
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'inventory:product_detail' product.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+            <button class="btn btn-danger btn-sm"><i class="bi bi-archive me-1"></i> Archive Product</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

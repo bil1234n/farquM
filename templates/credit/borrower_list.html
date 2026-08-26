@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Borrowers{% endblock %}
+{% block page_title %}Borrowers{% endblock %}
+{% block breadcrumb %}<div class="crumb">Total outstanding across all borrowers: {{ total_outstanding|money }}</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-speedometer2 me-1"></i> Credit Dashboard</a>
+  <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-download me-1"></i> Export</a>
+{% endblock %}
+
+{% block content %}
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-6">
+      <label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Customer name or phone number...">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Filter</label>
+      <select name="filter" class="form-select form-select-sm">
+        <option value="">All borrowers</option>
+        <option value="debtors" {% if selected_filter == 'debtors' %}selected{% endif %}>Currently owing</option>
+        <option value="overdue" {% if selected_filter == 'overdue' %}selected{% endif %}>Has overdue debt</option>
+        <option value="blocked" {% if selected_filter == 'blocked' %}selected{% endif %}>Credit blocked</option>
+        <option value="clear" {% if selected_filter == 'clear' %}selected{% endif %}>Cleared / no debt</option>
+      </select>
+    </div>
+    <div class="col-md-2 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i> Filter</button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead><tr>
+        <th>Customer</th><th class="num">Outstanding</th><th class="num">Total borrowed</th>
+        <th class="num">Total repaid</th><th class="num">Limit</th>
+        <th style="width:150px">Utilisation</th><th>Standing</th><th>Last payment</th><th class="text-end"></th>
+      </tr></thead>
+      <tbody>
+        {% for a in accounts %}
+          <tr>
+            <td>
+              <a href="{% url 'credit:borrower_detail' a.customer.pk %}" class="fw-semibold">{{ a.customer.name }}</a>
+              <div class="text-muted-sm">{{ a.customer.phone }}
+                {% if a.open_debt_count %}&middot; {{ a.open_debt_count }} open debt{{ a.open_debt_count|pluralize }}{% endif %}</div>
+            </td>
+            <td class="num money fw-semibold {% if a.outstanding_balance > 0 %}text-danger{% else %}text-muted{% endif %}">
+              {{ a.outstanding_balance|money }}</td>
+            <td class="num money text-muted">{{ a.total_credit_extended|money }}</td>
+            <td class="num money text-success">{{ a.total_repaid|money }}</td>
+            <td class="num money text-muted">{% if a.credit_limit > 0 %}{{ a.credit_limit|money }}{% else %}&mdash;{% endif %}</td>
+            <td>
+              {% if a.credit_limit > 0 %}
+                <div class="progress">
+                  <div class="progress-bar {% if a.is_over_limit %}bg-danger{% elif a.utilisation_percent > 75 %}bg-warning{% else %}bg-success{% endif %}"
+                       style="width:{% if a.utilisation_percent > 100 %}100{% else %}{{ a.utilisation_percent }}{% endif %}%"></div>
+                </div>
+                <div class="text-muted-sm">{{ a.utilisation_percent }}%
+                  {% if a.is_over_limit %}<span class="text-danger fw-semibold">over limit</span>{% endif %}</div>
+              {% else %}<span class="text-muted-sm">No limit</span>{% endif %}
+            </td>
+            <td><span class="badge text-bg-{{ a.risk_class }}">{{ a.risk_label }}</span></td>
+            <td class="text-muted-sm">{{ a.last_payment_date|date:"d M Y"|default:"Never" }}</td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                {% if a.outstanding_balance > 0 %}
+                  <a href="{% url 'credit:bulk_repayment' a.customer.pk %}" class="btn btn-success" title="Collect payment">
+                    <i class="bi bi-cash-coin"></i></a>
+                {% endif %}
+                <a href="{% url 'credit:borrower_detail' a.customer.pk %}" class="btn btn-outline-secondary" title="Profile">
+                  <i class="bi bi-eye"></i></a>
+                {% if user.is_admin %}
+                  <a href="{% url 'credit:account_update' a.pk %}" class="btn btn-outline-secondary" title="Credit terms">
+                    <i class="bi bi-sliders"></i></a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="9"><div class="empty-state"><i class="bi bi-person-lines-fill"></i>
+            No borrowers match your filters.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

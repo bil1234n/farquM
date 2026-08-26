@@ -1,0 +1,320 @@
+import csv
+import datetime as dt
+
+from django.http import HttpResponse
+from django.shortcuts import render
+from django.utils import timezone
+from django.views.generic import TemplateView
+
+from accounts.models import AuditAction
+from accounts.services import log_action
+from core.mixins import AdminRequiredMixin, StaffRequiredMixin
+from core.scoping import scoped, sees_everything
+from credit.models import DebtRecord
+from inventory.models import Product, StockMovement
+from sales.models import Customer, Transaction
+
+from .selectors import (
+    collections_summary,
+    daily_series,
+    inventory_valuation,
+    period_bounds,
+    profit_summary,
+    receivables_summary,
+    sales_by_staff,
+    sales_summary,
+    top_products,
+)
+
+
+class DashboardView(StaffRequiredMixin, TemplateView):
+    """
+    The landing page. Shows the same operational picture to both roles,
+    but every financial panel is gated on user.can_view_financials.
+    """
+
+    template_name = "reports/dashboard.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        today = timezone.localdate()
+        month_start = today.replace(day=1)
+
+        today_stats = sales_summary(today, today, user=user)
+        month_stats = sales_summary(month_start, today, user=user)
+        receivables = receivables_summary(user=user)
+
+        products = scoped(Product.objects.alive(), user)
+        customers = scoped(Customer.objects.all(), user)
+        debts = scoped(DebtRecord.objects.all(), user)
+        sales = scoped(Transaction.objects.active(), user)
+
+        ctx.update(
+            {
+                "today": today,
+                "today_stats": today_stats,
+                "month_stats": month_stats,
+                "receivables": receivables,
+                "today_collections": collections_summary(today, today, user=user),
+                "month_collections": collections_summary(month_start, today, user=user),
+                "chart": daily_series(today - dt.timedelta(days=13), today, user=user),
+                "recent_sales": (
+                    sales.select_related("customer", "sold_by")
+                    .order_by("-created_at")[:8]
+                ),
+                "overdue_debts": (
+                    debts.overdue()
+                    .select_related("customer")
+                    .order_by("due_date")[:8]
+                ),
+                "low_stock_products": (
+                    products.needs_attention().order_by("stock_quantity")[:8]
+                ),
+                "low_stock_count": products.needs_attention().count(),
+                "product_count": products.filter(is_active=True).count(),
+                "customer_count": customers.active().count(),
+                "debtor_count": customers.with_debt().count(),
+                "show_financials": user.can_view_financials,
+                # Tells the template whether it is looking at the whole
+                # business or one person's slice, so the headings can say so
+                # rather than leaving an admin guessing.
+                "scope_is_global": sees_everything(user),
+            }
+        )
+
+        # ---- Admin-only financial panels ---------------------------------
+        if user.can_view_financials:
+            ctx["today_profit"] = profit_summary(today, today, user=user)
+            ctx["month_profit"] = profit_summary(month_start, today, user=user)
+            ctx["valuation"] = inventory_valuation(user=user)
+
+        # ---- Per-manager comparison, admins only -------------------------
+        if sees_everything(user):
+            ctx["by_manager"] = sales_by_staff(month_start, today, user=user)
+
+        return ctx
+
+
+class SalesReportView(StaffRequiredMixin, TemplateView):
+    """Operational sales report - safe for Managers (no cost or margin)."""
+
+    template_name = "reports/sales_report.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        start, end = period_bounds(self.request)
+        user = self.request.user
+
+        transactions = (
+            scoped(Transaction.objects.active(), user)
+            .filter(created_at__date__gte=start, created_at__date__lte=end)
+            .select_related("customer", "sold_by")
+            .order_by("-created_at")
+        )
+
+        ctx.update(
+            {
+                "start": start,
+                "end": end,
+                "summary": sales_summary(start, end, user=user),
+                "chart": daily_series(start, end, user=user),
+                "transactions": transactions[:200],
+                "transaction_count": transactions.count(),
+                "top_products": top_products(
+                    start, end, limit=15,
+                    include_cost=user.can_view_financials, user=user,
+                ),
+                "show_financials": user.can_view_financials,
+                "by_staff": sales_by_staff(start, end, user=user),
+                "show_staff_table": sees_everything(user),
+            }
+        )
+        return ctx
+
+
+class ProfitReportView(AdminRequiredMixin, TemplateView):
+    """ADMIN ONLY. Cost of goods, gross profit and per-product margins."""
+
+    template_name = "reports/profit_report.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        start, end = period_bounds(self.request)
+        user = self.request.user
+        ctx.update(
+            {
+                "start": start,
+                "end": end,
+                "profit": profit_summary(start, end, user=user),
+                "top_products": top_products(
+                    start, end, limit=25, include_cost=True, user=user
+                ),
+                "valuation": inventory_valuation(user=user),
+                "chart": daily_series(start, end, user=user),
+            }
+        )
+        return ctx
+
+
+class InventoryReportView(StaffRequiredMixin, TemplateView):
+    template_name = "reports/inventory_report.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        alive = scoped(Product.objects.alive(), user)
+        products = (
+            alive.filter(is_active=True)
+            .select_related("category")
+            .order_by("stock_quantity")
+        )
+        ctx.update(
+            {
+                "products": products[:300],
+                "product_count": products.count(),
+                "low_stock": alive.low_stock().count(),
+                "out_of_stock": alive.out_of_stock().count(),
+                "recent_movements": (
+                    scoped(StockMovement.objects.all(), user)
+                    .select_related("product", "performed_by")[:30]
+                ),
+                "show_financials": user.can_view_financials,
+            }
+        )
+        if user.can_view_financials:
+            ctx["valuation"] = inventory_valuation(user=user)
+        return ctx
+
+
+class ReceivablesReportView(StaffRequiredMixin, TemplateView):
+    """Accounts receivable / borrower report. Managers may collect debts."""
+
+    template_name = "reports/receivables_report.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        receivables = receivables_summary(user=user)
+        ctx.update(
+            {
+                "receivables": receivables,
+                "aging": receivables["aging"],
+                "debts": (
+                    scoped(DebtRecord.objects.all(), user)
+                    .open_debts()
+                    .select_related("customer", "transaction")
+                    .order_by("due_date")[:200]
+                ),
+                "top_debtors": (
+                    scoped(Customer.objects.with_debt(), user)
+                    .select_related("credit_account")
+                    .order_by("-credit_account__outstanding_balance")[:20]
+                ),
+            }
+        )
+        return ctx
+
+
+# ---------------------------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------------------------
+def export_sales_csv(request):
+    """
+    CSV export. Cost and profit columns are only written for an Admin -
+    a Manager exporting the same URL gets the operational columns only.
+    """
+    if not request.user.is_authenticated:
+        from django.shortcuts import redirect
+
+        return redirect("accounts:login")
+
+    start, end = period_bounds(request)
+    show_financials = request.user.can_view_financials
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="sales_{start}_{end}.csv"'
+    )
+
+    writer = csv.writer(response)
+    header = [
+        "Reference", "Date", "Customer", "Phone", "Items", "Subtotal",
+        "Discount", "Tax", "Total", "Paid", "Balance", "Status",
+        "Method", "Sold by",
+    ]
+    if show_financials:
+        header += ["Cost of goods", "Gross profit", "Margin %"]
+    writer.writerow(header)
+
+    transactions = (
+        scoped(Transaction.objects.active(), request.user)
+        .filter(created_at__date__gte=start, created_at__date__lte=end)
+        .select_related("customer", "sold_by")
+        .prefetch_related("items")
+        .order_by("created_at")
+    )
+
+    for txn in transactions:
+        row = [
+            txn.reference,
+            timezone.localtime(txn.created_at).strftime("%Y-%m-%d %H:%M"),
+            txn.customer.name if txn.customer else "Walk-in",
+            txn.customer.phone if txn.customer else "",
+            txn.item_count,
+            txn.subtotal, txn.discount_amount, txn.tax_amount,
+            txn.total_amount, txn.amount_paid, txn.balance_due,
+            txn.get_payment_status_display(),
+            txn.get_payment_method_display(),
+            txn.sold_by.display_name if txn.sold_by else "",
+        ]
+        if show_financials:
+            row += [txn.total_cost, txn.gross_profit, txn.profit_margin]
+        writer.writerow(row)
+
+    log_action(
+        AuditAction.EXPORT,
+        description=f"Exported sales CSV for {start} to {end} "
+                    f"({'with' if show_financials else 'without'} financials).",
+        user=request.user,
+        request=request,
+    )
+    return response
+
+
+def export_receivables_csv(request):
+    if not request.user.is_authenticated:
+        from django.shortcuts import redirect
+
+        return redirect("accounts:login")
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="receivables_{timezone.localdate()}.csv"'
+    )
+    writer = csv.writer(response)
+    writer.writerow([
+        "Debt ref", "Sale ref", "Customer", "Phone", "Issued", "Due",
+        "Principal", "Repaid", "Balance", "Status", "Days overdue", "Aging bucket",
+    ])
+    for debt in (
+        scoped(DebtRecord.objects.all(), request.user)
+        .open_debts()
+        .select_related("customer", "transaction")
+        .order_by("due_date")
+    ):
+        writer.writerow([
+            debt.reference,
+            debt.transaction.reference if debt.transaction else "",
+            debt.customer.name, debt.customer.phone,
+            debt.issued_date, debt.due_date,
+            debt.principal, debt.amount_repaid, debt.balance,
+            debt.get_status_display(), debt.days_overdue, debt.aging_bucket,
+        ])
+
+    log_action(
+        AuditAction.EXPORT,
+        description="Exported accounts-receivable CSV.",
+        user=request.user, request=request,
+    )
+    return response

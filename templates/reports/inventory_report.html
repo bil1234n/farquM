@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Inventory Report{% endblock %}
+{% block page_title %}Inventory Report{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ product_count }} active product{{ product_count|pluralize }}
+  &middot; {{ low_stock }} low &middot; {{ out_of_stock }} out of stock</div>{% endblock %}
+
+{% block page_actions %}
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> Print</button>
+  <a href="{% url 'inventory:low_stock' %}" class="btn btn-warning btn-sm"><i class="bi bi-exclamation-triangle me-1"></i> Reorder List</a>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="stat-card accent-primary">
+    <div class="label">Active Products</div><div class="value">{{ product_count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-warning">
+    <div class="label">Low Stock</div><div class="value">{{ low_stock }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat-card accent-danger">
+    <div class="label">Out of Stock</div><div class="value">{{ out_of_stock }}</div></div></div>
+  {% if show_financials %}
+    <div class="col-6 col-lg-3"><div class="stat-card accent-success">
+      <div class="label">Stock Value <span class="badge text-bg-secondary">Admin</span></div>
+      <div class="value money">{{ valuation.cost_value|money }}</div>
+      <div class="hint">Retail {{ valuation.retail_value|money }}</div></div></div>
+  {% else %}
+    <div class="col-6 col-lg-3"><div class="stat-card accent-info">
+      <div class="label">Healthy Stock</div>
+      <div class="value">{{ product_count|subtract:low_stock|subtract:out_of_stock }}</div></div></div>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-box-seam me-1"></i> Stock On Hand (lowest first)</div>
+      <div class="table-responsive" style="max-height:600px;overflow:auto">
+        <table class="table table-hover">
+          <thead><tr><th>Product</th><th>Category</th><th class="num">Stock</th><th class="num">Threshold</th>
+            {% if show_financials %}<th class="num">Cost value</th><th class="num">Retail value</th>{% endif %}
+            <th>Status</th></tr></thead>
+          <tbody>
+            {% for p in products %}
+              <tr>
+                <td><a href="{% url 'inventory:product_detail' p.pk %}">{{ p.name|truncatechars:34 }}</a>
+                  <div class="text-muted-sm mono">{{ p.sku }}</div></td>
+                <td class="text-muted-sm">{{ p.category.name|default:"&mdash;" }}</td>
+                <td class="num fw-semibold">{{ p.stock_quantity }}</td>
+                <td class="num text-muted">{{ p.low_stock_threshold }}</td>
+                {% if show_financials %}
+                  <td class="num money">{{ p.stock_value|money }}</td>
+                  <td class="num money text-muted">{{ p.retail_value|money }}</td>
+                {% endif %}
+                <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-box"></i>No products yet.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% if show_financials %}
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-cash-stack me-1"></i> Valuation</div>
+        <div class="card-body small">
+          <div class="d-flex justify-content-between py-1"><span class="text-muted">At cost</span>
+            <span class="money fw-semibold">{{ valuation.cost_value|money }}</span></div>
+          <div class="d-flex justify-content-between py-1"><span class="text-muted">At retail</span>
+            <span class="money">{{ valuation.retail_value|money }}</span></div>
+          <div class="d-flex justify-content-between py-1 border-top pt-2 mt-1 fw-bold">
+            <span>Potential profit</span><span class="money text-success">{{ valuation.potential_profit|money }}</span></div>
+          <div class="d-flex justify-content-between py-1"><span class="text-muted">Units</span><span>{{ valuation.units }}</span></div>
+          <div class="d-flex justify-content-between py-1"><span class="text-muted">SKUs</span><span>{{ valuation.skus }}</span></div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-arrow-left-right me-1"></i> Recent Movements</div>
+      <div class="table-responsive" style="max-height:420px;overflow:auto">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Product</th><th class="num">Change</th><th>Type</th></tr></thead>
+          <tbody>
+            {% for m in recent_movements %}
+              <tr>
+                <td>{{ m.product.name|truncatechars:22 }}
+                  <div class="text-muted-sm">{{ m.created_at|date:"d M, H:i" }}</div></td>
+                <td class="num fw-semibold {% if m.is_inbound %}text-success{% else %}text-danger{% endif %}">
+                  {% if m.is_inbound %}+{% endif %}{{ m.quantity_delta }}</td>
+                <td><span class="badge text-bg-light text-dark">{{ m.get_movement_type_display|truncatechars:14 }}</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="3" class="text-center text-muted py-3">No movements.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

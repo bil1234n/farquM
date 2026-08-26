@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{{ debt.reference }}{% endblock %}
+{% block page_title %}{{ debt.reference }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    {{ debt.customer.name }} &middot; issued {{ debt.issued_date|date:"d M Y" }}
+    &middot; due {{ debt.due_date|date:"d M Y" }}
+  </div>
+{% endblock %}
+
+{% block page_actions %}
+  {% if debt.is_open %}
+    <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm">
+      <i class="bi bi-cash-coin me-1"></i> Record Payment
+    </a>
+    <a href="{% url 'credit:debt_adjust' debt.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-calendar-event me-1"></i> Reschedule
+    </a>
+  {% endif %}
+  {% if user.can_delete_records and debt.is_open %}
+    <a href="{% url 'credit:debt_write_off' debt.pk %}" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-slash-circle me-1"></i> Write Off
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if debt.status == 'WRITTEN_OFF' %}
+  <div class="alert alert-dark">
+    <strong><i class="bi bi-slash-circle me-1"></i> Written off as uncollectable</strong>
+    <div class="small mt-1">
+      By {{ debt.written_off_by.display_name|default:"unknown" }} on {{ debt.settled_date|date:"d M Y" }}.
+      <div><strong>Reason:</strong> {{ debt.write_off_reason }}</div>
+    </div>
+  </div>
+{% elif debt.status == 'CANCELLED' %}
+  <div class="alert alert-secondary">
+    <strong><i class="bi bi-x-circle me-1"></i> Cancelled</strong> &mdash;
+    the originating sale was voided, so this debt is no longer collectable.
+  </div>
+{% elif debt.is_overdue %}
+  <div class="alert alert-danger">
+    <strong><i class="bi bi-exclamation-triangle-fill me-1"></i>
+    Overdue by {{ debt.days_overdue }} day{{ debt.days_overdue|pluralize }}</strong> &mdash;
+    this debt fell due on {{ debt.due_date|date:"d F Y" }} and
+    <span class="money fw-semibold">{{ debt.balance|money }}</span> remains outstanding.
+  </div>
+{% elif debt.is_settled %}
+  <div class="alert alert-success">
+    <strong><i class="bi bi-check-circle-fill me-1"></i> Fully settled</strong>
+    on {{ debt.settled_date|date:"d F Y" }}. Nothing further is owed on this debt.
+  </div>
+{% endif %}
+
+<div class="row g-3">
+
+  {# ---------------- Repayment ledger ---------------- #}
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-journal-text me-1"></i> Repayment Ledger</span>
+        <span class="text-muted-sm">Append-only &mdash; entries are reversed, never edited</span>
+      </div>
+      <div class="card-body">
+
+        {# Opening entry #}
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="d-flex justify-content-between">
+              <div>
+                <strong>Debt opened</strong>
+                <div class="text-muted-sm">
+                  {{ debt.issued_date|date:"d M Y" }}
+                  {% if debt.transaction %}
+                    &middot; from sale
+                    <a href="{% url 'sales:transaction_detail' debt.transaction.pk %}" class="mono">
+                      {{ debt.transaction.reference }}
+                    </a>
+                  {% endif %}
+                  {% if debt.created_by %}&middot; by {{ debt.created_by.display_name }}{% endif %}
+                </div>
+              </div>
+              <div class="text-end">
+                <div class="money fw-semibold">{{ debt.principal|money }}</div>
+                <div class="text-muted-sm">principal</div>
+              </div>
+            </div>
+          </div>
+
+          {% for p in repayments %}
+            <div class="timeline-item {% if p.is_reversed %}reversed{% endif %}">
+              <div class="d-flex justify-content-between">
+                <div>
+                  <strong class="{% if p.is_reversed %}text-decoration-line-through text-muted{% endif %}">
+                    {{ p.get_method_display }} payment
+                  </strong>
+                  <span class="mono text-muted-sm ms-1">{{ p.reference }}</span>
+                  {% if p.is_reversed %}<span class="badge text-bg-danger ms-1">Reversed</span>{% endif %}
+
+                  <div class="text-muted-sm">
+                    {{ p.paid_at|date:"d M Y, H:i" }}
+                    {% if p.received_by %}&middot; received by {{ p.received_by.display_name }}{% endif %}
+                  </div>
+                  {% if p.external_reference %}
+                    <div class="text-muted-sm">Ref: <span class="mono">{{ p.external_reference }}</span></div>
+                  {% endif %}
+                  {% if p.note %}<div class="text-muted-sm fst-italic">{{ p.note }}</div>{% endif %}
+
+                  {% if p.is_reversed %}
+                    <div class="alert alert-danger py-1 px-2 small mt-2 mb-1">
+                      Reversed by {{ p.reversed_by.display_name|default:"unknown" }}
+                      on {{ p.reversed_at|date:"d M Y" }}: {{ p.reversal_reason }}
+                    </div>
+                  {% endif %}
+
+                  {% if p.proofs.all %}
+                    <div class="d-flex gap-2 mt-2">
+                      {% for proof in p.proofs.all %}
+                        <a href="{{ proof.file.url }}" target="_blank" class="d-block" style="width:70px">
+                          {% if proof.is_image %}
+                            <img src="{{ proof.file.url }}" class="rounded border"
+                                 style="width:70px;height:50px;object-fit:cover" alt="proof">
+                          {% else %}
+                            <div class="border rounded d-grid text-center" style="width:70px;height:50px;align-content:center">
+                              <i class="bi bi-file-earmark-pdf"></i>
+                            </div>
+                          {% endif %}
+                        </a>
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    <div class="text-muted-sm mt-1"><i class="bi bi-exclamation-circle me-1"></i>No proof attached</div>
+                  {% endif %}
+                </div>
+
+                <div class="text-end ms-3">
+                  <div class="money fw-semibold {% if p.is_reversed %}text-muted text-decoration-line-through{% else %}text-success{% endif %}">
+                    &minus;{{ p.amount|money }}
+                  </div>
+                  <div class="text-muted-sm">
+                    {{ p.balance_before|plain_money }} &rarr; {{ p.balance_after|plain_money }}
+                  </div>
+                  {% if user.can_delete_records and not p.is_reversed %}
+                    <a href="{% url 'credit:repayment_reverse' p.pk %}"
+                       class="btn btn-sm btn-outline-danger mt-1" title="Reverse this payment">
+                      <i class="bi bi-arrow-counterclockwise"></i>
+                    </a>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% empty %}
+            <div class="timeline-item">
+              <span class="text-muted">No repayments recorded yet.</span>
+            </div>
+          {% endfor %}
+        </div>
+
+        <div class="d-flex justify-content-between border-top pt-3 mt-2 fw-bold">
+          <span>Current balance</span>
+          <span class="money {% if debt.balance > 0 %}text-danger{% else %}text-success{% endif %}">
+            {{ debt.balance|money }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ---------------- Summary + quick pay ---------------- #}
+  <div class="col-lg-4">
+    <div class="pos-total mb-3">
+      <div class="line"><span>Principal borrowed</span><span class="money">{{ debt.principal|money }}</span></div>
+      <div class="line"><span>Total repaid</span><span class="money text-success">{{ debt.amount_repaid|money }}</span></div>
+      <div class="line grand">
+        <span>Balance</span>
+        <span class="money {% if debt.balance > 0 %}text-danger{% endif %}">{{ debt.balance|money }}</span>
+      </div>
+      <div class="progress mt-3">
+        <div class="progress-bar bg-success" style="width:{{ debt.repayment_percent }}%"></div>
+      </div>
+      <div class="text-center text-muted-sm mt-1">{{ debt.repayment_percent }}% repaid</div>
+      <div class="text-center mt-3">
+        <span class="badge text-bg-{{ debt.status_class }} px-3 py-2">{{ debt.display_status }}</span>
+      </div>
+    </div>
+
+    {% if debt.is_open %}
+      <div class="card mb-3 border-success">
+        <div class="card-header bg-success-subtle"><i class="bi bi-cash-coin me-1"></i> Record a Payment</div>
+        <form method="post" action="{% url 'credit:repayment_create' debt.pk %}" enctype="multipart/form-data">
+          {% csrf_token %}
+          <div class="card-body">
+            <div class="mb-2">
+              <label class="form-label">Amount received</label>
+              {{ repayment_form.amount }}
+              <div class="form-text">Outstanding: {{ debt.balance|money }}</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Method</label>
+              {{ repayment_form.method }}
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Bank / mobile reference</label>
+              {{ repayment_form.external_reference }}
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Proof of payment</label>
+              {{ repayment_form.proof }}
+            </div>
+            <button class="btn btn-success w-100 btn-sm">
+              <i class="bi bi-check-lg me-1"></i> Record Payment
+            </button>
+            <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-link btn-sm w-100">
+              More options
+            </a>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-person me-1"></i> Borrower</div>
+      <div class="card-body small">
+        <div class="fw-semibold">
+          <a href="{% url 'credit:borrower_detail' debt.customer.pk %}">{{ debt.customer.name }}</a>
+        </div>
+        <div class="text-muted-sm mb-2"><i class="bi bi-telephone me-1"></i>{{ debt.customer.phone }}</div>
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">Total debt (all sales)</span>
+          <span class="money fw-semibold">{{ debt.customer.outstanding_balance|money }}</span>
+        </div>
+        <div class="d-flex justify-content-between py-1">
+          <span class="text-muted">Credit limit</span>
+          <span class="money">
+            {% if debt.customer.credit_limit > 0 %}{{ debt.customer.credit_limit|money }}{% else %}Not set{% endif %}
+          </span>
+        </div>
+        {% if debt.notes %}
+          <hr class="my-2">
+          <div class="text-muted mb-1">Notes</div>
+          <div>{{ debt.notes|linebreaksbr }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

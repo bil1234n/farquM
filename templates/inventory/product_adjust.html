@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Adjust Stock{% endblock %}
+{% block page_title %}Adjust Stock{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ product.name }} &middot; currently {{ product.stock_quantity }} in stock</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center g-3">
+  <div class="col-lg-6">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card border-warning">
+        <div class="card-header bg-warning-subtle"><i class="bi bi-sliders me-1"></i> Stock Adjustment</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="reason,mode" %}
+          <div class="alert alert-warning small mt-3 mb-0">
+            <strong>A reason is required.</strong> Adjustments are written permanently to the
+            stock ledger against your name and can never be edited or removed.
+            {% if not user.is_admin %}
+              <div class="mt-1">Overwriting a stock count (stock-take) requires administrator rights.</div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'inventory:product_detail' product.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-warning btn-sm"><i class="bi bi-check-lg me-1"></i> Apply Adjustment</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-question-circle me-1"></i> Which type?</div>
+      <div class="card-body small text-muted">
+        <p><strong>Stock-take</strong> &mdash; you counted the shelf and it disagrees with the system.
+           Enter the counted total; the difference is recorded.</p>
+        <p><strong>Write off</strong> &mdash; goods damaged, expired or lost. Enter the quantity removed.</p>
+        <p class="mb-0"><strong>Customer return</strong> &mdash; goods came back and are resalable.
+           Enter the quantity returning to the shelf.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

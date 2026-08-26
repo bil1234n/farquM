@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Reschedule Debt{% endblock %}
+{% block page_title %}Reschedule Debt{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ object.reference }} &middot; {{ object.customer.name }}</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center g-3">
+  <div class="col-lg-6">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-calendar-event me-1"></i> Due Date &amp; Notes</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="notes" %}
+          <div class="alert alert-info small mt-3 mb-0">
+            <i class="bi bi-info-circle me-1"></i>
+            Rescheduling changes only when the debt falls due. The amount owed is unchanged &mdash;
+            balances can only move through the repayment ledger. The change is recorded in the audit log.
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'credit:debt_detail' object.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div class="col-lg-4">
+    <div class="pos-total">
+      <div class="line"><span>Principal</span><span class="money">{{ object.principal|money }}</span></div>
+      <div class="line"><span>Repaid</span><span class="money text-success">{{ object.amount_repaid|money }}</span></div>
+      <div class="line grand"><span>Balance</span><span class="money text-danger">{{ object.balance|money }}</span></div>
+      <hr>
+      <div class="d-flex justify-content-between small">
+        <span class="text-muted">Currently due</span><span>{{ object.due_date|date:"d M Y" }}</span></div>
+      {% if object.is_overdue %}
+        <div class="alert alert-danger py-2 px-3 small mt-2 mb-0">
+          Overdue by {{ object.days_overdue }} day{{ object.days_overdue|pluralize }}.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

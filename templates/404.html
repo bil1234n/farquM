@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Not found{% endblock %}
+{% block page_title %}Page not found{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="empty-state py-5">
+    <i class="bi bi-compass"></i>
+    <h2 class="h5 mb-2">That page does not exist</h2>
+    <p class="text-muted-sm mb-4">The link may be out of date, or the record may have been archived.</p>
+    <a href="{% url 'reports:dashboard' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i> Back to dashboard
+    </a>
+  </div>
+</div>
+{% endblock %}

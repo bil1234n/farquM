@@ -1,0 +1,253 @@
+/*
+ * JSON-driven translator for the Faruq Management System.
+ * -------------------------------------------------------
+ * SOURCE_LANG is the language the templates are authored in (English).
+ * DEFAULT_LANG is what a first-time visitor sees (Amharic).
+ *
+ * FOUR passes run on every switch:
+ *
+ *   1. Explicit - data-i18n / data-i18n-placeholder / data-i18n-title.
+ *   2. Exact    - reverse map (English string -> key), whole-string matches.
+ *   3. Pattern  - regexes from en.json["_patterns"] handle strings holding
+ *                 live numbers, e.g. "3 sales recorded". The target file
+ *                 supplies a template with {0}, {1} placeholders.
+ *   4. Dates    - Gregorian dates rendered by Django are converted to the
+ *                 Ethiopian calendar.
+ *
+ * SAFETY: passes 2-4 walk the document with a TreeWalker but SKIP any node
+ * inside .mono, .money, .num, [data-i18n-skip], <script>, <style>, <code>
+ * and <input>. Those hold user data - names, SKUs, references, amounts.
+ * Matching is whole-string against a curated dictionary, so a product called
+ * "Sofa" matches nothing and is left alone.
+ */
+(function (window, document) {
+  "use strict";
+
+  var LANGUAGES  = ["en", "am"];
+  var SOURCE_LANG = "en";   // language the HTML is written in
+  var DEFAULT_LANG = "am";  // what a new user gets
+  var STORAGE_KEY = "faruq.lang";
+
+  var SKIP_SELECTOR = "script,style,code,pre,textarea,input," +
+    "[data-i18n-skip],.mono,.money,.num,.chart-peak";
+
+  var dictionaries = {};
+  var reverseEn = {};
+  var patterns = [];
+  var current = DEFAULT_LANG;
+
+  function normalise(t) { return (t || "").replace(/\s+/g, " ").trim(); }
+
+  function load(code) {
+    if (dictionaries[code]) return Promise.resolve(dictionaries[code]);
+    return fetch(window.I18N_BASE_URL + code + ".json", { cache: "no-cache" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Could not load " + code + ".json");
+        return r.json();
+      })
+      .then(function (d) { dictionaries[code] = d; return d; });
+  }
+
+  function buildMaps(en) {
+    reverseEn = {};
+    Object.keys(en).forEach(function (k) {
+      if (k.charAt(0) === "_") return;
+      var v = normalise(en[k]);
+      if (v) reverseEn[v.toLowerCase()] = k;
+    });
+    patterns = (en._patterns || []).map(function (p) {
+      try { return { id: p.id, re: new RegExp(p.re, "i") }; }
+      catch (e) { return null; }
+    }).filter(Boolean);
+  }
+
+  function fill(tpl, groups) {
+    return tpl.replace(/\{(\d+)\}/g, function (m, i) {
+      var g = groups[parseInt(i, 10)];
+      return g !== undefined ? g : m;
+    });
+  }
+
+  // ---- Date conversion --------------------------------------------------
+  var MONTHS_EN = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+    may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9, oct: 10, october: 10,
+    nov: 11, november: 11, dec: 12, december: 12
+  };
+
+  // "Saturday, 22 August 2026" / "22 Aug 2026, 14:30" / "22 Aug" / "22 Aug 2026"
+  var DATE_RE = new RegExp(
+    "(?:(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday),\\s*)?" +
+    "\\b(\\d{1,2})\\s+" +
+    "(Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|" +
+    "Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)" +
+    "(?:\\s+(\\d{4}))?" +
+    "(,\\s*\\d{1,2}:\\d{2})?",
+    "gi"
+  );
+
+  function convertDates(text) {
+    if (!window.EthiopianDate) return text;
+    return text.replace(DATE_RE, function (match, weekday, day, mon, year, time) {
+      var m = MONTHS_EN[mon.toLowerCase()];
+      if (!m) return match;
+      // A date with no year appears in chart labels, which always sit inside
+      // a recent window, so the current year is a safe assumption.
+      var y = year ? parseInt(year, 10) : new Date().getFullYear();
+      var style = weekday ? "full" : (year ? "long" : "day");
+      var out = window.EthiopianDate.format(y, m, parseInt(day, 10), style);
+      return out + (time || "");
+    });
+  }
+
+  function translateString(text, dict, wantDates) {
+    var key = reverseEn[text.toLowerCase()];
+    if (key && dict[key]) return dict[key];
+
+    var pd = dict._patterns || {};
+    for (var i = 0; i < patterns.length; i++) {
+      var m = text.match(patterns[i].re);
+      if (m && pd[patterns[i].id]) return fill(pd[patterns[i].id], m.slice(1));
+    }
+
+    if (wantDates) {
+      var converted = convertDates(text);
+      if (converted !== text) return converted;
+    }
+    return null;
+  }
+
+  // ---- DOM walking ------------------------------------------------------
+  function eachTextNode(fn) {
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (node) {
+        if (!normalise(node.nodeValue)) return NodeFilter.FILTER_REJECT;
+        var p = node.parentElement;
+        if (!p || p.closest(SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
+        if (p.hasAttribute && p.hasAttribute("data-i18n")) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var n;
+    while ((n = walker.nextNode())) fn(n);
+  }
+
+  function applyExplicit(dict) {
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n");
+      if (!el.hasAttribute("data-i18n-original")) {
+        el.setAttribute("data-i18n-original", el.textContent);
+      }
+      el.textContent = dict[key] || el.getAttribute("data-i18n-original");
+    });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) {
+      var k = el.getAttribute("data-i18n-placeholder");
+      if (dict[k]) el.setAttribute("placeholder", dict[k]);
+    });
+    document.querySelectorAll("[data-i18n-title]").forEach(function (el) {
+      var k = el.getAttribute("data-i18n-title");
+      if (dict[k]) el.setAttribute("title", dict[k]);
+    });
+  }
+
+  function applySweep(dict) {
+    eachTextNode(function (node) {
+      if (node._i18nOriginal === undefined) node._i18nOriginal = node.nodeValue;
+      var source = normalise(node._i18nOriginal);
+      var out = translateString(source, dict, true);
+      if (out) node.nodeValue = node._i18nOriginal.replace(source, out);
+    });
+
+    document.querySelectorAll("[placeholder]").forEach(function (el) {
+      if (el.hasAttribute("data-i18n-placeholder")) return;
+      if (el._i18nPh === undefined) el._i18nPh = el.getAttribute("placeholder");
+      var out = translateString(normalise(el._i18nPh), dict, false);
+      if (out) el.setAttribute("placeholder", out);
+    });
+
+    document.querySelectorAll("[title]").forEach(function (el) {
+      if (el.hasAttribute("data-i18n-title")) return;
+      if (el._i18nTitle === undefined) el._i18nTitle = el.getAttribute("title");
+      var out = translateString(normalise(el._i18nTitle), dict, false);
+      if (out) el.setAttribute("title", out);
+    });
+  }
+
+  function restoreOriginals() {
+    eachTextNode(function (node) {
+      if (node._i18nOriginal !== undefined) node.nodeValue = node._i18nOriginal;
+    });
+    document.querySelectorAll("[placeholder]").forEach(function (el) {
+      if (el._i18nPh !== undefined) el.setAttribute("placeholder", el._i18nPh);
+    });
+    document.querySelectorAll("[title]").forEach(function (el) {
+      if (el._i18nTitle !== undefined) el.setAttribute("title", el._i18nTitle);
+    });
+  }
+
+  function setLanguage(code) {
+    if (LANGUAGES.indexOf(code) === -1) code = DEFAULT_LANG;
+
+    var work = code === SOURCE_LANG
+      ? load(SOURCE_LANG).then(function (en) {
+          buildMaps(en); restoreOriginals(); applyExplicit(en); return en;
+        })
+      : Promise.all([load(SOURCE_LANG), load(code)]).then(function (b) {
+          buildMaps(b[0]); restoreOriginals();
+          applyExplicit(b[1]); applySweep(b[1]);
+          return b[1];
+        });
+
+    return work.then(function (dict) {
+      current = code;
+      try { localStorage.setItem(STORAGE_KEY, code); } catch (e) {}
+
+      document.documentElement.setAttribute("lang", code);
+      var meta = dict._meta || {};
+      document.documentElement.setAttribute("dir", meta.dir || "ltr");
+
+      var label = document.getElementById("langLabel");
+      if (label) label.textContent = meta.nativeName || code;
+      document.querySelectorAll("[data-lang-option]").forEach(function (el) {
+        el.classList.toggle("active", el.getAttribute("data-lang-option") === code);
+      });
+      document.dispatchEvent(new CustomEvent("i18n:changed", { detail: { lang: code } }));
+    }).catch(function (err) { console.error("[i18n]", err); });
+  }
+
+  function stored() {
+    try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+  }
+
+  window.I18N = {
+    setLanguage: setLanguage,
+    get current() { return current; },
+    languages: LANGUAGES,
+    t: function (k, f) { return (dictionaries[current] || {})[k] || f || k; },
+    refresh: function () {
+      if (current === SOURCE_LANG) return;
+      var d = dictionaries[current];
+      if (d) { applyExplicit(d); applySweep(d); }
+    }
+  };
+
+  document.addEventListener("DOMContentLoaded", function () {
+    setLanguage(stored() || DEFAULT_LANG);
+
+    document.querySelectorAll("[data-lang-option]").forEach(function (el) {
+      el.addEventListener("click", function (e) {
+        e.preventDefault();
+        setLanguage(el.getAttribute("data-lang-option"));
+      });
+    });
+
+    // The POS cart, customer dropdown and receipt previews are built by JS
+    // after the first pass, so watch for injected DOM and re-translate.
+    var timer = null;
+    new MutationObserver(function () {
+      clearTimeout(timer);
+      timer = setTimeout(function () { window.I18N.refresh(); }, 60);
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+})(window, document);

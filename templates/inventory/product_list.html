@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Products{% endblock %}
+{% block page_title %}Products{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ total_products }} product{{ total_products|pluralize }} in catalogue</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'inventory:product_create' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i> Add Product
+  </a>
+  <a href="{% url 'inventory:stock_movements' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left-right me-1"></i> Movements
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label">Total Products</div><div class="value">{{ total_products }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-warning">
+      <div class="label">Low Stock</div><div class="value">{{ low_stock_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-danger">
+      <div class="label">Out of Stock</div><div class="value">{{ out_of_stock_count }}</div>
+    </div>
+  </div>
+  {% if user.can_view_financials %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-success">
+        <div class="label">Stock Value (Cost) <span class="badge text-bg-secondary">Admin</span></div>
+        <div class="value money">{{ total_stock_value|money }}</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">Search</label>
+      {{ filter_form.q }}
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Category</label>
+      {{ filter_form.category }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Stock level</label>
+      {{ filter_form.stock }}
+    </div>
+    <div class="col-md-2">
+      <label class="form-label">Status</label>
+      {{ filter_form.status }}
+    </div>
+    <div class="col-md-1 d-grid">
+      <button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>SKU / Barcode</th>
+          <th>Category</th>
+          {% if user.can_view_financials %}<th class="num">Cost</th>{% endif %}
+          <th class="num">Price</th>
+          {% if user.can_view_financials %}<th class="num">Margin</th>{% endif %}
+          <th class="num">Stock</th>
+          <th>Status</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+          <tr>
+            <td>
+              <a href="{% url 'inventory:product_detail' p.pk %}" class="fw-semibold">{{ p.name }}</a>
+              {% if not p.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
+              <div class="text-muted-sm">{{ p.get_unit_display }}</div>
+            </td>
+            <td>
+              <span class="mono">{{ p.sku }}</span>
+              {% if p.barcode %}<div class="text-muted-sm mono">{{ p.barcode }}</div>{% endif %}
+            </td>
+            <td>{{ p.category.name|default:"&mdash;" }}</td>
+            {% if user.can_view_financials %}
+              <td class="num money text-muted">{{ p.cost_price|money }}</td>
+            {% endif %}
+            <td class="num money fw-semibold">{{ p.selling_price|money }}</td>
+            {% if user.can_view_financials %}
+              <td class="num">
+                <span class="badge text-bg-{% if p.margin_percent >= 25 %}success{% elif p.margin_percent > 0 %}warning{% else %}danger{% endif %}">
+                  {{ p.margin_percent }}%
+                </span>
+              </td>
+            {% endif %}
+            <td class="num fw-semibold">{{ p.stock_quantity }}</td>
+            <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-outline-success" title="Restock">
+                  <i class="bi bi-plus-circle"></i>
+                </a>
+                <a href="{% url 'inventory:product_update' p.pk %}" class="btn btn-outline-secondary" title="Edit">
+                  <i class="bi bi-pencil"></i>
+                </a>
+                {% if user.can_delete_records %}
+                  <a href="{% url 'inventory:product_delete' p.pk %}" class="btn btn-outline-danger" title="Archive">
+                    <i class="bi bi-archive"></i>
+                  </a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="9">
+              <div class="empty-state">
+                <i class="bi bi-box-seam"></i>
+                <p class="mb-3">No products match your filters.</p>
+                <a href="{% url 'inventory:product_create' %}" class="btn btn-primary btn-sm">Add your first product</a>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

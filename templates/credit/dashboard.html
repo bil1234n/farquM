@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Credit Dashboard{% endblock %}
+{% block page_title %}Credit &amp; Borrowers{% endblock %}
+{% block breadcrumb %}<div class="crumb">Accounts receivable as at {{ today|date:"d F Y" }}</div>{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'credit:borrower_list' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-person-lines-fill me-1"></i> All Borrowers
+  </a>
+  <a href="{% url 'credit:aging_report' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-hourglass-split me-1"></i> Aging Report
+  </a>
+  <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
+    <i class="bi bi-download me-1"></i> Export
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label">Total Outstanding</div>
+      <div class="value money">{{ total_outstanding|money }}</div>
+      <div class="hint">{{ open_count }} open debt{{ open_count|pluralize }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-danger">
+      <div class="label">Overdue</div>
+      <div class="value money">{{ total_overdue|money }}</div>
+      <div class="hint">{{ overdue_count }} past due date</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-success">
+      <div class="label">Collected This Month</div>
+      <div class="value money">{{ collected_this_month|money }}</div>
+      <div class="hint">Repayments received</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-info">
+      <div class="label">Active Borrowers</div>
+      <div class="value">{{ borrower_count }}</div>
+      <div class="hint">Customers owing money</div>
+    </div>
+  </div>
+</div>
+
+{% if over_limit %}
+  <div class="alert alert-danger">
+    <strong><i class="bi bi-exclamation-octagon-fill me-1"></i> Over credit limit</strong>
+    <div class="small mt-1">
+      {% for a in over_limit %}
+        <a href="{% url 'credit:borrower_detail' a.customer.pk %}" class="me-3">
+          {{ a.customer.name }} ({{ a.outstanding_balance|money }} of {{ a.credit_limit|money }})
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
+<div class="row g-3">
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-hourglass-split me-1"></i> Aging Breakdown</div>
+      <div class="card-body">
+        {% if aging.total %}
+          {% for bucket, amount in aging.buckets.items %}
+            <div class="mb-3">
+              <div class="d-flex justify-content-between small mb-1">
+                <span>
+                  {% if bucket == 'CURRENT' %}<i class="bi bi-circle-fill text-info me-1"></i>Not yet due
+                  {% elif bucket == '90+' %}<i class="bi bi-circle-fill text-danger me-1"></i>Over 90 days
+                  {% else %}<i class="bi bi-circle-fill text-warning me-1"></i>{{ bucket }} days late{% endif %}
+                </span>
+                <span class="money fw-semibold">{{ amount|money }}</span>
+              </div>
+              <div class="progress">
+                <div class="progress-bar {% if bucket == 'CURRENT' %}bg-info{% elif bucket == '1-30' or bucket == '31-60' %}bg-warning{% else %}bg-danger{% endif %}"
+                     style="width:{% widthratio amount aging.total 100 %}%"></div>
+              </div>
+            </div>
+          {% endfor %}
+          <div class="d-flex justify-content-between border-top pt-2 fw-bold">
+            <span>Total</span><span class="money">{{ aging.total|money }}</span>
+          </div>
+        {% else %}
+          <div class="empty-state py-4"><i class="bi bi-check-circle text-success"></i>No outstanding debt.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header text-danger">
+        <i class="bi bi-exclamation-triangle me-1"></i> Most Overdue
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Customer</th><th>Debt</th><th class="num">Balance</th>
+                     <th>Due</th><th class="num">Late</th><th class="text-end"></th></tr></thead>
+          <tbody>
+            {% for d in worst_overdue %}
+              <tr>
+                <td>
+                  <a href="{% url 'credit:borrower_detail' d.customer.pk %}" class="fw-semibold">{{ d.customer.name }}</a>
+                  <div class="text-muted-sm">{{ d.customer.phone }}</div>
+                </td>
+                <td><a href="{% url 'credit:debt_detail' d.pk %}" class="mono">{{ d.reference }}</a></td>
+                <td class="num money fw-semibold text-danger">{{ d.balance|money }}</td>
+                <td class="text-muted-sm">{{ d.due_date|date:"d M Y" }}</td>
+                <td class="num"><span class="badge text-bg-danger">{{ d.days_overdue }}d</span></td>
+                <td class="text-end">
+                  <a href="{% url 'credit:repayment_create' d.pk %}" class="btn btn-sm btn-success">
+                    <i class="bi bi-cash-coin"></i> Collect
+                  </a>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6"><div class="empty-state py-4">
+                <i class="bi bi-check-circle text-success"></i>Nothing overdue. Collections are up to date.
+              </div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-calendar-event me-1"></i> Falling Due This Week</div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Customer</th><th class="num">Balance</th><th>Due</th></tr></thead>
+          <tbody>
+            {% for d in due_soon %}
+              <tr>
+                <td><a href="{% url 'credit:debt_detail' d.pk %}">{{ d.customer.name }}</a>
+                    <div class="text-muted-sm">{{ d.reference }}</div></td>
+                <td class="num money">{{ d.balance|money }}</td>
+                <td><span class="badge text-bg-warning">in {{ d.days_until_due }}d</span></td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="3"><div class="empty-state py-4"><i class="bi bi-calendar-check"></i>Nothing due in the next 7 days.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-cash-coin me-1"></i> Recent Repayments</div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr><th>Customer</th><th class="num">Amount</th><th>Received</th></tr></thead>
+          <tbody>
+            {% for p in recent_payments %}
+              <tr>
+                <td>
+                  <a href="{% url 'credit:debt_detail' p.debt.pk %}">{{ p.debt.customer.name }}</a>
+                  <div class="text-muted-sm">{{ p.get_method_display }} &middot; {{ p.reference }}</div>
+                </td>
+                <td class="num money text-success fw-semibold">{{ p.amount|money }}</td>
+                <td class="text-muted-sm">
+                  {{ p.paid_at|date:"d M, H:i" }}
+                  <div>by {{ p.received_by.display_name|default:"&mdash;" }}</div>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="3"><div class="empty-state py-4"><i class="bi bi-cash"></i>No repayments recorded yet.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-person-lines-fill me-1"></i> Largest Borrowers</span>
+        <a href="{% url 'credit:borrower_list' %}" class="btn btn-sm btn-outline-secondary">View all</a>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead><tr>
+            <th>Customer</th><th class="num">Outstanding</th><th class="num">Credit limit</th>
+            <th style="width:160px">Utilisation</th><th>Standing</th><th class="text-end"></th>
+          </tr></thead>
+          <tbody>
+            {% for a in top_borrowers %}
+              <tr>
+                <td>
+                  <a href="{% url 'credit:borrower_detail' a.customer.pk %}" class="fw-semibold">{{ a.customer.name }}</a>
+                  <div class="text-muted-sm">{{ a.customer.phone }}</div>
+                </td>
+                <td class="num money fw-semibold">{{ a.outstanding_balance|money }}</td>
+                <td class="num money text-muted">{% if a.credit_limit > 0 %}{{ a.credit_limit|money }}{% else %}&mdash;{% endif %}</td>
+                <td>
+                  {% if a.credit_limit > 0 %}
+                    <div class="progress">
+                      <div class="progress-bar {% if a.is_over_limit %}bg-danger{% elif a.utilisation_percent > 75 %}bg-warning{% else %}bg-success{% endif %}"
+                           style="width:{% if a.utilisation_percent > 100 %}100{% else %}{{ a.utilisation_percent }}{% endif %}%"></div>
+                    </div>
+                    <div class="text-muted-sm">{{ a.utilisation_percent }}%</div>
+                  {% else %}<span class="text-muted-sm">No limit set</span>{% endif %}
+                </td>
+                <td><span class="badge text-bg-{{ a.risk_class }}">{{ a.risk_label }}</span></td>
+                <td class="text-end">
+                  <a href="{% url 'credit:bulk_repayment' a.customer.pk %}" class="btn btn-sm btn-success">
+                    <i class="bi bi-cash-coin"></i> Collect
+                  </a>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6"><div class="empty-state py-4"><i class="bi bi-people"></i>Nobody owes money right now.</div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
