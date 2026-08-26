@@ -17,7 +17,14 @@
   <div class="col-lg-4">
     <div class="card mb-3">
       <div class="card-body text-center">
-        <div class="avatar mx-auto mb-3" style="width:72px;height:72px;font-size:1.5rem">{{ user|initials }}</div>
+        {# Show the uploaded photo when there is one, initials otherwise. #}
+        {% if user.avatar_url %}
+          <img src="{{ user.avatar_url }}" alt="{{ user.display_name }}"
+               class="rounded-circle mx-auto mb-3 d-block"
+               style="width:72px;height:72px;object-fit:cover;">
+        {% else %}
+          <div class="avatar mx-auto mb-3" style="width:72px;height:72px;font-size:1.5rem">{{ user|initials }}</div>
+        {% endif %}
         <h2 class="h6 mb-1">{{ user.display_name }}</h2>
         <div class="text-muted-sm mb-2">@{{ user.username }}</div>
         <span class="badge text-bg-{% if user.is_admin %}primary{% else %}secondary{% endif %}">
@@ -58,7 +65,11 @@
   <div class="col-lg-8">
     <div class="card mb-3">
       <div class="card-header"><i class="bi bi-person me-1"></i> Personal Details</div>
-      <form method="post" novalidate>
+      {# enctype is REQUIRED. Without it the browser sends only the file's #}
+      {# NAME as ordinary text, request.FILES arrives empty, and the photo  #}
+      {# is silently dropped while every other field saves normally - which #}
+      {# looks exactly like "the upload does nothing".                      #}
+      <form method="post" enctype="multipart/form-data" novalidate>
         {% csrf_token %}
         <div class="card-body">
           {% include "partials/form_fields.html" with form=profile_form %}

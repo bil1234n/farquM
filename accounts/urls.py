@@ -8,6 +8,7 @@ urlpatterns = [
     # Authentication
     path("login/", views.AppLoginView.as_view(), name="login"),
     path("logout/", views.AppLogoutView.as_view(), name="logout"),
+    path("register/", views.register, name="register"),
     # Self service
     path("profile/", views.profile, name="profile"),
     path("my-activity/", views.MyActivityView.as_view(), name="my_activity"),

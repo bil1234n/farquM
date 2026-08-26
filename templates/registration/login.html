@@ -92,6 +92,15 @@
     <p class="text-center text-muted mt-4 mb-0" style="font-size:.72rem">
       Forgot your password? Contact your system administrator.
     </p>
+
+    {# Only shown when at least one role passcode is configured. #}
+    {% if registration_open %}
+      <hr class="my-3">
+      <p class="text-center small mb-0">
+        New staff member?
+        <a href="{% url 'accounts:register' %}">Create an account</a>
+      </p>
+    {% endif %}
   </div>
 </div>
 

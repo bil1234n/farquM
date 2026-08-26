@@ -1,5 +1,6 @@
+from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth import login as auth_login, update_session_auth_hash
 from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.views import LoginView, LogoutView
 from django.db.models import Q
@@ -8,15 +9,18 @@ from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from core.mixins import AdminRequiredMixin, StaffRequiredMixin
+from core.middleware import client_ip
 
 from .forms import (
     AdminPasswordResetForm,
     LoginForm,
+    RegisterForm,
     SelfProfileForm,
     UserCreateForm,
     UserUpdateForm,
 )
 from .models import AuditAction, AuditLog, Role, User
+from .registration import RegistrationError, register_user, registration_open
 from .services import diff_instance, log_action
 
 
@@ -64,6 +68,63 @@ class AppLogoutView(LogoutView):
                 request=request,
             )
         return super().dispatch(request, *args, **kwargs)
+
+
+def register(request):
+    """
+    Self-service staff registration, gated by a per-role passcode.
+
+    Replaces `manage.py createsuperuser` for onboarding. All the security
+    lives in accounts/registration.py - rate limiting, constant-time passcode
+    comparison, audit logging. This view is deliberately thin so none of that
+    can be bypassed by adding a second entry point later.
+    """
+    if request.user.is_authenticated:
+        return redirect("reports:dashboard")
+
+    if not registration_open():
+        # No passcodes configured means registration is switched off. Say so
+        # plainly rather than showing a form that can never succeed.
+        return render(request, "registration/register_closed.html", status=403)
+
+    form = RegisterForm(request.POST or None, request.FILES or None)
+
+    if request.method == "POST" and form.is_valid():
+        try:
+            user = register_user(
+                username=form.cleaned_data["username"],
+                password=form.cleaned_data["password1"],
+                role=form.cleaned_data["role"],
+                passcode=form.cleaned_data["passcode"],
+                first_name=form.cleaned_data.get("first_name", ""),
+                last_name=form.cleaned_data.get("last_name", ""),
+                email=form.cleaned_data.get("email", ""),
+                phone=form.cleaned_data.get("phone", ""),
+                avatar=form.cleaned_data.get("avatar"),
+                ip=client_ip(request),
+                request=request,
+            )
+        except RegistrationError as exc:
+            # Attach to the passcode field when that is what failed, so the
+            # error appears next to the input the user has to fix.
+            form.add_error(
+                "passcode" if "passcode" in str(exc).lower() else None, str(exc)
+            )
+        else:
+            auth_login(request, user)
+            user.touch()
+            messages.success(
+                request,
+                f"Welcome, {user.display_name}. Your "
+                f"{user.get_role_display().lower()} account is ready.",
+            )
+            return redirect("reports:dashboard")
+
+    return render(
+        request,
+        "registration/register.html",
+        {"form": form, "business_name": settings.BUSINESS_NAME},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +316,11 @@ def profile(request):
 
     if request.method == "POST":
         if "save_profile" in request.POST:
-            profile_form = SelfProfileForm(request.POST, instance=request.user)
+            # request.FILES is essential - without it the avatar silently
+            # never arrives and the form "saves" with no photo.
+            profile_form = SelfProfileForm(
+                request.POST, request.FILES, instance=request.user
+            )
             if profile_form.is_valid():
                 profile_form.save()
                 log_action(

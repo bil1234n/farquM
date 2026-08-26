@@ -331,7 +331,10 @@ def repayment_create(request, pk):
                 paid_at=form.cleaned_data.get("paid_at"),
                 external_reference=form.cleaned_data.get("external_reference", ""),
                 note=form.cleaned_data.get("note", ""),
-                proof_files=request.FILES.getlist("proof"),
+                # cleaned_data, not request.FILES: the field has already
+                # checked size and extension, so an oversized upload is a
+                # form error next to the input rather than a 500 during save.
+                proof_files=form.cleaned_data.get("proof") or [],
             )
         except (CreditError, ValidationError) as exc:
             for msg in getattr(exc, "messages", [str(exc)]):
@@ -388,7 +391,7 @@ def bulk_repayment(request, pk):
                 user=request.user,
                 method=form.cleaned_data["method"],
                 external_reference=form.cleaned_data.get("external_reference", ""),
-                proof_files=request.FILES.getlist("proof"),
+                proof_files=form.cleaned_data.get("proof") or [],
             )
         except (CreditError, ValidationError) as exc:
             for msg in getattr(exc, "messages", [str(exc)]):

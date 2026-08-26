@@ -4,6 +4,8 @@ Django settings for the Faruq Inventory, Sales & Credit Management System.
 from pathlib import Path
 
 from decouple import Csv, config
+import os
+import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -88,18 +90,30 @@ ASGI_APPLICATION = "config.asgi.application"
 # ---------------------------------------------------------------------------
 # Database - PostgreSQL
 # ---------------------------------------------------------------------------
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("DB_NAME", default="faruq_db"),
-        "USER": config("DB_USER", default="faruq_user"),
-        "PASSWORD": config("DB_PASSWORD", default=""),
-        "HOST": config("DB_HOST", default="127.0.0.1"),
-        "PORT": config("DB_PORT", default="5432"),
-        "CONN_MAX_AGE": 60,
-        "OPTIONS": {},
+DATABASE_URL = os.environ.get('DATABASE_URL')
+IS_PRODUCTION = bool(DATABASE_URL)
+
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,  # Neon requires SSL
+        )
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": config("DB_NAME", default="faruq_db"),
+            "USER": config("DB_USER", default="faruq_user"),
+            "PASSWORD": config("DB_PASSWORD", default=""),
+            "HOST": config("DB_HOST", default="127.0.0.1"),
+            "PORT": config("DB_PORT", default="5432"),
+            "CONN_MAX_AGE": 60,
+            "OPTIONS": {},
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -153,6 +167,52 @@ STORAGES = {
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+# ---------------------------------------------------------------------------
+# Cloudinary media storage
+# ---------------------------------------------------------------------------
+# Uploaded receipts and avatars go to Cloudinary rather than local disk.
+#
+# WHY: the app runs on hosts with an ephemeral filesystem (Render, Railway,
+# Fly), where anything written to MEDIA_ROOT vanishes on the next deploy or
+# restart. Receipts are the evidence behind a payment - losing them silently
+# is not survivable for a credit business.
+#
+# The switch is driven by whether credentials are present, NOT by DEBUG. That
+# way a developer with no Cloudinary account still gets a working local setup,
+# and a production box that is missing its keys fails loudly at upload time
+# rather than quietly writing files that will be deleted later.
+CLOUDINARY_CLOUD_NAME = config("CLOUDINARY_CLOUD_NAME", default="")
+CLOUDINARY_API_KEY = config("CLOUDINARY_API_KEY", default="")
+CLOUDINARY_API_SECRET = config("CLOUDINARY_API_SECRET", default="")
+
+USE_CLOUDINARY = all(
+    [CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET]
+)
+
+if USE_CLOUDINARY:
+    INSTALLED_APPS += ["cloudinary", "cloudinary_storage"]
+
+    CLOUDINARY_STORAGE = {
+        "CLOUD_NAME": CLOUDINARY_CLOUD_NAME,
+        "API_KEY": CLOUDINARY_API_KEY,
+        "API_SECRET": CLOUDINARY_API_SECRET,
+        # HTTPS delivery URLs. Note this does NOT make the files private -
+        # a Cloudinary media URL is unguessable but publicly fetchable by
+        # anyone who has it. Receipts are therefore protected by the app not
+        # showing the URL to the wrong person, not by the storage layer.
+        "SECURE": True,
+        "MEDIA_TAG": "faruq",  # <--- Update this tag per app to separate media
+        "PREFIX": "faruq_management",     # <--- Add this to isolate uploads into an explicit folder
+        "INVALID_VIDEO_ERROR_MESSAGE": "Please upload a valid image or PDF file.",
+    }
+
+    # RawMediaCloudinaryStorage handles PDFs as well as images. The plain
+    # MediaCloudinaryStorage rejects non-image uploads, which would break
+    # receipt capture the first time somebody attaches a bank statement PDF.
+    STORAGES["default"] = {
+        "BACKEND": "cloudinary_storage.storage.RawMediaCloudinaryStorage"
+    }
 
 # Receipt upload guard rails
 MAX_RECEIPT_SIZE_MB = config("MAX_RECEIPT_SIZE_MB", default=5, cast=int)
@@ -220,6 +280,25 @@ BUSINESS_PHONE = config("BUSINESS_PHONE", default="")
 BUSINESS_ADDRESS = config("BUSINESS_ADDRESS", default="")
 CURRENCY_SYMBOL = config("CURRENCY_SYMBOL", default="ETB")
 DEFAULT_CREDIT_DUE_DAYS = config("DEFAULT_CREDIT_DUE_DAYS", default=30, cast=int)
+
+# ---------------------------------------------------------------------------
+# Self-service registration
+# ---------------------------------------------------------------------------
+# Instead of `manage.py createsuperuser`, staff register themselves and prove
+# which role they are entitled to with a shared passcode.
+#
+# SECURITY NOTE, read before deploying:
+# A passcode is a SHARED secret. Anyone who learns it can create an account of
+# that role, and it cannot be revoked for one person without rotating it for
+# everyone. That is an acceptable trade for a small shop where the owner hands
+# the code to a new hire in person; it is NOT acceptable for a large team.
+# Treat these as you would the shop keys.
+#
+# Leaving either blank DISABLES registration for that role - deliberately, so
+# an unconfigured deployment cannot be signed up to by strangers.
+REGISTRATION_PASSCODE_ADMIN = config("PASSCODE_ADMIN", default="")
+REGISTRATION_PASSCODE_MANAGER = config("PASSCODE_MANAGER", default="")
+REGISTRATION_ENABLED = config("REGISTRATION_ENABLED", default=True, cast=bool)
 
 # ---------------------------------------------------------------------------
 # Logging

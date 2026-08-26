@@ -83,17 +83,31 @@ class LoginSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    """The signed-in user's own profile. Role and status are read-only here."""
+
     display_name = serializers.CharField(read_only=True)
     role_display = serializers.CharField(source="get_role_display", read_only=True)
     permissions = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    initials = serializers.CharField(read_only=True)
 
     class Meta:
         model = User
         fields = [
             "id", "username", "first_name", "last_name", "display_name",
             "email", "phone", "role", "role_display", "is_active", "permissions",
+            "avatar", "avatar_url", "initials", "employee_id", "date_joined",
+            "last_login",
         ]
-        read_only_fields = ["id", "role", "is_active"]
+        # role and is_active are NOT editable through this serializer. A user
+        # promoting themselves to Admin by PATCHing their own profile would
+        # defeat the whole data-isolation model, so the field is read-only
+        # here and only writable through the admin-only UserAdminSerializer.
+        read_only_fields = [
+            "id", "username", "role", "is_active", "employee_id",
+            "date_joined", "last_login",
+        ]
+        extra_kwargs = {"avatar": {"write_only": True, "required": False}}
 
     def get_permissions(self, obj):
         return {
@@ -102,6 +116,120 @@ class UserSerializer(serializers.ModelSerializer):
             "delete_records": obj.can_delete_records,
             "change_settings": obj.can_change_settings,
         }
+
+    def get_avatar_url(self, obj):
+        url = obj.avatar_url
+        if not url:
+            return None
+        request = self.context.get("request")
+        # Cloudinary already returns an absolute URL; build_absolute_uri would
+        # leave it untouched, but local-storage paths are relative and the
+        # phone has no idea what host to prefix them with.
+        if request and url.startswith("/"):
+            return request.build_absolute_uri(url)
+        return url
+
+
+class UserAdminSerializer(UserSerializer):
+    """
+    Admin-facing view of ANOTHER user. Adds the fields an administrator is
+    allowed to change, which the self-service serializer deliberately locks.
+    """
+
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=8
+    )
+    sales_count = serializers.IntegerField(read_only=True, required=False)
+    outstanding = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + [
+            "password", "notes", "sales_count", "outstanding", "last_activity",
+        ]
+        read_only_fields = ["id", "date_joined", "last_login", "last_activity"]
+        extra_kwargs = {"avatar": {"write_only": True, "required": False}}
+
+    def get_outstanding(self, obj):
+        """How much credit this manager has out on the street."""
+        from decimal import Decimal
+
+        from django.db.models import Sum
+
+        from credit.models import DebtRecord
+
+        total = (
+            DebtRecord.objects.filter(owner=obj)
+            .open_debts()
+            .aggregate(t=Sum("balance"))["t"]
+        )
+        return str(total or Decimal("0.00"))
+
+    def validate_role(self, value):
+        """
+        Never let the last active administrator be demoted.
+
+        Without this the system can be locked into a state where nobody can
+        manage users, approve credit, or see the full books - recoverable only
+        from a Django shell on the server.
+        """
+        if value not in ("ADMIN", "MANAGER"):
+            raise serializers.ValidationError("Unknown role.")
+        instance = self.instance
+        if (
+            instance
+            and instance.role == "ADMIN"
+            and value != "ADMIN"
+            and not User.objects.admins()
+            .filter(is_active=True)
+            .exclude(pk=instance.pk)
+            .exists()
+        ):
+            raise serializers.ValidationError(
+                "This is the only active administrator. Promote someone else first."
+            )
+        return value
+
+    def validate_is_active(self, value):
+        instance = self.instance
+        request = self.context.get("request")
+        if not value and instance:
+            if request and instance.pk == getattr(request.user, "pk", None):
+                raise serializers.ValidationError(
+                    "You cannot deactivate your own account."
+                )
+            if (
+                instance.role == "ADMIN"
+                and not User.objects.admins()
+                .filter(is_active=True)
+                .exclude(pk=instance.pk)
+                .exists()
+            ):
+                raise serializers.ValidationError(
+                    "Cannot deactivate the only remaining administrator."
+                )
+        return value
+
+    def create(self, validated_data):
+        password = validated_data.pop("password", None)
+        if not password:
+            raise serializers.ValidationError(
+                {"password": "A password is required when creating a user."}
+            )
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop("password", None)
+        user = super().update(instance, validated_data)
+        if password:
+            user.set_password(password)
+            # Forcing a change means an admin-set password is a one-time key,
+            # not a credential the admin permanently knows.
+            user.must_change_password = True
+            user.save(update_fields=["password", "must_change_password"])
+        return user
 
 
 # ---------------------------------------------------------------------------

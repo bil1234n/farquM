@@ -14,12 +14,14 @@ router.register("customers", views.CustomerViewSet, basename="customer")
 router.register("sales", views.TransactionViewSet, basename="sale")
 router.register("debts", views.DebtViewSet, basename="debt")
 router.register("notifications", views.NotificationViewSet, basename="notification")
+router.register("users", views.UserViewSet, basename="user")
 
 urlpatterns = [
     # Auth
     path("auth/login/", views.LoginView.as_view(), name="login"),
     path("auth/logout/", views.LogoutView.as_view(), name="logout"),
     path("auth/me/", views.me, name="me"),
+    path("auth/change-password/", views.change_password, name="change_password"),
 
     # Push registration
     path("devices/register/", views.RegisterDeviceView.as_view(), name="device_register"),

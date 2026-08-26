@@ -2,11 +2,17 @@ from django.conf import settings
 
 
 def business_settings(request):
+    from accounts.registration import registration_open
+
     return {
         "BUSINESS_NAME": settings.BUSINESS_NAME,
         "BUSINESS_PHONE": settings.BUSINESS_PHONE,
         "BUSINESS_ADDRESS": settings.BUSINESS_ADDRESS,
         "CURRENCY": settings.CURRENCY_SYMBOL,
+        # Drives the "Create an account" link on the login page. Computed here
+        # rather than in the login view because LoginView is Django's, and
+        # subclassing it just to add one boolean is more moving parts.
+        "registration_open": registration_open(),
     }
 
 

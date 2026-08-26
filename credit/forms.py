@@ -4,12 +4,9 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
+from core.forms import ReceiptField
 
 from .models import CreditAccount, DebtRecord, Repayment
-
-
-class MultiFileInput(forms.ClearableFileInput):
-    allow_multiple_selected = True
 
 
 class RepaymentForm(StyledFormMixin, forms.Form):
@@ -41,9 +38,7 @@ class RepaymentForm(StyledFormMixin, forms.Form):
     note = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 2}), label="Note"
     )
-    proof = forms.FileField(
-        required=False, widget=MultiFileInput(attrs={"multiple": True}),
-        label="Receipt / proof of payment",
+    proof = ReceiptField(
         help_text="Image or PDF. You can attach more than one file.",
     )
 
@@ -99,10 +94,7 @@ class BulkRepaymentForm(StyledFormMixin, forms.Form):
     external_reference = forms.CharField(max_length=100, required=False,
                                          label="Bank / mobile-money reference")
     note = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
-    proof = forms.FileField(
-        required=False, widget=MultiFileInput(attrs={"multiple": True}),
-        label="Receipt / proof of payment",
-    )
+    proof = ReceiptField()
 
     def __init__(self, *args, **kwargs):
         self.account = kwargs.pop("account", None)

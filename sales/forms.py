@@ -4,16 +4,11 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
+from core.forms import ReceiptField
 from core.scoping import scoped
 from core.utils import ZERO, default_due_date
 
 from .models import Customer, PaymentMethod, Receipt, Transaction
-
-
-class MultiFileInput(forms.ClearableFileInput):
-    """Django blocks multiple-file inputs unless the widget opts in."""
-
-    allow_multiple_selected = True
 
 
 class CustomerForm(StyledFormMixin, forms.ModelForm):
@@ -96,13 +91,10 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         widget=forms.DateInput(attrs={"type": "date"}),
         help_text="When the balance falls due. Defaults to 30 days.",
     )
-    receipt = forms.FileField(
-        required=False,
-        widget=MultiFileInput(attrs={
-            "multiple": True,
-            "accept": "image/*,application/pdf",
-        }),
-        label="Receipt / proof of payment",
+    # ReceiptField, not FileField. A plain FileField behind a `multiple`
+    # widget receives a LIST and dies with "No file was submitted. Check the
+    # encoding type on the form." - see core/forms.py for the full story.
+    receipt = ReceiptField(
         help_text="Optional. Photograph the paper receipt, bank slip or mobile-money "
                   "confirmation. Images or PDF, up to 5 MB each.",
     )
@@ -143,7 +135,10 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         cleaned = super().clean()
         method = cleaned.get("payment_method")
         paid = cleaned.get("amount_paid") or 0
-        has_proof = bool(self.files.getlist("receipt")) if hasattr(self, "files") else False
+        # Read the cleaned value, not self.files - cleaned_data is now a list
+        # of validated uploads, so a file that failed the size check does not
+        # count as proof.
+        has_proof = bool(cleaned.get("receipt"))
 
         if method in {"BANK", "CHEQUE", "MOBILE"} and paid > 0 and not has_proof:
             self.proof_warning = (

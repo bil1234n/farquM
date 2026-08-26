@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from core.models import TimeStampedModel
+from core.utils import avatar_upload_path, validate_avatar_file
 
 
 class Role(models.TextChoices):
@@ -45,6 +46,13 @@ class User(AbstractUser):
     )
     phone = models.CharField(max_length=30, blank=True)
     employee_id = models.CharField(max_length=30, blank=True, unique=False)
+    avatar = models.ImageField(
+        upload_to=avatar_upload_path,
+        blank=True,
+        null=True,
+        validators=[validate_avatar_file],
+        help_text="Profile photo. Square images look best.",
+    )
     last_activity = models.DateTimeField(null=True, blank=True)
     must_change_password = models.BooleanField(
         default=False,
@@ -96,6 +104,31 @@ class User(AbstractUser):
     @property
     def display_name(self) -> str:
         return self.get_full_name() or self.username
+
+    @property
+    def initials(self) -> str:
+        """Fallback avatar when no photo has been uploaded."""
+        parts = (self.get_full_name() or self.username).split()
+        if len(parts) >= 2:
+            return (parts[0][:1] + parts[1][:1]).upper()
+        return (parts[0][:2] if parts else "?").upper()
+
+    @property
+    def avatar_url(self) -> str | None:
+        """
+        Absolute-ish URL for the profile photo, or None.
+
+        Wrapped in try/except because a storage backend can raise when the
+        underlying file has gone - a real risk when switching between local
+        disk and Cloudinary, since rows keep pointing at paths the new backend
+        knows nothing about. A missing photo must never 500 a profile page.
+        """
+        if not self.avatar:
+            return None
+        try:
+            return self.avatar.url
+        except Exception:
+            return None
 
     def touch(self):
         self.last_activity = timezone.now()

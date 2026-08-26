@@ -68,6 +68,36 @@ def receipt_upload_path(instance, filename):
     return f"receipts/{today.year}/{today.month:02d}/{ref}_{safe}"
 
 
+def avatar_upload_path(instance, filename):
+    """
+    media/avatars/<user-id>/<timestamp>_<filename>
+
+    The timestamp matters: without it a re-upload keeps the same path, and
+    both Cloudinary and every CDN in front of it would keep serving the OLD
+    photo until their cache expired. Users read that as "the upload failed"
+    and try again, repeatedly.
+    """
+    stamp = timezone.now().strftime("%Y%m%d%H%M%S")
+    safe = filename.replace(" ", "_")
+    uid = getattr(instance, "pk", None) or "new"
+    return f"avatars/{uid}/{stamp}_{safe}"
+
+
+def validate_avatar_file(f):
+    """Profile photos: images only, and smaller than a receipt."""
+    max_bytes = 3 * 1024 * 1024
+    if f.size > max_bytes:
+        raise ValidationError(
+            f"Image too large ({f.size / 1048576:.1f} MB). Maximum is 3 MB."
+        )
+    ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+    allowed = ["jpg", "jpeg", "png", "webp"]
+    if ext not in allowed:
+        raise ValidationError(
+            f"Unsupported image type '.{ext}'. Allowed: " + ", ".join(allowed)
+        )
+
+
 def percentage(part, whole) -> Decimal:
     part, whole = money(part), money(whole)
     if whole == ZERO:

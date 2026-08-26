@@ -17,18 +17,25 @@ would confirm the record exists, which is itself a small leak.
 import datetime as dt
 import logging
 
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import (
+    action,
+    api_view,
+    parser_classes,
+    permission_classes,
+)
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import AuditAction
+from accounts.models import AuditAction, User
 from accounts.services import log_action
 from core.scoping import scoped, sees_everything
 from credit.models import CreditAccount, DebtRecord, Repayment
@@ -71,6 +78,7 @@ from .serializers import (
     StockMovementSerializer,
     SupplierSerializer,
     TransactionSerializer,
+    UserAdminSerializer,
     UserSerializer,
 )
 
@@ -141,15 +149,199 @@ class LogoutView(APIView):
 
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def me(request):
+    """
+    The signed-in user's own profile.
+
+    MultiPartParser is listed first because the profile photo is uploaded
+    through this endpoint. Without a multipart parser DRF would reject the
+    request with "Unsupported media type" and the avatar would never arrive -
+    the API equivalent of a form missing its enctype.
+    """
     if request.method == "PATCH":
         serializer = UserSerializer(
             request.user, data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+        user = serializer.save()
+        log_action(
+            AuditAction.UPDATE,
+            instance=user,
+            description="Updated own profile from the mobile app.",
+            user=user,
+            request=request,
+        )
+        return Response(UserSerializer(user, context={"request": request}).data)
     return Response(UserSerializer(request.user, context={"request": request}).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    """Change your own password. Requires the current one."""
+    current = request.data.get("current_password") or ""
+    new = request.data.get("new_password") or ""
+
+    if not request.user.check_password(current):
+        return Response(
+            {"detail": "Your current password is not correct."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        validate_password(new, user=request.user)
+    except ValidationError as exc:
+        return Response(
+            {"detail": exc.messages[0], "errors": exc.messages},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    request.user.set_password(new)
+    request.user.must_change_password = False
+    request.user.save(update_fields=["password", "must_change_password"])
+
+    # The old token was issued against the old credentials. Rotating it means
+    # a stolen token stops working the moment the user changes their password,
+    # which is the main reason people change it in the first place.
+    Token.objects.filter(user=request.user).delete()
+    token, _ = Token.objects.get_or_create(user=request.user)
+
+    log_action(
+        AuditAction.UPDATE,
+        instance=request.user,
+        description="Changed own password from the mobile app.",
+        user=request.user,
+        request=request,
+    )
+    return Response({"detail": "Password changed.", "token": token.key})
+
+
+# ---------------------------------------------------------------------------
+# User management - ADMIN ONLY
+# ---------------------------------------------------------------------------
+class UserViewSet(viewsets.ModelViewSet):
+    """
+    Staff administration from the phone.
+
+    Admin-only in full. Note there is no destroy(): deleting a user would
+    orphan every product, sale and debt they own, and `owner` is SET_NULL -
+    so the records would survive but become invisible to everyone except an
+    admin. Deactivation keeps the history intact and reversible.
+    """
+
+    serializer_class = UserAdminSerializer
+    permission_classes = [IsAdmin]
+    pagination_class = StandardPagination
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    http_method_names = ["get", "post", "patch", "put", "head", "options"]
+
+    def get_queryset(self):
+        qs = User.objects.all().annotate(
+            sales_count=Count("sales_transaction_owned", distinct=True)
+        )
+        params = self.request.query_params
+        q = params.get("q", "").strip()
+        if q:
+            qs = qs.filter(
+                Q(username__icontains=q)
+                | Q(first_name__icontains=q)
+                | Q(last_name__icontains=q)
+                | Q(email__icontains=q)
+                | Q(phone__icontains=q)
+            )
+        if params.get("role"):
+            qs = qs.filter(role=params["role"])
+        state = params.get("status", "")
+        if state == "active":
+            qs = qs.filter(is_active=True)
+        elif state == "inactive":
+            qs = qs.filter(is_active=False)
+        return qs.order_by("-is_active", "role", "username")
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        log_action(
+            AuditAction.CREATE,
+            instance=user,
+            description=(
+                f"Created {user.get_role_display()} account '{user.username}' "
+                f"from the mobile app."
+            ),
+        )
+
+    def perform_update(self, serializer):
+        before = User.objects.get(pk=serializer.instance.pk)
+        user = serializer.save()
+        log_action(
+            AuditAction.UPDATE,
+            instance=user,
+            description=(
+                f"Updated account '{user.username}' from the mobile app "
+                f"(role {before.role} -> {user.role}, "
+                f"active {before.is_active} -> {user.is_active})."
+            ),
+        )
+
+    @action(detail=True, methods=["post"])
+    def toggle_active(self, request, pk=None):
+        target = self.get_object()
+
+        if target.pk == request.user.pk:
+            return Response(
+                {"detail": "You cannot deactivate your own account."}, status=400
+            )
+        if (
+            target.is_active
+            and target.is_admin
+            and not User.objects.admins()
+            .filter(is_active=True)
+            .exclude(pk=target.pk)
+            .exists()
+        ):
+            return Response(
+                {"detail": "Cannot deactivate the only remaining administrator."},
+                status=400,
+            )
+
+        target.is_active = not target.is_active
+        target.save(update_fields=["is_active"])
+        state = "reactivated" if target.is_active else "deactivated"
+        log_action(
+            AuditAction.UPDATE,
+            instance=target,
+            description=f"Account '{target.username}' {state} from the mobile app.",
+        )
+        return Response(
+            UserAdminSerializer(target, context={"request": request}).data
+        )
+
+    @action(detail=True, methods=["post"])
+    def reset_password(self, request, pk=None):
+        target = self.get_object()
+        new = request.data.get("new_password") or ""
+        try:
+            validate_password(new, user=target)
+        except ValidationError as exc:
+            return Response(
+                {"detail": exc.messages[0], "errors": exc.messages}, status=400
+            )
+
+        target.set_password(new)
+        target.must_change_password = True
+        target.save(update_fields=["password", "must_change_password"])
+        # Any session or token the user already had is now invalid, which is
+        # the point: a password reset usually means the old one is compromised.
+        Token.objects.filter(user=target).delete()
+
+        log_action(
+            AuditAction.OVERRIDE,
+            instance=target,
+            description=(
+                f"Administrator reset the password for '{target.username}' "
+                f"from the mobile app."
+            ),
+        )
+        return Response({"detail": f"Password reset for {target.display_name}."})
 
 
 # ---------------------------------------------------------------------------

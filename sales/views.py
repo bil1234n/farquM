@@ -310,7 +310,7 @@ def _attach_sale_receipts(request, txn, form):
     A missing receipt is recoverable from the transaction page; a phantom sale
     is not.
     """
-    files = request.FILES.getlist("receipt")
+    files = form.cleaned_data.get("receipt") or []
     if not files:
         return 0
 

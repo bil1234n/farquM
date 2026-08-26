@@ -111,7 +111,12 @@
   </nav>
 
   <div class="sidebar-footer">
-    <div class="avatar">{{ user|initials }}</div>
+    {% if user.avatar_url %}
+      <img src="{{ user.avatar_url }}" alt="{{ user.display_name }}" class="avatar"
+           style="object-fit:cover;padding:0;">
+    {% else %}
+      <div class="avatar">{{ user|initials }}</div>
+    {% endif %}
     <div class="flex-grow-1 min-w-0">
       <div class="text-white small text-truncate">{{ user.display_name }}</div>
       <a href="{% url 'accounts:profile' %}" class="text-muted-sm" style="color:#8fa6bd">My profile</a>
