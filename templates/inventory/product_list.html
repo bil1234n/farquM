@@ -6,12 +6,16 @@
 {% block breadcrumb %}<div class="crumb">{{ total_products }} product{{ total_products|pluralize }} in catalogue</div>{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'inventory:product_create' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-plus-lg me-1"></i> Add Product
-  </a>
-  <a href="{% url 'inventory:stock_movements' %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-arrow-left-right me-1"></i> Movements
-  </a>
+  {% if user|can:"product.create" %}
+    <a href="{% url 'inventory:product_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i> Add Product
+    </a>
+  {% endif %}
+  {% if user|can:"stock.view_movements" %}
+    <a href="{% url 'inventory:stock_movements' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left-right me-1"></i> Movements
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -116,7 +120,7 @@
                 <a href="{% url 'inventory:product_update' p.pk %}" class="btn btn-outline-secondary" title="Edit">
                   <i class="bi bi-pencil"></i>
                 </a>
-                {% if user.can_delete_records %}
+                {% if user|can:"product.archive" %}
                   <a href="{% url 'inventory:product_delete' p.pk %}" class="btn btn-outline-danger" title="Archive">
                     <i class="bi bi-archive"></i>
                   </a>

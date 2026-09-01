@@ -13,7 +13,9 @@ from decimal import Decimal
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 
-from accounts.models import User
+from accounts.models import DataScope, RoleDefinition, User
+from core.models import SystemSetting
+from core.permissions import WILDCARD, clean_codes
 from credit.models import CreditAccount, DebtRecord, Repayment, RepaymentProof
 from inventory.models import Category, Product, StockMovement, Supplier
 from sales.models import Customer, Receipt, Transaction, TransactionItem
@@ -22,16 +24,29 @@ from .models import DeviceToken, NotificationLog
 
 
 class FinancialFieldsMixin:
-    """Strips cost/profit keys unless the requesting user may see them."""
+    """
+    Strips cost/profit keys unless the requesting user may see them.
+
+    `financial_fields` are cost figures, gated on `product.view_cost`.
+    `profit_fields` are margin figures, gated on `report.profit` - a separate,
+    stricter permission, because a manager who buys the stock legitimately
+    needs to know what it cost without also being shown the mark-up.
+    """
 
     financial_fields: tuple = ()
+    profit_fields: tuple = ()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        if user is None or not getattr(user, "can_view_financials", False):
+
+        if user is None or not getattr(user, "can_view_costs", False):
             for field in self.financial_fields:
+                data.pop(field, None)
+
+        if user is None or not getattr(user, "can_view_profit", False):
+            for field in self.profit_fields:
                 data.pop(field, None)
         return data
 
@@ -110,11 +125,25 @@ class UserSerializer(serializers.ModelSerializer):
         extra_kwargs = {"avatar": {"write_only": True, "required": False}}
 
     def get_permissions(self, obj):
+        """
+        The signed-in user's effective access.
+
+        `codes` is the authoritative list - every screen in the app should
+        gate on it. The named booleans above it are the four flags older
+        builds of the app read, kept so an un-updated phone keeps working
+        rather than losing every button at once after a server deploy.
+        """
         return {
-            "view_financials": obj.can_view_financials,
+            "view_financials": obj.can_view_costs,
             "manage_users": obj.can_manage_users,
             "delete_records": obj.can_delete_records,
             "change_settings": obj.can_change_settings,
+            "view_costs": obj.can_view_costs,
+            "view_profit": obj.can_view_profit,
+            "codes": sorted(obj.effective_permissions),
+            "data_scope": obj.data_scope,
+            "data_scope_label": obj.scope_label,
+            "manager": obj.manager.display_name if obj.manager_id else None,
         }
 
     def get_avatar_url(self, obj):
@@ -142,12 +171,26 @@ class UserAdminSerializer(UserSerializer):
     sales_count = serializers.IntegerField(read_only=True, required=False)
     outstanding = serializers.SerializerMethodField()
 
+    manager_name = serializers.CharField(
+        source="manager.display_name", default=None, read_only=True
+    )
+    data_scope = serializers.CharField(read_only=True)
+    scope_label = serializers.CharField(read_only=True)
+    is_customised = serializers.SerializerMethodField()
+
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
             "password", "notes", "sales_count", "outstanding", "last_activity",
+            "manager", "manager_name", "data_scope", "scope_label",
+            "data_scope_override", "is_customised",
         ]
         read_only_fields = ["id", "date_joined", "last_login", "last_activity"]
         extra_kwargs = {"avatar": {"write_only": True, "required": False}}
+
+    def get_is_customised(self, obj):
+        return bool(
+            obj.extra_permissions or obj.denied_permissions or obj.data_scope_override
+        )
 
     def get_outstanding(self, obj):
         """How much credit this manager has out on the street."""
@@ -172,7 +215,7 @@ class UserAdminSerializer(UserSerializer):
         manage users, approve credit, or see the full books - recoverable only
         from a Django shell on the server.
         """
-        if value not in ("ADMIN", "MANAGER"):
+        if not RoleDefinition.objects.filter(code=value, is_active=True).exists():
             raise serializers.ValidationError("Unknown role.")
         instance = self.instance
         if (
@@ -250,7 +293,8 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 
 class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
-    financial_fields = ("cost_price", "margin_percent", "stock_value", "profit_per_unit")
+    financial_fields = ("cost_price", "stock_value")
+    profit_fields = ("margin_percent", "profit_per_unit")
 
     category_name = serializers.CharField(source="category.name", default=None, read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", default=None, read_only=True)
@@ -369,7 +413,8 @@ class CustomerSerializer(OwnerNameMixin, serializers.ModelSerializer):
 # Sales
 # ---------------------------------------------------------------------------
 class TransactionItemSerializer(FinancialFieldsMixin, serializers.ModelSerializer):
-    financial_fields = ("unit_cost", "line_cost", "line_profit")
+    financial_fields = ("unit_cost", "line_cost")
+    profit_fields = ("line_profit",)
 
     line_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     line_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
@@ -397,7 +442,8 @@ class ReceiptSerializer(serializers.ModelSerializer):
 
 
 class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
-    financial_fields = ("total_cost", "gross_profit", "profit_margin")
+    financial_fields = ("total_cost",)
+    profit_fields = ("gross_profit", "profit_margin")
 
     items = TransactionItemSerializer(many=True, read_only=True)
     receipts = ReceiptSerializer(many=True, read_only=True)
@@ -550,3 +596,113 @@ class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotificationLog
         fields = ["id", "title", "body", "channel", "data", "created_at", "read_at", "is_read"]
+
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+class PermissionCodeListField(serializers.ListField):
+    """
+    A list of permission codes, filtered against the catalogue on the way in.
+
+    Unknown codes are dropped rather than rejected. A phone running an older
+    build sends the codes it knows about; failing the whole save because one
+    of them has since been renamed would make the app unusable after a server
+    deploy, and silently ignoring a code that does not exist grants nothing.
+    """
+
+    child = serializers.CharField()
+
+    def to_internal_value(self, data):
+        codes = super().to_internal_value(data)
+        if WILDCARD in codes:
+            return [WILDCARD]
+        return clean_codes(codes)
+
+
+class RoleDefinitionSerializer(serializers.ModelSerializer):
+    permissions = PermissionCodeListField(required=False)
+    permission_count = serializers.IntegerField(read_only=True)
+    user_count = serializers.IntegerField(read_only=True)
+    is_full_access = serializers.BooleanField(read_only=True)
+    can_be_deleted = serializers.BooleanField(read_only=True)
+    data_scope_display = serializers.CharField(
+        source="get_data_scope_display", read_only=True
+    )
+
+    class Meta:
+        model = RoleDefinition
+        fields = [
+            "id", "code", "name", "description", "permissions", "data_scope",
+            "data_scope_display", "rank", "is_system", "is_active",
+            "permission_count", "user_count", "is_full_access", "can_be_deleted",
+        ]
+        read_only_fields = ["id", "is_system"]
+
+    def validate_code(self, value):
+        code = (value or "").strip().upper().replace(" ", "_")
+        if self.instance:
+            # The code is written into every user row holding this role;
+            # changing it would orphan all of them at once.
+            return self.instance.code
+        if not code:
+            raise serializers.ValidationError("A code is required.")
+        if not code.replace("_", "").isalnum():
+            raise serializers.ValidationError(
+                "Use letters, digits and underscores only."
+            )
+        if RoleDefinition.objects.filter(code=code).exists():
+            raise serializers.ValidationError("A role with that code already exists.")
+        return code
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance and instance.code == "ADMIN":
+            if attrs.get("data_scope", instance.data_scope) != DataScope.ALL:
+                raise serializers.ValidationError(
+                    {"data_scope": "The Administrator role must see every record."}
+                )
+        return attrs
+
+
+class UserAccessSerializer(serializers.Serializer):
+    """
+    What the phone sends back after somebody finishes ticking boxes.
+
+    Only the ticked codes are sent - never a pre-computed list of grants and
+    denials. Working out the difference from the role is the server's job, in
+    core.access, so the two clients cannot disagree about what a tick means.
+    """
+
+    role = serializers.CharField(required=False, allow_blank=True)
+    manager = serializers.IntegerField(required=False, allow_null=True)
+    data_scope_override = serializers.ChoiceField(
+        choices=[("", "Use the role's setting")] + list(DataScope.choices),
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+    permissions = PermissionCodeListField()
+
+    def validate_role(self, value):
+        if value and not RoleDefinition.objects.filter(
+            code=value, is_active=True
+        ).exists():
+            raise serializers.ValidationError("That role no longer exists.")
+        return value
+
+
+class SystemSettingSerializer(serializers.ModelSerializer):
+    business_name_effective = serializers.CharField(source="name", read_only=True)
+    currency_effective = serializers.CharField(source="currency", read_only=True)
+
+    class Meta:
+        model = SystemSetting
+        fields = [
+            "business_name", "business_phone", "business_email",
+            "business_address", "currency_symbol", "default_credit_due_days",
+            "low_stock_threshold", "allow_self_registration",
+            "require_credit_approval", "updated_at",
+            "business_name_effective", "currency_effective",
+        ]
+        read_only_fields = ["updated_at"]

@@ -1,44 +1,50 @@
 """
-Per-manager data isolation ("ownership scoping").
+Data isolation ("ownership scoping") - WHOSE records a user may see.
 
-THE RULE OF THIS FILE
----------------------
-    ADMIN    sees every record in the system, whoever created it.
-    MANAGER  sees only the records they own. Never another manager's.
+This is the second half of the access system. core/permissions.py answers
+"what may this person do"; this file answers "to which rows". Both have to
+pass. A sales user with `sale.view` still only ever sees their own sales.
 
-Ownership is a single `owner` FK stamped on the four record types that carry
-business meaning:
+THE THREE SCOPES
+----------------
+    ALL   Sees every record in the business, whoever created it. Admin.
+    TEAM  Sees their own records, plus those of everyone who reports to them
+          (User.manager). Manager.
+    OWN   Sees only their own records. Sales.
 
-    inventory.Product
-    sales.Customer
-    sales.Transaction
-    credit.DebtRecord
+THE ONE EXCEPTION THAT MAKES THE SALES ROLE WORK
+------------------------------------------------
+A sales user owns no stock - the manager does. If products were scoped the
+same way as sales, a sales assistant would open the till and find an empty
+catalogue, which is not a shop.
 
-Everything else is scoped by following a relation back to one of those four:
+So there are two families of record, scoped differently:
 
-    StockMovement    -> product__owner
-    TransactionItem  -> transaction__owner
-    Receipt          -> transaction__owner
-    CreditAccount    -> customer__owner
-    Repayment        -> debt__owner
+    LEDGER   sales, customers, debts, repayments, receipts
+             "things I did". Strictly OWN for a sales user - their takings,
+             their customers, their debts. This is what makes a credit sale
+             genuinely "under his obligation", and what lets the app answer
+             "how much have I made" with a number that means something.
 
-Category and Supplier are deliberately NOT scoped. They are shared lookup
-lists - a label, not a business record - and duplicating "Beverages" per
-manager would create more confusion than it prevents.
+    CATALOG  products and their stock movements
+             "the shelf I sell from". A user also sees their MANAGER's
+             catalogue, and a manager sees their team's. Read access to a
+             shelf; who may change it is a permission question, not a scoping
+             one, and `product.edit` is not in the Sales role.
 
 WHY A HELPER RATHER THAN A CUSTOM MANAGER
 -----------------------------------------
 A default manager that silently filters is dangerous: background jobs,
-reconciliation tasks and migrations legitimately need every row, and a
-manager that hides rows from them corrupts totals in ways nobody notices for
-months. So filtering is explicit and always driven by a request user.
+reconciliation tasks and migrations legitimately need every row, and a manager
+that hides rows from them corrupts totals in ways nobody notices for months.
+So filtering is explicit and always driven by a request user.
 
 FAIL CLOSED
 -----------
 An anonymous or unknown user gets `none()`, not everything. A row with
-owner=NULL (legacy data, or a record whose owning manager was deleted) is
-visible to admins only. Both are deliberate: the failure mode of this module
-must be "shows too little", never "leaks another manager's books".
+owner=NULL (legacy data, or a record whose owning user was deleted) is visible
+to full-scope users only. Both are deliberate: the failure mode of this module
+must be "shows too little", never "leaks another person's books".
 """
 from django.db.models import Q
 
@@ -56,25 +62,93 @@ OWNER_PATHS = {
     "credit.RepaymentProof": "repayment__debt__owner",
 }
 
+#: Models that follow the CATALOG rule (see the module docstring). Everything
+#: else in OWNER_PATHS is a LEDGER record.
+CATALOG_LABELS = frozenset({"inventory.Product", "inventory.StockMovement"})
 
-def is_admin(user) -> bool:
-    """True for an authenticated, active administrator."""
+# Category and Supplier are deliberately absent from OWNER_PATHS. They are
+# shared lookup lists - a label, not a business record - and duplicating
+# "Beverages" per manager would create more confusion than it prevents.
+
+
+def _label(model) -> str:
+    return f"{model._meta.app_label}.{model.__name__}"
+
+
+def _usable(user) -> bool:
     return bool(
         user is not None
         and getattr(user, "is_authenticated", False)
         and getattr(user, "is_active", False)
-        and getattr(user, "role", None) == "ADMIN"
     )
 
 
+def is_admin(user) -> bool:
+    """True for an authenticated, active user with full control."""
+    return bool(_usable(user) and getattr(user, "is_admin", False))
+
+
 def sees_everything(user) -> bool:
-    """Admins (and Django superusers) are not scoped."""
-    return is_admin(user) or bool(getattr(user, "is_superuser", False))
+    """True when no owner filter should be applied at all."""
+    if bool(getattr(user, "is_superuser", False)) and _usable(user):
+        return True
+    return bool(_usable(user) and getattr(user, "data_scope", "OWN") == "ALL")
+
+
+def ledger_owner_ids(user) -> set[int] | None:
+    """
+    Whose sales / customers / debts this user may see.
+
+    Returns None for "everything, no filter". Returns a set of user IDs
+    otherwise - never an empty set for a valid user, since everyone can always
+    see their own work.
+    """
+    if sees_everything(user):
+        return None
+    if not _usable(user):
+        return set()
+
+    ids = {user.pk}
+    if getattr(user, "data_scope", "OWN") == "TEAM":
+        ids |= set(getattr(user, "team_ids", ()) or ())
+    return ids
+
+
+def catalog_owner_ids(user) -> set[int] | None:
+    """
+    Whose products and stock this user may see.
+
+    Adds the user's manager to the ledger set. That single line is what turns
+    an isolated account into a working sales assistant: they sell from their
+    manager's shelf while their own books stay their own.
+    """
+    ids = ledger_owner_ids(user)
+    if ids is None:
+        return None
+    if not ids:
+        return ids
+
+    manager_id = getattr(user, "manager_id", None)
+    if manager_id:
+        ids = ids | {manager_id}
+    return ids
+
+
+def visible_owner_ids(user, model_or_label) -> set[int] | None:
+    """Dispatch to the right rule for the model being filtered."""
+    label = (
+        model_or_label
+        if isinstance(model_or_label, str)
+        else _label(model_or_label)
+    )
+    if label in CATALOG_LABELS:
+        return catalog_owner_ids(user)
+    return ledger_owner_ids(user)
 
 
 def owner_path_for(model) -> str:
     """Look up the ORM path from `model` to its owning User."""
-    label = f"{model._meta.app_label}.{model.__name__}"
+    label = _label(model)
     try:
         return OWNER_PATHS[label]
     except KeyError as exc:  # pragma: no cover - programmer error
@@ -105,17 +179,24 @@ def scoped(queryset, user, path: str | None = None):
     if not getattr(user, "is_active", False):
         return queryset.none()
 
+    owner_ids = visible_owner_ids(user, queryset.model)
+    if not owner_ids:
+        return queryset.none()
+
     path = path or owner_path_for(queryset.model)
-    return queryset.filter(**{path: user.pk})
+    # __in rather than a plain equality test, because TEAM scope and the
+    # manager's-shelf rule both resolve to several owners.
+    return queryset.filter(**{f"{path}__in": sorted(owner_ids)})
 
 
 def owned_by(user):
     """
     The owner to stamp on a NEW record created by `user`.
 
-    An admin creating a record owns it themselves. That keeps `owner` non-null
-    on every new row, which in turn keeps the "fail closed" rule meaningful:
-    a NULL owner can then only ever mean legacy data.
+    Always the creator, never their manager. A sales user's sale, customer and
+    debt belong to that sales user - that is what makes the debt theirs to
+    collect and their figures theirs to be measured by. The manager still sees
+    it, through TEAM scope, without owning it.
     """
     return user if getattr(user, "is_authenticated", False) else None
 
@@ -136,11 +217,13 @@ def can_touch(instance, user) -> bool:
     """
     if sees_everything(user):
         return True
-    if not (user and getattr(user, "is_authenticated", False)):
+    if not _usable(user):
         return False
 
     owner_id = _resolve_owner_id(instance)
-    return owner_id is not None and owner_id == user.pk
+    if owner_id is None:
+        return False
+    return owner_id in (visible_owner_ids(user, type(instance)) or set())
 
 
 def _resolve_owner_id(instance):
@@ -163,23 +246,29 @@ def visible_users(user):
     """
     Which staff members' names may appear in a filter dropdown.
 
-    An admin may filter by anyone. A manager only ever sees themselves, so
-    offering a list of colleagues would just advertise that other people's
-    data exists.
+    A full-scope user may filter by anyone. A manager sees themselves and
+    their team. Everyone else only ever sees themselves, so offering a list of
+    colleagues would just advertise that other people's data exists.
     """
     from accounts.models import User
 
     if sees_everything(user):
         return User.objects.active_staff()
-    if user is not None and getattr(user, "is_authenticated", False):
-        return User.objects.filter(pk=user.pk)
-    return User.objects.none()
+    ids = ledger_owner_ids(user)
+    if not ids:
+        return User.objects.none()
+    return User.objects.filter(pk__in=sorted(ids))
 
 
-def owner_filter_q(user, path: str = "owner") -> Q:
+def owner_filter_q(user, path: str = "owner", model_label: str | None = None) -> Q:
     """Q object form, for when a filter must be combined with OR logic."""
     if sees_everything(user):
         return Q()
-    if not (user and getattr(user, "is_authenticated", False)):
+    ids = (
+        visible_owner_ids(user, model_label)
+        if model_label
+        else ledger_owner_ids(user)
+    )
+    if not ids:
         return Q(pk__in=[])
-    return Q(**{path: user.pk})
+    return Q(**{f"{path}__in": sorted(ids)})

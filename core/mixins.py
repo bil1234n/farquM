@@ -1,12 +1,26 @@
 """
-Role-Based Access Control (RBAC) building blocks.
+Access control building blocks for web views.
 
-Two roles exist:
-    ADMIN   - full access: users, settings, financials, delete/override
-    MANAGER - operational: products, sales, borrowers, inventory
+Every view in this project must declare what it needs. There is no "open"
+authenticated view - a view with no requirement is a view nobody remembered to
+think about.
 
-Every view in this project must inherit from one of the mixins below,
-or use the equivalent decorator. There is no "open" authenticated view.
+    class ProfitReportView(PermissionRequiredMixin, TemplateView):
+        required_permission = "report.profit"
+
+    @permission_required("sale.void")
+    def transaction_void(request, pk): ...
+
+Permission codes come from core/permissions.py. The role mixins below
+(AdminRequiredMixin, StaffRequiredMixin) predate the permission system and are
+kept because a handful of views legitimately mean "anyone signed in"; they now
+resolve through permissions rather than by comparing role strings.
+
+TWO CHECKS, ALWAYS BOTH
+-----------------------
+A permission says WHAT you may do. OwnerScopedMixin / get_owned_or_404 say
+WHICH ROWS. A view that checks one and not the other is a view where a sales
+assistant can open a colleague's sale by guessing its ID.
 """
 import functools
 
@@ -19,17 +33,51 @@ from django.shortcuts import redirect
 from core.scoping import scoped, stamp_owner
 
 
-class RoleRequiredMixin(LoginRequiredMixin, AccessMixin):
+def user_can(user, *codes, require_all=True) -> bool:
     """
-    Restrict a class-based view to a set of roles.
+    Permission check that tolerates anything being passed in.
 
-    Usage:
-        class ProfitReportView(RoleRequiredMixin, TemplateView):
-            allowed_roles = ["ADMIN"]
+    Templates, context processors and DRF all hand this an object that might
+    be AnonymousUser, None, or a real User, and a permission helper that
+    raises AttributeError on the anonymous case would turn "logged out" into a
+    500 on the login page.
+    """
+    checker = getattr(user, "has_access", None)
+    if checker is None:
+        return False
+    return checker(*codes, require_all=require_all)
+
+
+class AccessRequiredMixin(LoginRequiredMixin, AccessMixin):
+    """
+    Base class: sign-in, active account, then the declared permissions.
+
+    Subclasses set one of:
+        required_permission   - a single code
+        required_permissions  - a list; ALL are needed
+        any_permission        - a list; ANY one is enough
     """
 
-    allowed_roles: list[str] = []
-    permission_denied_message = "You do not have permission to access this page."
+    required_permission: str | None = None
+    required_permissions: list[str] = []
+    any_permission: list[str] = []
+    permission_denied_message = "You do not have permission to open this page."
+
+    def get_required_permissions(self) -> list[str]:
+        codes = list(self.required_permissions)
+        if self.required_permission:
+            codes.append(self.required_permission)
+        return codes
+
+    def has_required_access(self, user) -> bool:
+        required = self.get_required_permissions()
+        if required and not user_can(user, *required):
+            return False
+        if self.any_permission and not user_can(
+            user, *self.any_permission, require_all=False
+        ):
+            return False
+        return True
 
     def dispatch(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
@@ -39,26 +87,54 @@ class RoleRequiredMixin(LoginRequiredMixin, AccessMixin):
             messages.error(request, "Your account has been deactivated.")
             return redirect("accounts:logout")
 
-        if self.allowed_roles and request.user.role not in self.allowed_roles:
+        if not self.has_required_access(request.user):
             messages.error(request, self.permission_denied_message)
             return redirect("core:forbidden")
 
         return super().dispatch(request, *args, **kwargs)
 
 
-class AdminRequiredMixin(RoleRequiredMixin):
-    """Admin only: user management, settings, profit data, deletes/overrides."""
+#: The name most views use.
+PermissionRequiredMixin = AccessRequiredMixin
 
-    allowed_roles = ["ADMIN"]
+
+class RoleRequiredMixin(AccessRequiredMixin):
+    """
+    Kept for compatibility with views that were written against roles.
+
+    `allowed_roles` is still honoured, but a permission requirement on the
+    same view wins - so migrating a view means adding `required_permission`
+    and deleting `allowed_roles`, in that order, without a window where the
+    view is unguarded.
+    """
+
+    allowed_roles: list[str] = []
+
+    def has_required_access(self, user):
+        if not super().has_required_access(user):
+            return False
+        if self.allowed_roles and not self.get_required_permissions():
+            return user.role in self.allowed_roles
+        return True
+
+
+class AdminRequiredMixin(AccessRequiredMixin):
+    """Full-control screens: staff accounts, roles, settings, overrides."""
+
+    required_permission = "user.permissions"
     permission_denied_message = (
         "Administrator privileges are required for this action."
     )
 
 
-class StaffRequiredMixin(RoleRequiredMixin):
-    """Admin or Manager: normal day-to-day operations."""
+class StaffRequiredMixin(AccessRequiredMixin):
+    """
+    Any signed-in, active employee.
 
-    allowed_roles = ["ADMIN", "MANAGER"]
+    Deliberately empty of permission requirements - it means "you are staff",
+    not "you may see this". Views that show something specific declare a
+    permission instead.
+    """
 
 
 class OwnerScopedMixin:
@@ -67,9 +143,9 @@ class OwnerScopedMixin:
 
     Mix this in ABOVE the Django generic view so its get_queryset() wraps the
     view's own. Because DetailView and UpdateView both fetch through
-    get_queryset(), scoping the list also scopes the detail page - a Manager
-    who types another manager's record ID into the URL gets a 404, not a 403.
-    That is deliberate: a 403 would confirm the record exists.
+    get_queryset(), scoping the list also scopes the detail page - a user who
+    types someone else's record ID into the URL gets a 404, not a 403. That is
+    deliberate: a 403 would confirm the record exists.
 
     Set `scope_path` when the view's model reaches its owner by an unusual
     route; otherwise core.scoping works it out from the model.
@@ -94,8 +170,8 @@ class AuthorStampMixin:
         if hasattr(obj, "updated_by"):
             obj.updated_by = self.request.user
         # Ownership is stamped once, on creation, and never rewritten by an
-        # edit. Reassigning a record between managers is an administrative
-        # act, not a side effect of someone fixing a typo in a product name.
+        # edit. Reassigning a record between staff is an administrative act,
+        # not a side effect of someone fixing a typo in a product name.
         stamp_owner(obj, self.request.user)
         obj.save()
         if hasattr(form, "save_m2m"):
@@ -107,15 +183,37 @@ class AuthorStampMixin:
 
 
 # ---------------------------------------------------------------------------
-# Function-based-view decorators (same rules, different shape)
+# Function-based-view helpers (same rules, different shape)
 # ---------------------------------------------------------------------------
-def role_required(*roles):
+def permission_required(*codes, require_all=True, message=None):
     """
     Decorator for function based views.
 
-        @role_required("ADMIN")
-        def delete_transaction(request, pk): ...
+        @permission_required("sale.void")
+        def transaction_void(request, pk): ...
     """
+
+    def decorator(view_func):
+        @functools.wraps(view_func)
+        def _wrapped(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                return redirect("accounts:login")
+            if not request.user.is_active:
+                messages.error(request, "Your account has been deactivated.")
+                return redirect("accounts:logout")
+            if not user_can(request.user, *codes, require_all=require_all):
+                raise PermissionDenied(
+                    message or "You do not have permission to perform this action."
+                )
+            return view_func(request, *args, **kwargs)
+
+        return _wrapped
+
+    return decorator
+
+
+def role_required(*roles):
+    """Legacy decorator. Prefer permission_required()."""
 
     def decorator(view_func):
         @functools.wraps(view_func)
@@ -133,8 +231,37 @@ def role_required(*roles):
     return decorator
 
 
-admin_required = role_required("ADMIN")
-staff_required = role_required("ADMIN", "MANAGER")
+admin_required = permission_required("user.permissions")
+staff_required = role_required("ADMIN", "MANAGER", "SALES")
+
+
+def deny(request, message):
+    """
+    Standard refusal for a function-based view that checks inline.
+
+        blocked = require(request, "sale.void", "Only ... may void a sale.")
+        if blocked:
+            return blocked
+    """
+    messages.error(request, message)
+    return redirect("core:forbidden")
+
+
+def require(request, *codes, message=None, require_all=True):
+    """
+    Returns a redirect response when the user lacks the permission, else None.
+
+    Reads at the top of a view as a guard clause, and keeps the refusal
+    message next to the rule it enforces.
+    """
+    if not request.user.is_authenticated:
+        return redirect("accounts:login")
+    if not user_can(request.user, *codes, require_all=require_all):
+        return deny(
+            request,
+            message or "You do not have permission to perform this action.",
+        )
+    return None
 
 
 def get_owned_or_404(model_or_qs, user, **lookup):

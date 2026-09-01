@@ -1,0 +1,90 @@
+{% comment %}
+  The permission grid.
+
+  Shared by the per-user editor and the role editor, so the two can never
+  drift into showing different permissions. Every checkbox is named `perm`;
+  the view reads them back with request.POST.getlist("perm").
+
+  `show_state` is on for the user editor, where a tick can mean two different
+  things - inherited from the role, or granted to this person - and off for
+  the role editor, where it can only mean one.
+
+  Context in:
+      matrix       from core.access.build_matrix()
+      show_state   bool
+      readonly     bool
+{% endcomment %}
+<div class="perm-matrix">
+  {% for group in matrix %}
+    <section class="card perm-group mb-3" data-group="{{ group.key }}">
+      <header class="perm-group-head">
+        <div class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
+          <i class="bi {{ group.icon }}"></i>
+          <div class="min-w-0">
+            <h3 class="h6 mb-0">{{ group.label }}</h3>
+            <div class="text-muted-sm">{{ group.blurb }}</div>
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-shrink-0">
+          <span class="badge text-bg-light border perm-count"
+                data-group-count="{{ group.key }}">{{ group.checked_count }}/{{ group.total }}</span>
+          {% if not readonly %}
+            <div class="btn-group btn-group-sm">
+              <button type="button" class="btn btn-outline-secondary"
+                      data-perm-bulk="on" data-target="{{ group.key }}">All</button>
+              <button type="button" class="btn btn-outline-secondary"
+                      data-perm-bulk="off" data-target="{{ group.key }}">None</button>
+            </div>
+          {% endif %}
+        </div>
+      </header>
+
+      <ul class="perm-list">
+        {% for perm in group.permissions %}
+          <li class="perm-row state-{{ perm.state }}{% if perm.sensitive %} is-sensitive{% endif %}">
+            <label class="perm-check">
+              <input type="checkbox"
+                     class="form-check-input"
+                     name="perm"
+                     value="{{ perm.code }}"
+                     data-group="{{ group.key }}"
+                     data-in-role="{{ perm.in_role|yesno:'1,0' }}"
+                     {% if perm.checked %}checked{% endif %}
+                     {% if readonly or perm.locked %}disabled{% endif %}>
+              {% if perm.locked %}
+                {# A disabled input submits nothing, so carry the value here. #}
+                <input type="hidden" name="perm" value="{{ perm.code }}">
+              {% endif %}
+            </label>
+
+            <div class="perm-body">
+              <div class="perm-label">
+                {{ perm.label }}
+                {% if perm.sensitive %}
+                  <i class="bi bi-exclamation-triangle-fill perm-warn"
+                     title="Sensitive - money, evidence, or access itself"></i>
+                {% endif %}
+                {% if perm.locked %}
+                  <span class="badge text-bg-secondary">Locked</span>
+                {% endif %}
+              </div>
+              {% if perm.help %}<div class="perm-help">{{ perm.help }}</div>{% endif %}
+              <code class="perm-code">{{ perm.code }}</code>
+            </div>
+
+            {% if show_state %}
+              <div class="perm-state">
+                <span class="pill pill-{{ perm.state }}" data-state-for="{{ perm.code }}">
+                  {% if perm.state == 'inherited' %}From role
+                  {% elif perm.state == 'granted' %}Added
+                  {% elif perm.state == 'denied' %}Removed
+                  {% else %}&mdash;{% endif %}
+                </span>
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endfor %}
+</div>

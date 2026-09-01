@@ -12,14 +12,18 @@
 
 {% block page_actions %}
   {% if debt.is_open %}
-    <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm">
-      <i class="bi bi-cash-coin me-1"></i> Record Payment
-    </a>
-    <a href="{% url 'credit:debt_adjust' debt.pk %}" class="btn btn-outline-secondary btn-sm">
-      <i class="bi bi-calendar-event me-1"></i> Reschedule
-    </a>
+    {% if user|can:"credit.collect" %}
+      <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm">
+        <i class="bi bi-cash-coin me-1"></i> Record Payment
+      </a>
+    {% endif %}
+    {% if user|can:"credit.reschedule" %}
+      <a href="{% url 'credit:debt_adjust' debt.pk %}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-calendar-event me-1"></i> Reschedule
+      </a>
+    {% endif %}
   {% endif %}
-  {% if user.can_delete_records and debt.is_open %}
+  {% if user|can:"credit.write_off" and debt.is_open %}
     <a href="{% url 'credit:debt_write_off' debt.pk %}" class="btn btn-outline-danger btn-sm">
       <i class="bi bi-slash-circle me-1"></i> Write Off
     </a>
@@ -143,7 +147,7 @@
                   <div class="text-muted-sm">
                     {{ p.balance_before|plain_money }} &rarr; {{ p.balance_after|plain_money }}
                   </div>
-                  {% if user.can_delete_records and not p.is_reversed %}
+                  {% if user|can:"credit.reverse_payment" and not p.is_reversed %}
                     <a href="{% url 'credit:repayment_reverse' p.pk %}"
                        class="btn btn-sm btn-outline-danger mt-1" title="Reverse this payment">
                       <i class="bi bi-arrow-counterclockwise"></i>

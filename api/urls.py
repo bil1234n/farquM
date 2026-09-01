@@ -15,6 +15,7 @@ router.register("sales", views.TransactionViewSet, basename="sale")
 router.register("debts", views.DebtViewSet, basename="debt")
 router.register("notifications", views.NotificationViewSet, basename="notification")
 router.register("users", views.UserViewSet, basename="user")
+router.register("roles", views.RoleViewSet, basename="role")
 
 urlpatterns = [
     # Auth
@@ -25,6 +26,10 @@ urlpatterns = [
 
     # Push registration
     path("devices/register/", views.RegisterDeviceView.as_view(), name="device_register"),
+
+    # Access control & settings
+    path("access/catalog/", views.permission_catalog, name="permission_catalog"),
+    path("settings/", views.system_settings, name="system_settings"),
 
     # Aggregates
     path("dashboard/", views.dashboard, name="dashboard"),

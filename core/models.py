@@ -1,4 +1,4 @@
-"""Abstract base models shared across every app."""
+"""Abstract base models shared across every app, plus system settings."""
 from django.conf import settings
 from django.db import models
 
@@ -114,3 +114,119 @@ class SoftDeleteModel(models.Model):
         self.deleted_at = None
         self.deleted_by = None
         self.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
+
+
+class SystemSetting(models.Model):
+    """
+    Business configuration an administrator can change without a redeploy.
+
+    Exactly one row ever exists - `pk` is pinned to 1 by `load()`. A singleton
+    table rather than a key/value store because these values are read on every
+    single page render through the context processor, and a typed column that
+    the ORM can fetch in one query beats parsing strings out of a bag.
+
+    Every field falls back to its `settings.py` value when blank, so a fresh
+    deployment behaves exactly as it did before this table existed and an
+    administrator can override piece by piece.
+    """
+
+    SINGLETON_PK = 1
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=SINGLETON_PK)
+
+    business_name = models.CharField(max_length=120, blank=True)
+    business_phone = models.CharField(max_length=40, blank=True)
+    business_email = models.EmailField(blank=True)
+    business_address = models.CharField(max_length=255, blank=True)
+    currency_symbol = models.CharField(
+        max_length=8, blank=True, help_text="Shown before every amount, e.g. ETB."
+    )
+
+    default_credit_due_days = models.PositiveSmallIntegerField(
+        default=30,
+        help_text="How long a customer has to settle a credit sale, by default.",
+    )
+    low_stock_threshold = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Suggested reorder level for a new product.",
+    )
+
+    allow_self_registration = models.BooleanField(
+        default=True,
+        help_text=(
+            "Let new staff sign themselves up with a role passcode. Turning "
+            "this off means accounts can only be created from Users & Roles."
+        ),
+    )
+    require_credit_approval = models.BooleanField(
+        default=True,
+        help_text=(
+            "Only let a customer buy on credit once someone has explicitly "
+            "approved them for it. Turning this off lets any registered "
+            "customer run a balance, which is faster and riskier."
+        ),
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        verbose_name = "System settings"
+        verbose_name_plural = "System settings"
+
+    def __str__(self):
+        return self.business_name or "System settings"
+
+    def save(self, *args, **kwargs):
+        # Pinning the pk is what makes this a singleton: a second save can
+        # only ever be an update of row 1, never an insert of row 2.
+        self.id = self.SINGLETON_PK
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError("System settings cannot be deleted, only edited.")
+
+    @classmethod
+    def load(cls):
+        """
+        The settings row, creating it on first access.
+
+        Never raises. This is called from a context processor on every page
+        including the login page and the 500 handler, and an error here would
+        turn a missing table during a half-finished migration into a site-wide
+        outage with a confusing traceback.
+        """
+        try:
+            obj, _ = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
+            return obj
+        except Exception:
+            return cls(pk=cls.SINGLETON_PK)
+
+    # -- Resolved values: DB value if set, otherwise settings.py -------------
+    def value(self, field: str, settings_key: str, default=""):
+        stored = getattr(self, field, "") or ""
+        if stored:
+            return stored
+        return getattr(settings, settings_key, default)
+
+    @property
+    def name(self) -> str:
+        return self.value("business_name", "BUSINESS_NAME", "Business")
+
+    @property
+    def phone(self) -> str:
+        return self.value("business_phone", "BUSINESS_PHONE")
+
+    @property
+    def address(self) -> str:
+        return self.value("business_address", "BUSINESS_ADDRESS")
+
+    @property
+    def currency(self) -> str:
+        return self.value("currency_symbol", "CURRENCY_SYMBOL", "ETB")

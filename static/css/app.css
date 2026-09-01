@@ -256,6 +256,86 @@ a{text-decoration:none}
 [data-bs-theme="dark"] .combo-chip{background:#243444}
 .combo-chip .info{flex:1;min-width:0}
 
+/* ---------------------------------------------------------------------------
+   Settings hub & permission matrix
+   --------------------------------------------------------------------------- */
+.settings-tabs{gap:.35rem;border-bottom:1px solid var(--line);padding-bottom:.6rem}
+.settings-tabs .nav-link{color:var(--muted);font-size:.84rem;font-weight:600;
+  padding:.4rem .8rem;border-radius:7px}
+.settings-tabs .nav-link:hover{background:var(--brand-light);color:var(--brand)}
+.settings-tabs .nav-link.active{background:var(--brand);color:#fff}
+[data-bs-theme="dark"] .settings-tabs .nav-link:hover{background:#243444;color:#9dc7ee}
+
+.setting-card .setting-icon{width:40px;height:40px;border-radius:10px;
+  display:grid;place-items:center;font-size:1.1rem;margin-bottom:.75rem}
+.mini-stat{font-size:.72rem;color:var(--muted);line-height:1.15}
+.mini-stat span{display:block;font-size:1.15rem;font-weight:700;color:var(--ink)}
+
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:.3rem .9rem;margin:0;font-size:.82rem}
+dl.kv dt{color:var(--muted);font-weight:500}
+dl.kv dd{margin:0;text-align:right;font-weight:600;word-break:break-word}
+
+.perm-bar{height:6px;border-radius:4px;background:var(--line)}
+
+/* -- The grid ------------------------------------------------------------- */
+.perm-group-head{display:flex;align-items:center;gap:.75rem;
+  padding:.7rem .9rem;border-bottom:1px solid var(--line);background:#fbfcfe}
+[data-bs-theme="dark"] .perm-group-head{background:#151d26}
+.perm-group-head > div > i,.perm-group-head i.bi{color:var(--brand);font-size:1.05rem}
+.perm-count{font-variant-numeric:tabular-nums}
+
+.perm-list{list-style:none;margin:0;padding:0}
+.perm-row{display:flex;align-items:flex-start;gap:.75rem;
+  padding:.6rem .9rem;border-bottom:1px solid var(--line)}
+.perm-row:last-child{border-bottom:0}
+.perm-row:hover{background:var(--brand-light)}
+[data-bs-theme="dark"] .perm-row:hover{background:#212b37}
+.perm-check{padding-top:.15rem;flex-shrink:0}
+.perm-check .form-check-input{width:1.05rem;height:1.05rem;cursor:pointer;margin:0}
+.perm-body{flex:1;min-width:0}
+.perm-label{font-size:.855rem;font-weight:600;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.perm-help{font-size:.75rem;color:var(--muted);line-height:1.35;margin-top:.1rem}
+.perm-code{font-size:.66rem;color:var(--muted);opacity:.8}
+.perm-warn{color:#b3541e;font-size:.78rem}
+.perm-state{flex-shrink:0;min-width:82px;text-align:right}
+
+/* A row whose tick differs from the role gets a coloured spine, so the
+   exceptions are findable by eye in a list of forty rows. */
+.perm-row.state-granted{border-left:3px solid var(--ok);padding-left:calc(.9rem - 3px)}
+.perm-row.state-denied{border-left:3px solid #c0392b;padding-left:calc(.9rem - 3px)}
+.perm-row.state-denied .perm-label{color:var(--muted);text-decoration:line-through}
+.perm-row.is-sensitive .perm-label{color:#8a4116}
+[data-bs-theme="dark"] .perm-row.is-sensitive .perm-label{color:#e8a87c}
+
+.pill{display:inline-block;font-size:.66rem;font-weight:700;letter-spacing:.02em;
+  padding:.16rem .45rem;border-radius:20px;border:1px solid transparent;white-space:nowrap}
+.pill-inherited{background:#eef2f7;color:#5a6b7d;border-color:#dde4ec}
+.pill-granted{background:#e2f4ea;color:#12693f;border-color:#bfe6d1}
+.pill-denied{background:#fdecea;color:#a3271b;border-color:#f5c9c4}
+.pill-absent{background:transparent;color:#adb5bd;border-color:transparent}
+[data-bs-theme="dark"] .pill-inherited{background:#243444;color:#9fb2c6;border-color:#31404f}
+[data-bs-theme="dark"] .pill-granted{background:#12301f;color:#69c795;border-color:#1d4530}
+[data-bs-theme="dark"] .pill-denied{background:#3a1a17;color:#e08b80;border-color:#55231e}
+
+.legend{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+
+.scope-help{border-top:1px solid var(--line);padding-top:.75rem;margin-top:.25rem}
+.scope-row{display:flex;gap:.6rem;align-items:flex-start;padding:.4rem .5rem;
+  border-radius:7px;font-size:.8rem}
+.scope-row i{color:var(--muted);padding-top:.15rem}
+.scope-row.is-current{background:var(--brand-light)}
+.scope-row.is-current i{color:var(--brand)}
+[data-bs-theme="dark"] .scope-row.is-current{background:#243444}
+
+.sensitive-list{list-style:none;margin:0;padding:0;font-size:.78rem}
+.sensitive-list li{display:flex;gap:.45rem;align-items:baseline;padding:.15rem 0}
+.sensitive-list i{color:#b3541e;font-size:.72rem}
+
+@media (max-width: 575.98px){
+  .perm-state{display:none}
+  .perm-group-head{flex-wrap:wrap}
+}
+
 @media print{
   .sidebar,.topbar,.no-print{display:none!important}
   .main-area{margin-left:0}

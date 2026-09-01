@@ -33,8 +33,11 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 
-from .models import AuditAction, Role, User
+from .models import AuditAction, RoleCode, RoleDefinition, User
 from .services import log_action
+
+#: Historical alias - this module used to import the TextChoices as `Role`.
+Role = RoleCode
 
 logger = logging.getLogger(__name__)
 
@@ -56,28 +59,65 @@ class RegistrationError(Exception):
 
 
 def _passcode_for(role: str) -> str:
+    """
+    The configured passcode for a role, or "" if it has none.
+
+    Only the three built-in roles can be self-registered for. A custom role is
+    created by an administrator for a specific person, so there is nobody to
+    hand a shared code to - and inventing an environment variable per custom
+    role would mean a redeploy every time somebody adds one.
+    """
     return {
-        Role.ADMIN: settings.REGISTRATION_PASSCODE_ADMIN,
-        Role.MANAGER: settings.REGISTRATION_PASSCODE_MANAGER,
+        RoleCode.ADMIN: settings.REGISTRATION_PASSCODE_ADMIN,
+        RoleCode.MANAGER: settings.REGISTRATION_PASSCODE_MANAGER,
+        RoleCode.SALES: getattr(settings, "REGISTRATION_PASSCODE_SALES", ""),
     }.get(role, "")
+
+
+def _self_registration_allowed() -> bool:
+    """
+    The administrator's switch, on top of the environment's.
+
+    Wrapped in try/except because this is reached from a context processor on
+    the login page: a settings table that does not exist yet during a
+    half-finished migration must not take the login page down with it.
+    """
+    if not settings.REGISTRATION_ENABLED:
+        return False
+    try:
+        from core.models import SystemSetting
+
+        return bool(SystemSetting.load().allow_self_registration)
+    except Exception:
+        return True
 
 
 def role_available(role: str) -> bool:
     """A role can only be registered for if its passcode is configured."""
-    return bool(settings.REGISTRATION_ENABLED and _passcode_for(role))
+    return bool(_self_registration_allowed() and _passcode_for(role))
 
 
 def available_roles() -> list[tuple[str, str]]:
     """Role choices to offer on the registration form."""
+    names = dict(
+        RoleDefinition.objects.filter(code__in=RoleCode.values).values_list(
+            "code", "name"
+        )
+    )
     return [
-        (value, label)
-        for value, label in Role.choices
+        (value, names.get(value, label))
+        for value, label in RoleCode.choices
         if role_available(value)
     ]
 
 
 def registration_open() -> bool:
-    return bool(available_roles())
+    try:
+        return bool(available_roles())
+    except Exception:
+        # Same reasoning as _self_registration_allowed: never 500 the login
+        # page over a question about a link on it.
+        return False
 
 
 def _throttle_key(ip: str) -> str:
@@ -180,6 +220,11 @@ def register_user(
         raise RegistrationError("A username is required.")
     if User.objects.filter(username__iexact=username).exists():
         raise RegistrationError("That username is already taken.")
+
+    if role not in RoleCode.values:
+        raise RegistrationError(
+            "Registration is not enabled for that role. Contact an administrator."
+        )
 
     user = User(
         username=username,

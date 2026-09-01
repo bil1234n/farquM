@@ -1,0 +1,38 @@
+{% load core_extras %}
+<ul class="nav nav-pills settings-tabs mb-3">
+  {% if user|can:"settings.view" %}
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'hub' %}active{% endif %}" href="{% url 'core:settings' %}">
+        <i class="bi bi-sliders me-1"></i> Overview
+      </a>
+    </li>
+  {% endif %}
+  {% if user|can:"user.permissions" %}
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'access' %}active{% endif %}" href="{% url 'core:access_list' %}">
+        <i class="bi bi-person-badge me-1"></i> Access Control
+      </a>
+    </li>
+  {% endif %}
+  {% if user|can:"role.manage" %}
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'roles' %}active{% endif %}" href="{% url 'core:role_list' %}">
+        <i class="bi bi-people-fill me-1"></i> Roles
+      </a>
+    </li>
+  {% endif %}
+  {% if user|can:"settings.view" %}
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'business' %}active{% endif %}" href="{% url 'core:business_settings' %}">
+        <i class="bi bi-shop me-1"></i> Business
+      </a>
+    </li>
+  {% endif %}
+  {% if user|can:"audit.view" %}
+    <li class="nav-item ms-auto">
+      <a class="nav-link" href="{% url 'accounts:audit_log' %}">
+        <i class="bi bi-shield-check me-1"></i> Audit Log
+      </a>
+    </li>
+  {% endif %}
+</ul>

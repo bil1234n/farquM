@@ -12,8 +12,9 @@ from accounts.services import log_action
 from core.mixins import (
     AuthorStampMixin,
     OwnerScopedMixin,
-    StaffRequiredMixin,
+    PermissionRequiredMixin,
     get_owned_or_404,
+    require,
 )
 from core.scoping import scoped, sees_everything, visible_users
 from core.utils import ZERO, money
@@ -33,7 +34,8 @@ from .services import SaleError, create_sale, void_transaction
 # ---------------------------------------------------------------------------
 # Customers
 # ---------------------------------------------------------------------------
-class CustomerListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class CustomerListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    required_permission = "customer.view"
     model = Customer
     template_name = "sales/customer_list.html"
     context_object_name = "customers"
@@ -66,7 +68,8 @@ class CustomerListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         return ctx
 
 
-class CustomerDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
+class CustomerDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
+    required_permission = "customer.view"
     model = Customer
     template_name = "sales/customer_detail.html"
     context_object_name = "customer"
@@ -87,7 +90,8 @@ class CustomerDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
         return ctx
 
 
-class CustomerCreateView(StaffRequiredMixin, AuthorStampMixin, CreateView):
+class CustomerCreateView(PermissionRequiredMixin, AuthorStampMixin, CreateView):
+    required_permission = "customer.create"
     model = Customer
     form_class = CustomerForm
     template_name = "sales/customer_form.html"
@@ -112,7 +116,8 @@ class CustomerCreateView(StaffRequiredMixin, AuthorStampMixin, CreateView):
         return response
 
 
-class CustomerUpdateView(OwnerScopedMixin, StaffRequiredMixin, AuthorStampMixin, UpdateView):
+class CustomerUpdateView(OwnerScopedMixin, PermissionRequiredMixin, AuthorStampMixin, UpdateView):
+    required_permission = "customer.edit"
     model = Customer
     form_class = CustomerForm
     template_name = "sales/customer_form.html"
@@ -140,7 +145,8 @@ class CustomerUpdateView(OwnerScopedMixin, StaffRequiredMixin, AuthorStampMixin,
 # ---------------------------------------------------------------------------
 # Transactions
 # ---------------------------------------------------------------------------
-class TransactionListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class TransactionListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    required_permission = "sale.view"
     model = Transaction
     template_name = "sales/transaction_list.html"
     context_object_name = "transactions"
@@ -198,7 +204,8 @@ class TransactionListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         return ctx
 
 
-class TransactionDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
+class TransactionDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
+    required_permission = "sale.view"
     model = Transaction
     template_name = "sales/transaction_detail.html"
     context_object_name = "txn"
@@ -225,10 +232,22 @@ def sale_create(request):
     Cart lines arrive as parallel arrays:
         product_id[]  quantity[]  unit_price[]  line_discount[]
     """
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "sale.create",
+        message="You do not have permission to record sales.",
+    )
+    if blocked:
+        return blocked
 
-    form = SaleHeaderForm(request.POST or None, request.FILES or None, user=request.user)
+    can_credit = request.user.has_access("sale.credit")
+    can_discount = request.user.has_access("sale.discount")
+    form = SaleHeaderForm(
+        request.POST or None,
+        request.FILES or None,
+        user=request.user,
+        can_credit=can_credit,
+        can_discount=can_discount,
+    )
 
     if request.method == "POST":
         cart, cart_errors = _parse_cart(request)
@@ -296,7 +315,9 @@ def sale_create(request):
                 .select_related("credit_account")
                 .order_by("name")
             ),
-            "show_cost": request.user.can_view_financials,
+            "show_cost": request.user.can_view_costs,
+            "can_credit": can_credit,
+            "can_discount": can_discount,
         },
     )
 
@@ -337,6 +358,7 @@ def _attach_sale_receipts(request, txn, form):
 
 def _parse_cart(request):
     """Turn the POSTed parallel arrays into a validated cart list."""
+    may_discount = request.user.has_access("sale.discount")
     product_ids = request.POST.getlist("product_id[]")
     quantities = request.POST.getlist("quantity[]")
     prices = request.POST.getlist("unit_price[]")
@@ -367,6 +389,11 @@ def _parse_cart(request):
             qty = int(quantities[idx])
             price = money(Decimal(prices[idx] or "0"))
             disc = money(Decimal(discounts[idx] or "0")) if idx < len(discounts) else ZERO
+            # A per-line discount is still a discount. Dropped here rather
+            # than rejected so the cart is not lost over a hidden input the
+            # user never saw; create_sale refuses it as well if it survives.
+            if not may_discount:
+                disc = ZERO
         except (IndexError, ValueError, InvalidOperation):
             errors.append(f"Line {idx + 1}: invalid quantity or price.")
             continue
@@ -383,10 +410,13 @@ def _parse_cart(request):
 
 
 def transaction_void(request, pk):
-    """Admin override only."""
-    if not request.user.can_delete_records:
-        messages.error(request, "Only an administrator may void a transaction.")
-        return redirect("core:forbidden")
+    """Reverses stock and cancels any linked debt. Its own permission."""
+    blocked = require(
+        request, "sale.void",
+        message="You do not have permission to void a sale.",
+    )
+    if blocked:
+        return blocked
 
     txn = get_owned_or_404(Transaction, request.user, pk=pk)
     if txn.is_voided:
@@ -418,8 +448,12 @@ def transaction_void(request, pk):
 
 
 def receipt_upload(request, pk):
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "sale.receipt.add",
+        message="You do not have permission to attach receipts.",
+    )
+    if blocked:
+        return blocked
 
     txn = get_owned_or_404(Transaction, request.user, pk=pk)
     form = ReceiptUploadForm(request.POST or None, request.FILES or None)
@@ -440,10 +474,13 @@ def receipt_upload(request, pk):
 
 
 def receipt_delete(request, pk):
-    """Admin only - removing proof is a sensitive action."""
-    if not request.user.can_delete_records:
-        messages.error(request, "Only an administrator may remove a receipt.")
-        return redirect("core:forbidden")
+    """Removing proof of a payment is a sensitive action with its own key."""
+    blocked = require(
+        request, "sale.receipt.delete",
+        message="You do not have permission to remove a receipt.",
+    )
+    if blocked:
+        return blocked
 
     receipt = get_owned_or_404(
         Receipt.objects.select_related("transaction"), request.user, pk=pk
@@ -464,8 +501,9 @@ def receipt_delete(request, pk):
 
 
 def transaction_print(request, pk):
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(request, "sale.view")
+    if blocked:
+        return blocked
     txn = get_owned_or_404(
         Transaction.objects.select_related("customer", "sold_by").prefetch_related("items"),
         request.user,

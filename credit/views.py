@@ -9,10 +9,10 @@ from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 from accounts.models import AuditAction
 from accounts.services import log_action
 from core.mixins import (
-    AdminRequiredMixin,
     OwnerScopedMixin,
-    StaffRequiredMixin,
+    PermissionRequiredMixin,
     get_owned_or_404,
+    require,
 )
 from core.scoping import scoped
 from core.utils import ZERO, money
@@ -48,9 +48,10 @@ def _sum(qs, field):
 # ---------------------------------------------------------------------------
 # Borrower dashboard
 # ---------------------------------------------------------------------------
-class CreditDashboardView(StaffRequiredMixin, TemplateView):
+class CreditDashboardView(PermissionRequiredMixin, TemplateView):
     """The 'Pay Later' control room: who owes what, and how late they are."""
 
+    required_permission = "credit.view"
     template_name = "credit/dashboard.html"
 
     def get_context_data(self, **kwargs):
@@ -103,9 +104,10 @@ class CreditDashboardView(StaffRequiredMixin, TemplateView):
         return ctx
 
 
-class BorrowerListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class BorrowerListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
     """Every customer with a credit account, ranked by what they owe."""
 
+    required_permission = "credit.view"
     model = CreditAccount
     template_name = "credit/borrower_list.html"
     context_object_name = "accounts"
@@ -150,12 +152,13 @@ class BorrowerListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         return ctx
 
 
-class BorrowerDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
+class BorrowerDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
     """
     Full borrower profile: every debt, every installment, running balance.
     This is the screen you open when a customer disputes what they owe.
     """
 
+    required_permission = "credit.view"
     model = Customer
     template_name = "credit/borrower_detail.html"
     context_object_name = "customer"
@@ -202,7 +205,8 @@ class BorrowerDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
 # ---------------------------------------------------------------------------
 # Debts
 # ---------------------------------------------------------------------------
-class DebtListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class DebtListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    required_permission = "credit.view"
     model = DebtRecord
     template_name = "credit/debt_list.html"
     context_object_name = "debts"
@@ -263,7 +267,8 @@ class DebtListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         return ctx
 
 
-class DebtDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
+class DebtDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
+    required_permission = "credit.view"
     model = DebtRecord
     template_name = "credit/debt_detail.html"
     context_object_name = "debt"
@@ -285,9 +290,10 @@ class DebtDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
         return ctx
 
 
-class DebtAdjustView(OwnerScopedMixin, StaffRequiredMixin, UpdateView):
+class DebtAdjustView(OwnerScopedMixin, PermissionRequiredMixin, UpdateView):
     """Reschedule a due date / add notes. No financial fields."""
 
+    required_permission = "credit.reschedule"
     model = DebtRecord
     form_class = DebtAdjustForm
     template_name = "credit/debt_adjust.html"
@@ -311,8 +317,12 @@ class DebtAdjustView(OwnerScopedMixin, StaffRequiredMixin, UpdateView):
 # ---------------------------------------------------------------------------
 def repayment_create(request, pk):
     """Record a partial or full repayment against a single debt."""
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "credit.collect",
+        message="You do not have permission to record repayments.",
+    )
+    if blocked:
+        return blocked
 
     debt = get_owned_or_404(
         DebtRecord.objects.select_related("customer", "transaction"), request.user, pk=pk
@@ -372,8 +382,12 @@ def bulk_repayment(request, pk):
     Customer hands over a lump sum without naming an invoice.
     Applied oldest debt first.
     """
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "credit.collect",
+        message="You do not have permission to record repayments.",
+    )
+    if blocked:
+        return blocked
 
     customer = get_owned_or_404(
         Customer.objects.select_related("credit_account"), request.user, pk=pk
@@ -424,9 +438,12 @@ def bulk_repayment(request, pk):
 # Admin-only corrections
 # ---------------------------------------------------------------------------
 def repayment_reverse(request, pk):
-    if not request.user.can_delete_records:
-        messages.error(request, "Only an administrator may reverse a payment.")
-        return redirect("core:forbidden")
+    blocked = require(
+        request, "credit.reverse_payment",
+        message="You do not have permission to reverse a payment.",
+    )
+    if blocked:
+        return blocked
 
     repayment = get_owned_or_404(
         Repayment.objects.select_related("debt", "debt__customer"), request.user, pk=pk
@@ -466,9 +483,12 @@ def repayment_reverse(request, pk):
 
 
 def debt_write_off(request, pk):
-    if not request.user.can_delete_records:
-        messages.error(request, "Only an administrator may write off a debt.")
-        return redirect("core:forbidden")
+    blocked = require(
+        request, "credit.write_off",
+        message="You do not have permission to write off a debt.",
+    )
+    if blocked:
+        return blocked
 
     debt = get_owned_or_404(
         DebtRecord.objects.select_related("customer"), request.user, pk=pk
@@ -497,9 +517,10 @@ def debt_write_off(request, pk):
     return render(request, "credit/debt_write_off.html", {"form": form, "debt": debt})
 
 
-class CreditAccountUpdateView(OwnerScopedMixin, AdminRequiredMixin, UpdateView):
-    """Credit limits and blocks are Admin-only financial controls."""
+class CreditAccountUpdateView(OwnerScopedMixin, PermissionRequiredMixin, UpdateView):
+    """Credit limits and blocks decide how deep a customer may go."""
 
+    required_permission = "credit.limits"
     model = CreditAccount
     form_class = CreditAccountForm
     template_name = "credit/account_form.html"
@@ -523,9 +544,12 @@ class CreditAccountUpdateView(OwnerScopedMixin, AdminRequiredMixin, UpdateView):
 
 
 def account_toggle_block(request, pk):
-    if not request.user.is_admin:
-        messages.error(request, "Administrator privileges are required.")
-        return redirect("core:forbidden")
+    blocked = require(
+        request, "credit.limits",
+        message="You do not have permission to block or unblock credit.",
+    )
+    if blocked:
+        return blocked
 
     account = get_owned_or_404(
         CreditAccount.objects.select_related("customer"), request.user, pk=pk
@@ -555,9 +579,10 @@ def account_toggle_block(request, pk):
     return render(request, "credit/account_block.html", {"account": account})
 
 
-class AgingReportView(StaffRequiredMixin, TemplateView):
+class AgingReportView(PermissionRequiredMixin, TemplateView):
     """Standard accounts-receivable aging report."""
 
+    required_permission = "credit.view"
     template_name = "credit/aging_report.html"
 
     def get_context_data(self, **kwargs):

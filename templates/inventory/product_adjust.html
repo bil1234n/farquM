@@ -16,8 +16,10 @@
           <div class="alert alert-warning small mt-3 mb-0">
             <strong>A reason is required.</strong> Adjustments are written permanently to the
             stock ledger against your name and can never be edited or removed.
-            {% if not user.is_admin %}
-              <div class="mt-1">Overwriting a stock count (stock-take) requires administrator rights.</div>
+            {% if not can_recount %}
+              <div class="mt-1">You can record damage and customer returns.
+                Overwriting a counted quantity outright needs the
+                <em>stock recount</em> permission &mdash; ask an administrator.</div>
             {% endif %}
           </div>
         </div>

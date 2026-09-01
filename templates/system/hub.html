@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}System Settings{% endblock %}
+{% block page_title %}System Settings{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">{{ user_count }} active user{{ user_count|pluralize }}
+    &middot; {{ role_count }} role{{ role_count|pluralize }}
+    &middot; {{ permission_count }} permissions</div>
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+<div class="alert alert-info small d-flex gap-2">
+  <i class="bi bi-info-circle mt-1"></i>
+  <div>
+    Access is two separate questions. <strong>Permissions</strong> decide what a
+    person may do; <strong>data scope</strong> decides whose records they may
+    see. A sales user with permission to view sales still only ever sees their
+    own. Both are set per person under
+    {% if user|can:"user.permissions" %}<a href="{% url 'core:access_list' %}">Access Control</a>{% else %}Access Control{% endif %}.
+  </div>
+</div>
+
+<div class="row g-3">
+
+  {# ---- Access control ------------------------------------------------- #}
+  {% if user|can:"user.permissions" %}
+    <div class="col-lg-6">
+      <div class="card h-100 setting-card">
+        <div class="card-body">
+          <div class="setting-icon bg-primary-subtle text-primary"><i class="bi bi-person-badge"></i></div>
+          <h2 class="h6">Access Control</h2>
+          <p class="text-muted-sm">
+            Tick exactly what each person may do. Start from their role, then
+            add or remove individual permissions for that one person.
+          </p>
+          <div class="d-flex gap-3 flex-wrap mb-3">
+            <div class="mini-stat"><span>{{ user_count }}</span>active users</div>
+            <div class="mini-stat"><span>{{ customised_count }}</span>customised</div>
+            <div class="mini-stat"><span>{{ sensitive_count }}</span>sensitive perms</div>
+          </div>
+          {% if customised %}
+            <div class="text-muted-sm mb-2">Recently customised:</div>
+            <div class="d-flex flex-wrap gap-1 mb-3">
+              {% for u in customised %}
+                <a href="{% url 'core:user_access' u.pk %}"
+                   class="badge text-bg-light border text-decoration-none">{{ u.display_name }}</a>
+              {% endfor %}
+            </div>
+          {% endif %}
+          <a href="{% url 'core:access_list' %}" class="btn btn-primary btn-sm">
+            <i class="bi bi-sliders2 me-1"></i> Manage access</a>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# ---- Roles ------------------------------------------------------------ #}
+  {% if user|can:"role.manage" %}
+    <div class="col-lg-6">
+      <div class="card h-100 setting-card">
+        <div class="card-body">
+          <div class="setting-icon bg-success-subtle text-success"><i class="bi bi-people-fill"></i></div>
+          <h2 class="h6">Roles</h2>
+          <p class="text-muted-sm">
+            A role is a named bundle of permissions. Change one and everybody
+            holding it changes with it &mdash; except where an individual has
+            been given an exception.
+          </p>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-2">
+              <tbody>
+                {% for role in roles %}
+                  <tr>
+                    <td>
+                      <a href="{% url 'core:role_update' role.pk %}" class="fw-semibold">{{ role.name }}</a>
+                      {% if role.is_system %}<span class="badge text-bg-light border ms-1">Built-in</span>{% endif %}
+                    </td>
+                    <td class="text-muted-sm">{{ role.get_data_scope_display }}</td>
+                    <td class="text-end text-muted-sm">
+                      {% if role.is_full_access %}All{% else %}{{ role.permission_count }}{% endif %}/{{ permission_count }}
+                    </td>
+                    <td class="text-end text-muted-sm">{{ role.active_users }} user{{ role.active_users|pluralize }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <a href="{% url 'core:role_list' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-gear me-1"></i> Manage roles</a>
+          <a href="{% url 'core:role_create' %}" class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-plus-lg me-1"></i> New role</a>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# ---- Business --------------------------------------------------------- #}
+  <div class="col-lg-6">
+    <div class="card h-100 setting-card">
+      <div class="card-body">
+        <div class="setting-icon bg-warning-subtle text-warning"><i class="bi bi-shop"></i></div>
+        <h2 class="h6">Business details</h2>
+        <p class="text-muted-sm">
+          Name, contact details and currency, plus the operational defaults new
+          records start from.
+        </p>
+        <dl class="kv mb-3">
+          <dt>Name</dt><dd>{{ conf.name }}</dd>
+          <dt>Currency</dt><dd>{{ conf.currency }}</dd>
+          <dt>Credit terms</dt><dd>{{ conf.default_credit_due_days }} days</dd>
+          <dt>Self-registration</dt>
+          <dd>{% if conf.allow_self_registration %}
+                <span class="badge text-bg-success">On</span>
+              {% else %}<span class="badge text-bg-secondary">Off</span>{% endif %}</dd>
+        </dl>
+        <a href="{% url 'core:business_settings' %}" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-pencil me-1"></i> Edit business details</a>
+      </div>
+    </div>
+  </div>
+
+  {# ---- Staff & security -------------------------------------------------- #}
+  <div class="col-lg-6">
+    <div class="card h-100 setting-card">
+      <div class="card-body">
+        <div class="setting-icon bg-danger-subtle text-danger"><i class="bi bi-shield-lock"></i></div>
+        <h2 class="h6">Staff &amp; security</h2>
+        <p class="text-muted-sm">
+          Accounts, passwords and the permanent record of who did what.
+        </p>
+        <div class="d-flex gap-3 flex-wrap mb-3">
+          <div class="mini-stat"><span>{{ user_count }}</span>active</div>
+          <div class="mini-stat"><span>{{ inactive_count }}</span>deactivated</div>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          {% if user|can:"user.view" %}
+            <a href="{% url 'accounts:user_list' %}" class="btn btn-outline-secondary btn-sm">
+              <i class="bi bi-person-gear me-1"></i> Users &amp; Roles</a>
+          {% endif %}
+          {% if user|can:"audit.view" %}
+            <a href="{% url 'accounts:audit_log' %}" class="btn btn-outline-secondary btn-sm">
+              <i class="bi bi-shield-check me-1"></i> Audit log</a>
+          {% endif %}
+          {% if user.is_superuser %}
+            <a href="/django-admin/" target="_blank" rel="noopener"
+               class="btn btn-outline-danger btn-sm"
+               title="Raw database editor. Bypasses every business rule in this app.">
+              <i class="bi bi-database me-1"></i> Django admin</a>
+          {% endif %}
+        </div>
+        {% if user.is_superuser %}
+          <div class="text-muted-sm mt-2">
+            The Django admin edits the database directly and skips stock
+            movements, audit entries and balance recalculation. Use it only to
+            recover from something this app cannot fix.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

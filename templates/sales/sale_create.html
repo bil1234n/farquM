@@ -43,7 +43,7 @@
                 <th style="min-width:220px">Product</th>
                 <th class="num" style="width:90px">Qty</th>
                 <th class="num" style="width:120px">Unit price</th>
-                <th class="num" style="width:110px">Discount</th>
+                {% if can_discount %}<th class="num" style="width:110px">Discount</th>{% endif %}
                 <th class="num" style="width:120px">Line total</th>
                 <th style="width:44px"></th>
               </tr>
@@ -64,7 +64,7 @@
 
       <div class="pos-total mb-3">
         <div class="line"><span>Subtotal</span><span class="money" id="dSubtotal">0.00</span></div>
-        <div class="line"><span>Discount</span><span class="money text-danger" id="dDiscount">0.00</span></div>
+        {% if can_discount %}<div class="line"><span>Discount</span><span class="money text-danger" id="dDiscount">0.00</span></div>{% endif %}
         <div class="line"><span>Tax</span><span class="money" id="dTax">0.00</span></div>
         <div class="line grand"><span>Total</span><span class="money" id="dTotal">0.00</span></div>
         <div class="line"><span>Paid now</span><span class="money text-success" id="dPaid">0.00</span></div>
@@ -120,11 +120,15 @@
           </div>
 
           <div class="row g-2 mb-3">
-            <div class="col-6">
-              <label class="form-label" for="{{ form.discount_amount.id_for_label }}">Discount</label>
-              {{ form.discount_amount }}
-            </div>
-            <div class="col-6">
+            {% if can_discount %}
+              <div class="col-6">
+                <label class="form-label" for="{{ form.discount_amount.id_for_label }}">Discount</label>
+                {{ form.discount_amount }}
+              </div>
+              <div class="col-6">
+            {% else %}
+              <div class="col-12">
+            {% endif %}
               <label class="form-label" for="{{ form.tax_amount.id_for_label }}">Tax</label>
               {{ form.tax_amount }}
             </div>
@@ -142,19 +146,30 @@
               <button type="button" class="btn btn-sm btn-outline-success flex-fill" onclick="payFull()">
                 Pay in full
               </button>
-              <button type="button" class="btn btn-sm btn-outline-warning flex-fill" onclick="payNothing()">
-                Full credit
-              </button>
+              {% if can_credit %}
+                <button type="button" class="btn btn-sm btn-outline-warning flex-fill" onclick="payNothing()">
+                  Full credit
+                </button>
+              {% endif %}
             </div>
             {% for e in form.amount_paid.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
           </div>
 
-          <div id="creditBox" class="alert alert-warning py-2 px-3 small d-none">
-            <i class="bi bi-exclamation-triangle-fill me-1"></i>
-            <strong>This is a credit sale.</strong>
-            A debt record will be opened and tracked on the Credit dashboard.
-            A registered, credit-approved customer is required.
-          </div>
+          {% if can_credit %}
+            <div id="creditBox" class="alert alert-warning py-2 px-3 small d-none">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              <strong>This is a credit sale.</strong>
+              A debt record will be opened in your name and tracked on the
+              Credit dashboard. A registered, credit-approved customer is required.
+            </div>
+          {% else %}
+            <div id="creditBox" class="alert alert-danger py-2 px-3 small d-none">
+              <i class="bi bi-x-octagon-fill me-1"></i>
+              <strong>You cannot leave a balance owing.</strong>
+              Collect the full amount, or ask someone with credit approval to
+              record this sale.
+            </div>
+          {% endif %}
 
           {# ---------- Receipt capture ---------- #}
           <div class="border rounded p-2 mb-3" id="receiptBox">
@@ -180,12 +195,14 @@
             </div>
           </div>
 
-          <div class="mb-3">
-            <label class="form-label" for="{{ form.due_date.id_for_label }}">Payment due date</label>
-            {{ form.due_date }}
-            <div class="form-text">{{ form.due_date.help_text }}</div>
-            {% for e in form.due_date.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
-          </div>
+          {% if can_credit %}
+            <div class="mb-3">
+              <label class="form-label" for="{{ form.due_date.id_for_label }}">Payment due date</label>
+              {{ form.due_date }}
+              <div class="form-text">{{ form.due_date.help_text }}</div>
+              {% for e in form.due_date.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+          {% endif %}
 
           <div class="mb-3">
             <label class="form-label" for="{{ form.notes.id_for_label }}">Notes</label>
@@ -250,8 +267,8 @@ function addRow(productId, qty) {
                min="1" step="1" value="${qty || 1}" oninput="recalc()" required></td>
     <td><input type="number" name="unit_price[]" class="form-control form-control-sm text-end price"
                min="0" step="0.01" value="0.00" oninput="recalc()" required></td>
-    <td><input type="number" name="line_discount[]" class="form-control form-control-sm text-end disc"
-               min="0" step="0.01" value="0.00" oninput="recalc()"></td>
+    ${CAN_DISCOUNT ? `<td><input type="number" name="line_discount[]" class="form-control form-control-sm text-end disc"
+               min="0" step="0.01" value="0.00" oninput="recalc()"></td>` : ''}
     <td class="num money line-total fw-semibold">0.00</td>
     <td class="text-end">
       <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeRow(this)">
@@ -281,12 +298,21 @@ function onProductChange(select) {
 
 function removeRow(btn) { btn.closest('tr').remove(); recalc(); }
 
+// Whether the signed-in user may give money away. The server refuses a
+// discount from anyone without `sale.discount` regardless, so this only
+// controls what the screen offers - but it has to be read defensively,
+// because the inputs it guards are simply not in the DOM when it is false.
+const CAN_DISCOUNT = {{ can_discount|yesno:"true,false" }};
+const CAN_CREDIT   = {{ can_credit|yesno:"true,false" }};
+
+function numberIn(el) { return el ? (parseFloat(el.value) || 0) : 0; }
+
 function recalc() {
   let subtotal = 0;
   document.querySelectorAll('#cartBody tr').forEach(row => {
     const qty   = parseFloat(row.querySelector('.qty').value)   || 0;
     const price = parseFloat(row.querySelector('.price').value) || 0;
-    const disc  = parseFloat(row.querySelector('.disc').value)  || 0;
+    const disc  = numberIn(row.querySelector('.disc'));
     const total = Math.max(qty * price - disc, 0);
     row.querySelector('.line-total').textContent = fmt(total);
     subtotal += total;
@@ -297,14 +323,14 @@ function recalc() {
     row.querySelector('.qty').classList.toggle('is-invalid', stock !== null && qty > stock);
   });
 
-  const discount = parseFloat($('id_discount_amount').value) || 0;
-  const tax      = parseFloat($('id_tax_amount').value)      || 0;
+  const discount = numberIn($('id_discount_amount'));
+  const tax      = numberIn($('id_tax_amount'));
   const total    = Math.max(subtotal - discount + tax, 0);
-  const paid     = parseFloat($('id_amount_paid').value)     || 0;
+  const paid     = numberIn($('id_amount_paid'));
   const balance  = Math.max(total - paid, 0);
 
   $('dSubtotal').textContent = fmt(subtotal);
-  $('dDiscount').textContent = fmt(discount);
+  if ($('dDiscount')) $('dDiscount').textContent = fmt(discount);
   $('dTax').textContent      = fmt(tax);
   $('dTotal').textContent    = fmt(total);
   $('dPaid').textContent     = fmt(paid);

@@ -40,8 +40,23 @@ def generate_reference(prefix: str, model, field: str = "reference") -> str:
 
 
 def default_due_date(days: int | None = None) -> dt.date:
-    days = days if days is not None else settings.DEFAULT_CREDIT_DUE_DAYS
-    return timezone.localdate() + dt.timedelta(days=days)
+    """
+    When a credit sale falls due, by default.
+
+    Reads the administrator-editable setting first and falls back to the
+    environment value. Wrapped in try/except so this keeps working during a
+    migration, before the settings table exists.
+    """
+    if days is None:
+        try:
+            from core.models import SystemSetting
+
+            days = SystemSetting.load().default_credit_due_days
+        except Exception:
+            days = None
+    if days is None:
+        days = settings.DEFAULT_CREDIT_DUE_DAYS
+    return timezone.localdate() + dt.timedelta(days=int(days))
 
 
 def validate_receipt_file(f):

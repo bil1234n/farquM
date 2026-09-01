@@ -5,8 +5,10 @@
 {% block breadcrumb %}<div class="crumb">{{ start|date:"d M Y" }} &ndash; {{ end|date:"d M Y" }} &middot; {{ transaction_count }} transactions</div>{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'reports:export_sales_csv' %}?date_from={{ start|date:'Y-m-d' }}&date_to={{ end|date:'Y-m-d' }}"
-     class="btn btn-primary btn-sm"><i class="bi bi-download me-1"></i> Export CSV</a>
+  {% if user|can:"report.export" %}
+    <a href="{% url 'reports:export_sales_csv' %}?date_from={{ start|date:'Y-m-d' }}&date_to={{ end|date:'Y-m-d' }}"
+       class="btn btn-primary btn-sm"><i class="bi bi-download me-1"></i> Export CSV</a>
+  {% endif %}
   <button onclick="window.print()" class="btn btn-outline-secondary btn-sm"><i class="bi bi-printer me-1"></i> Print</button>
 {% endblock %}
 

@@ -11,17 +11,21 @@
 {% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'sales:customer_update' customer.pk %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-pencil me-1"></i> Edit
-  </a>
-  {% if customer.outstanding_balance > 0 %}
+  {% if user|can:"customer.edit" %}
+    <a href="{% url 'sales:customer_update' customer.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-pencil me-1"></i> Edit
+    </a>
+  {% endif %}
+  {% if customer.outstanding_balance > 0 and user|can:"credit.view" %}
     <a href="{% url 'credit:borrower_detail' customer.pk %}" class="btn btn-warning btn-sm">
       <i class="bi bi-cash-stack me-1"></i> Borrower Profile
     </a>
   {% endif %}
-  <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-cart-plus me-1"></i> New Sale
-  </a>
+  {% if user|can:"sale.create" %}
+    <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-cart-plus me-1"></i> New Sale
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}

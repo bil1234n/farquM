@@ -26,8 +26,10 @@ class CustomerForm(StyledFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
-        # Approving a customer for credit is a financial decision - Admin only.
-        if self.user is not None and not self.user.is_admin:
+        # Approving a customer for credit decides how deep they may go, so it
+        # rides with the same permission that sets credit limits rather than
+        # with "may edit a customer".
+        if self.user is not None and not self.user.has_access("credit.limits"):
             self.fields.pop("is_credit_approved", None)
             self.fields.pop("is_active", None)
 
@@ -110,6 +112,11 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop("user", None)
+        # Default True so the API and any other caller that has not been
+        # updated keeps its current behaviour; the server-side rule in
+        # sales.services.create_sale is what actually enforces these.
+        self.can_credit = kwargs.pop("can_credit", True)
+        self.can_discount = kwargs.pop("can_discount", True)
         super().__init__(*args, **kwargs)
         # Only this user's customers are selectable. Rendering the full list
         # would leak every customer name and phone number in the business
@@ -118,6 +125,19 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
             Customer.objects.active(), self.user
         ).order_by("name")
         self.fields["due_date"].initial = default_due_date()
+
+        if not self.can_discount:
+            # Removed rather than disabled: a disabled input submits nothing,
+            # but a hidden one can still be re-enabled from the console.
+            self.fields.pop("discount_amount", None)
+
+        if not self.can_credit:
+            self.fields.pop("due_date", None)
+            self.fields["amount_paid"].help_text = (
+                "You must collect the full amount - selling on credit is not "
+                "part of your access."
+            )
+            self.fields["customer"].help_text = "Optional for a cash sale."
 
     def clean_due_date(self):
         due = self.cleaned_data.get("due_date")
@@ -133,6 +153,8 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         would just push them to record it as cash, which is worse.
         """
         cleaned = super().clean()
+        if not self.can_discount:
+            cleaned["discount_amount"] = ZERO
         method = cleaned.get("payment_method")
         paid = cleaned.get("amount_paid") or 0
         # Read the cleaned value, not self.files - cleaned_data is now a list

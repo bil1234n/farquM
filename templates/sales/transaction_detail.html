@@ -13,15 +13,17 @@
   <a href="{% url 'sales:transaction_print' txn.pk %}" target="_blank" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-printer me-1"></i> Print
   </a>
-  <a href="{% url 'sales:receipt_upload' txn.pk %}" class="btn btn-outline-primary btn-sm">
-    <i class="bi bi-paperclip me-1"></i> Attach Receipt
-  </a>
+  {% if user|can:"sale.receipt.add" %}
+    <a href="{% url 'sales:receipt_upload' txn.pk %}" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-paperclip me-1"></i> Attach Receipt
+    </a>
+  {% endif %}
   {% if debt and debt.is_open %}
     <a href="{% url 'credit:repayment_create' debt.pk %}" class="btn btn-success btn-sm">
       <i class="bi bi-cash-coin me-1"></i> Record Payment
     </a>
   {% endif %}
-  {% if user.can_delete_records and not txn.is_voided %}
+  {% if user|can:"sale.void" and not txn.is_voided %}
     <a href="{% url 'sales:transaction_void' txn.pk %}" class="btn btn-outline-danger btn-sm">
       <i class="bi bi-x-octagon me-1"></i> Void
     </a>
@@ -122,7 +124,7 @@
                   <div class="small fw-semibold text-truncate">{{ r.get_kind_display }}</div>
                   <div class="text-muted-sm text-truncate">{{ r.caption|default:r.filename }}</div>
                   <div class="text-muted-sm">{{ r.created_at|date:"d M Y" }}</div>
-                  {% if user.can_delete_records %}
+                  {% if user|can:"sale.receipt.delete" %}
                     <a href="{% url 'sales:receipt_delete' r.pk %}" class="btn btn-sm btn-outline-danger w-100 mt-2">
                       <i class="bi bi-trash"></i>
                     </a>

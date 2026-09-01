@@ -6,12 +6,16 @@
 {% block breadcrumb %}<div class="crumb">{{ result_count }} transaction{{ result_count|pluralize }} matching your filters</div>{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-cart-plus me-1"></i> New Sale
-  </a>
-  <a href="{% url 'reports:export_sales_csv' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-download me-1"></i> Export CSV
-  </a>
+  {% if user|can:"sale.create" %}
+    <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-cart-plus me-1"></i> New Sale
+    </a>
+  {% endif %}
+  {% if user|can:"report.export" %}
+    <a href="{% url 'reports:export_sales_csv' %}?{{ request.GET.urlencode }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-download me-1"></i> Export CSV
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}

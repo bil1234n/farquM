@@ -1,4 +1,18 @@
 {% load core_extras %}
+{% comment %}
+  Navigation, gated by permission.
+
+  Hiding a link is a courtesy, not a control: every page here also checks the
+  same permission in its own view, so typing the URL gets the same refusal.
+  The point of hiding is that a sales assistant should not have to learn what
+  they cannot do by walking into locked doors all day.
+
+  NOTE for anyone editing this file: use the comment TAG, as here, for
+  anything longer than one line. Django's hash-style comment is single-line
+  only - spread one over several lines and it stops being a comment at all.
+  It becomes text, and it renders into the page as the first child of the
+  flex container that lays out the whole app, shoving every screen sideways.
+{% endcomment %}
 <aside class="sidebar no-print">
 
   <div class="sidebar-brand">
@@ -11,102 +25,143 @@
 
   <nav class="nav flex-column pb-3">
 
-    <div class="nav-section">Overview</div>
-    <a class="nav-link {% if request.resolver_match.view_name == 'reports:dashboard' %}active{% endif %}"
-       href="{% url 'reports:dashboard' %}">
-      <i class="bi bi-grid-1x2"></i> Dashboard
-    </a>
-
-    <div class="nav-section">Sales</div>
-    <a class="nav-link {% if request.resolver_match.view_name == 'sales:sale_create' %}active{% endif %}"
-       href="{% url 'sales:sale_create' %}">
-      <i class="bi bi-cart-plus"></i> New Sale
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'sales:transaction_list' %}active{% endif %}"
-       href="{% url 'sales:transaction_list' %}">
-      <i class="bi bi-receipt"></i> Transactions
-    </a>
-    <a class="nav-link {% if 'customer' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'sales:customer_list' %}">
-      <i class="bi bi-people"></i> Customers
-    </a>
-
-    <div class="nav-section">Credit &amp; Borrowers</div>
-    <a class="nav-link {% if request.resolver_match.view_name == 'credit:dashboard' %}active{% endif %}"
-       href="{% url 'credit:dashboard' %}">
-      <i class="bi bi-cash-stack"></i> Credit Dashboard
-    </a>
-    <a class="nav-link {% if 'borrower' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'credit:borrower_list' %}">
-      <i class="bi bi-person-lines-fill"></i> Borrowers
-    </a>
-    <a class="nav-link {% if 'debt' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'credit:debt_list' %}">
-      <i class="bi bi-journal-text"></i> Debts
-      {% if badge_overdue_debts %}<span class="badge text-bg-danger">{{ badge_overdue_debts }}</span>{% endif %}
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'credit:aging_report' %}active{% endif %}"
-       href="{% url 'credit:aging_report' %}">
-      <i class="bi bi-hourglass-split"></i> Aging Report
-    </a>
-
-    <div class="nav-section">Inventory</div>
-    <a class="nav-link {% if 'product' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'inventory:product_list' %}">
-      <i class="bi bi-box-seam"></i> Products
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'inventory:low_stock' %}active{% endif %}"
-       href="{% url 'inventory:low_stock' %}">
-      <i class="bi bi-exclamation-triangle"></i> Low Stock
-      {% if badge_low_stock %}<span class="badge text-bg-warning">{{ badge_low_stock }}</span>{% endif %}
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'inventory:stock_movements' %}active{% endif %}"
-       href="{% url 'inventory:stock_movements' %}">
-      <i class="bi bi-arrow-left-right"></i> Stock Movements
-    </a>
-    <a class="nav-link {% if 'category' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'inventory:category_list' %}">
-      <i class="bi bi-tags"></i> Categories
-    </a>
-    <a class="nav-link {% if 'supplier' in request.resolver_match.view_name %}active{% endif %}"
-       href="{% url 'inventory:supplier_list' %}">
-      <i class="bi bi-truck"></i> Suppliers
-    </a>
-
-    <div class="nav-section">Reports</div>
-    <a class="nav-link {% if request.resolver_match.view_name == 'reports:sales_report' %}active{% endif %}"
-       href="{% url 'reports:sales_report' %}">
-      <i class="bi bi-graph-up"></i> Sales Report
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'reports:inventory_report' %}active{% endif %}"
-       href="{% url 'reports:inventory_report' %}">
-      <i class="bi bi-clipboard-data"></i> Inventory Report
-    </a>
-    <a class="nav-link {% if request.resolver_match.view_name == 'reports:receivables_report' %}active{% endif %}"
-       href="{% url 'reports:receivables_report' %}">
-      <i class="bi bi-wallet2"></i> Receivables
-    </a>
-    {% if user.can_view_financials %}
-      <a class="nav-link {% if request.resolver_match.view_name == 'reports:profit_report' %}active{% endif %}"
-         href="{% url 'reports:profit_report' %}">
-        <i class="bi bi-currency-dollar"></i> Profit &amp; Margins
-        <span class="badge text-bg-secondary">Admin</span>
+    {% if user|can:"dashboard.view" %}
+      <div class="nav-section">Overview</div>
+      <a class="nav-link {% if request.resolver_match.view_name == 'reports:dashboard' %}active{% endif %}"
+         href="{% url 'reports:dashboard' %}">
+        <i class="bi bi-grid-1x2"></i> Dashboard
       </a>
     {% endif %}
 
-    {% if user.can_manage_users %}
+    {% if user|can:"sale.view,sale.create,customer.view" %}
+      <div class="nav-section">Sales</div>
+      {% if user|can:"sale.create" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'sales:sale_create' %}active{% endif %}"
+           href="{% url 'sales:sale_create' %}">
+          <i class="bi bi-cart-plus"></i> New Sale
+        </a>
+      {% endif %}
+      {% if user|can:"sale.view" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'sales:transaction_list' %}active{% endif %}"
+           href="{% url 'sales:transaction_list' %}">
+          <i class="bi bi-receipt"></i> Transactions
+        </a>
+      {% endif %}
+      {% if user|can:"customer.view" %}
+        <a class="nav-link {% if 'customer' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'sales:customer_list' %}">
+          <i class="bi bi-people"></i> Customers
+        </a>
+      {% endif %}
+    {% endif %}
+
+    {% if user|can:"credit.view" %}
+      <div class="nav-section">Credit &amp; Borrowers</div>
+      <a class="nav-link {% if request.resolver_match.view_name == 'credit:dashboard' %}active{% endif %}"
+         href="{% url 'credit:dashboard' %}">
+        <i class="bi bi-cash-stack"></i> Credit Dashboard
+      </a>
+      <a class="nav-link {% if 'borrower' in request.resolver_match.view_name %}active{% endif %}"
+         href="{% url 'credit:borrower_list' %}">
+        <i class="bi bi-person-lines-fill"></i> Borrowers
+      </a>
+      <a class="nav-link {% if 'debt' in request.resolver_match.view_name %}active{% endif %}"
+         href="{% url 'credit:debt_list' %}">
+        <i class="bi bi-journal-text"></i> Debts
+        {% if badge_overdue_debts %}<span class="badge text-bg-danger">{{ badge_overdue_debts }}</span>{% endif %}
+      </a>
+      <a class="nav-link {% if request.resolver_match.view_name == 'credit:aging_report' %}active{% endif %}"
+         href="{% url 'credit:aging_report' %}">
+        <i class="bi bi-hourglass-split"></i> Aging Report
+      </a>
+    {% endif %}
+
+    {% if user|can:"product.view,stock.view_movements,catalog.manage" %}
+      <div class="nav-section">Inventory</div>
+      {% if user|can:"product.view" %}
+        <a class="nav-link {% if 'product' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'inventory:product_list' %}">
+          <i class="bi bi-box-seam"></i> Products
+        </a>
+        <a class="nav-link {% if request.resolver_match.view_name == 'inventory:low_stock' %}active{% endif %}"
+           href="{% url 'inventory:low_stock' %}">
+          <i class="bi bi-exclamation-triangle"></i> Low Stock
+          {% if badge_low_stock %}<span class="badge text-bg-warning">{{ badge_low_stock }}</span>{% endif %}
+        </a>
+      {% endif %}
+      {% if user|can:"stock.view_movements" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'inventory:stock_movements' %}active{% endif %}"
+           href="{% url 'inventory:stock_movements' %}">
+          <i class="bi bi-arrow-left-right"></i> Stock Movements
+        </a>
+      {% endif %}
+      {% if user|can:"catalog.manage" %}
+        <a class="nav-link {% if 'category' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'inventory:category_list' %}">
+          <i class="bi bi-tags"></i> Categories
+        </a>
+        <a class="nav-link {% if 'supplier' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'inventory:supplier_list' %}">
+          <i class="bi bi-truck"></i> Suppliers
+        </a>
+      {% endif %}
+    {% endif %}
+
+    {% if user|can:"report.sales,report.inventory,report.receivables,report.profit" %}
+      <div class="nav-section">Reports</div>
+      {% if user|can:"report.sales" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'reports:sales_report' %}active{% endif %}"
+           href="{% url 'reports:sales_report' %}">
+          <i class="bi bi-graph-up"></i> Sales Report
+        </a>
+      {% endif %}
+      {% if user|can:"report.inventory" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'reports:inventory_report' %}active{% endif %}"
+           href="{% url 'reports:inventory_report' %}">
+          <i class="bi bi-clipboard-data"></i> Inventory Report
+        </a>
+      {% endif %}
+      {% if user|can:"report.receivables" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'reports:receivables_report' %}active{% endif %}"
+           href="{% url 'reports:receivables_report' %}">
+          <i class="bi bi-wallet2"></i> Receivables
+        </a>
+      {% endif %}
+      {% if user|can:"report.profit" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'reports:profit_report' %}active{% endif %}"
+           href="{% url 'reports:profit_report' %}">
+          <i class="bi bi-currency-dollar"></i> Profit &amp; Margins
+          <span class="badge text-bg-secondary">Restricted</span>
+        </a>
+      {% endif %}
+    {% endif %}
+
+    {% if user|can:"user.view,audit.view,settings.view,user.permissions,role.manage" %}
       <div class="nav-section">Administration</div>
-      <a class="nav-link {% if 'user_' in request.resolver_match.view_name %}active{% endif %}"
-         href="{% url 'accounts:user_list' %}">
-        <i class="bi bi-person-gear"></i> Users &amp; Roles
-      </a>
-      <a class="nav-link {% if request.resolver_match.view_name == 'accounts:audit_log' %}active{% endif %}"
-         href="{% url 'accounts:audit_log' %}">
-        <i class="bi bi-shield-check"></i> Audit Log
-      </a>
-      <a class="nav-link" href="/django-admin/" target="_blank" rel="noopener">
-        <i class="bi bi-sliders"></i> System Settings
-      </a>
+      {% if user|can:"user.view" %}
+        <a class="nav-link {% if 'user_' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'accounts:user_list' %}">
+          <i class="bi bi-person-gear"></i> Users &amp; Roles
+        </a>
+      {% endif %}
+      {% if user|can:"user.permissions" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'core:access_list' or request.resolver_match.view_name == 'core:user_access' %}active{% endif %}"
+           href="{% url 'core:access_list' %}">
+          <i class="bi bi-person-badge"></i> Access Control
+        </a>
+      {% endif %}
+      {% if user|can:"audit.view" %}
+        <a class="nav-link {% if request.resolver_match.view_name == 'accounts:audit_log' %}active{% endif %}"
+           href="{% url 'accounts:audit_log' %}">
+          <i class="bi bi-shield-check"></i> Audit Log
+        </a>
+      {% endif %}
+      {% if user|can:"settings.view,role.manage" %}
+        <a class="nav-link {% if request.resolver_match.namespace == 'core' and request.resolver_match.view_name != 'core:access_list' and request.resolver_match.view_name != 'core:user_access' %}active{% endif %}"
+           href="{% url 'core:settings' %}">
+          <i class="bi bi-sliders"></i> System Settings
+        </a>
+      {% endif %}
     {% endif %}
   </nav>
 

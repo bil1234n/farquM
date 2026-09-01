@@ -29,13 +29,14 @@ from rest_framework.decorators import (
     parser_classes,
     permission_classes,
 )
+from rest_framework.exceptions import ValidationError as APIValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import AuditAction, User
+from accounts.models import AuditAction, RoleDefinition, User
 from accounts.services import log_action
 from core.scoping import scoped, sees_everything
 from credit.models import CreditAccount, DebtRecord, Repayment
@@ -61,8 +62,18 @@ from reports.selectors import (
 from sales.models import Customer, Receipt, Transaction
 from sales.services import SaleError, create_sale, void_transaction
 
+from core.access import (
+    access_summary,
+    apply_role_permissions,
+    apply_user_access,
+    build_matrix,
+    reset_user_to_role,
+)
+from core.models import SystemSetting
+from core.permissions import ALL_CODES, catalog_as_dict
+
 from .models import DeviceToken, NotificationLog
-from .permissions import IsAdmin, IsStaff, ReadOnlyOrAdmin, StaffWriteAdminDelete
+from .permissions import ActionPermission, HasPermission, IsStaff, requires
 from .serializers import (
     CategorySerializer,
     CustomerSerializer,
@@ -74,10 +85,13 @@ from .serializers import (
     RepaymentCreateSerializer,
     RepaymentSerializer,
     RestockSerializer,
+    RoleDefinitionSerializer,
     SaleCreateSerializer,
     StockMovementSerializer,
     SupplierSerializer,
+    SystemSettingSerializer,
     TransactionSerializer,
+    UserAccessSerializer,
     UserAdminSerializer,
     UserSerializer,
 )
@@ -230,7 +244,19 @@ class UserViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = UserAdminSerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [ActionPermission]
+    permission_map = {
+        "GET": "user.view",
+        "POST": "user.create",
+        "PATCH": "user.edit",
+        "PUT": "user.edit",
+    }
+    action_permissions = {
+        "toggle_active": "user.deactivate",
+        "reset_password": "user.reset_password",
+        "access": "user.permissions",
+        "reset_access": "user.permissions",
+    }
     pagination_class = StandardPagination
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     http_method_names = ["get", "post", "patch", "put", "head", "options"]
@@ -343,6 +369,109 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         return Response({"detail": f"Password reset for {target.display_name}."})
 
+    @action(detail=True, methods=["get", "put"])
+    def access(self, request, pk=None):
+        """
+        Read or replace one person's access.
+
+        GET returns the annotated permission grid the phone renders, so the
+        mobile editor shows the same four states as the web one - inherited,
+        added, removed, absent - rather than a flat list of ticks that loses
+        the distinction between "the role gives this" and "we gave this to
+        them specifically".
+
+        PUT takes the codes that ended up ticked and lets core.access work out
+        the grants and denials. The client never computes the difference:
+        that rule lives in one place.
+        """
+        target = self.get_object()
+
+        if request.method == "GET":
+            return Response(
+                {
+                    "user": UserAdminSerializer(target, context={"request": request}).data,
+                    "access": access_summary(target),
+                    "matrix": build_matrix(
+                        role=target.role_definition,
+                        extra=target.extra_permissions,
+                        denied=target.denied_permissions,
+                        locked=(
+                            {"user.permissions", "user.view", "settings.view"}
+                            if target.pk == request.user.pk
+                            else set()
+                        ),
+                    ),
+                    "total_permissions": len(ALL_CODES),
+                }
+            )
+
+        serializer = UserAccessSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if target.is_superuser and not request.user.is_superuser:
+            return Response(
+                {"detail": "That account can only be changed from the server."},
+                status=403,
+            )
+
+        role_code = data.get("role") or target.role
+        if (
+            target.role == "ADMIN"
+            and role_code != "ADMIN"
+            and not User.objects.admins()
+            .filter(is_active=True)
+            .exclude(pk=target.pk)
+            .exists()
+        ):
+            return Response(
+                {"detail": "This is the only active administrator. "
+                           "Promote someone else first."},
+                status=400,
+            )
+
+        ticked = set(data["permissions"])
+        if target.pk == request.user.pk:
+            # Same self-lockout guard as the web editor: an administrator must
+            # not be able to remove their own way back into this screen.
+            ticked |= {"user.permissions", "user.view", "settings.view"}
+
+        manager = None
+        if data.get("manager"):
+            manager = User.objects.filter(pk=data["manager"]).first()
+            if manager is None or manager.pk == target.pk:
+                return Response({"detail": "Invalid manager."}, status=400)
+
+        result = apply_user_access(
+            user=target,
+            role_code=role_code,
+            ticked=ticked,
+            manager=manager,
+            data_scope_override=data.get("data_scope_override", ""),
+            editor=request.user,
+            source="the mobile app",
+        )
+        return Response(
+            {
+                "detail": (
+                    f"{len(result['gained'])} permission(s) granted, "
+                    f"{len(result['lost'])} revoked."
+                ),
+                "access": access_summary(target),
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def reset_access(self, request, pk=None):
+        """Drop every individual grant and denial, back to the plain role."""
+        target = self.get_object()
+        if target.pk == request.user.pk:
+            return Response(
+                {"detail": "Reset someone else's access, not your own."}, status=400
+            )
+        reset_user_to_role(target, editor=request.user)
+        return Response({"access": access_summary(target)})
+
 
 # ---------------------------------------------------------------------------
 # Devices
@@ -374,6 +503,9 @@ class RegisterDeviceView(APIView):
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    # Deliberately open to any signed-in user: a notification is addressed to
+    # exactly one person and the queryset below is filtered to them, so there
+    # is nothing here a permission could usefully gate.
     serializer_class = NotificationSerializer
     permission_classes = [IsStaff]
     pagination_class = StandardPagination
@@ -415,7 +547,16 @@ class CategoryViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = CategorySerializer
-    permission_classes = [StaffWriteAdminDelete]
+    permission_classes = [HasPermission]
+    # Readable by anyone who can see products - the phone needs the list to
+    # label and filter them. Changing the list is a catalogue job.
+    permission_map = {
+        "GET": "product.view",
+        "POST": "catalog.manage",
+        "PATCH": "catalog.manage",
+        "PUT": "catalog.manage",
+        "DELETE": "catalog.manage",
+    }
     queryset = Category.objects.filter(is_active=True)
     pagination_class = None
 
@@ -424,14 +565,34 @@ class SupplierViewSet(viewsets.ModelViewSet):
     """Shared lookup list - see CategoryViewSet."""
 
     serializer_class = SupplierSerializer
-    permission_classes = [StaffWriteAdminDelete]
+    permission_classes = [HasPermission]
+    permission_map = {
+        "GET": "product.view",
+        "POST": "catalog.manage",
+        "PATCH": "catalog.manage",
+        "PUT": "catalog.manage",
+        "DELETE": "catalog.manage",
+    }
     queryset = Supplier.objects.filter(is_active=True)
     pagination_class = None
 
 
 class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
-    permission_classes = [StaffWriteAdminDelete]
+    permission_classes = [ActionPermission]
+    permission_map = {
+        "GET": "product.view",
+        "POST": "product.create",
+        "PATCH": "product.edit",
+        "PUT": "product.edit",
+        "DELETE": "product.archive",
+    }
+    action_permissions = {
+        "barcode": "product.view",
+        "low_stock": "product.view",
+        "restock": "stock.restock",
+        "movements": "stock.view_movements",
+    }
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -509,8 +670,11 @@ class ProductViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         unit_cost = serializer.validated_data.get("unit_cost")
-        if unit_cost is not None and not request.user.can_view_financials:
-            unit_cost = None  # a Manager may not set cost prices
+        if unit_cost is not None and not request.user.can_view_costs:
+            # Someone who may receive stock but not see cost prices cannot set
+            # one either - the field is dropped rather than the request
+            # refused, so the delivery still gets recorded.
+            unit_cost = None
 
         try:
             movement = do_restock(
@@ -535,7 +699,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = StockMovementSerializer
-    permission_classes = [IsStaff]
+    permission_classes = [HasPermission]
+    required_permission = "stock.view_movements"
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -554,7 +719,17 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
 # ---------------------------------------------------------------------------
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
-    permission_classes = [StaffWriteAdminDelete]
+    permission_classes = [ActionPermission]
+    permission_map = {
+        "GET": "customer.view",
+        "POST": "customer.create",
+        "PATCH": "customer.edit",
+        "PUT": "customer.edit",
+    }
+    action_permissions = {"debts": "credit.view", "pay": "credit.collect"}
+    # No DELETE: removing a customer would orphan their sales and debts, and
+    # `owner` is SET_NULL, so the records would survive but become invisible.
+    http_method_names = ["get", "post", "patch", "put", "head", "options"]
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -626,7 +801,12 @@ class CustomerViewSet(viewsets.ModelViewSet):
 # ---------------------------------------------------------------------------
 class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TransactionSerializer
-    permission_classes = [IsStaff]
+    permission_classes = [ActionPermission]
+    permission_map = {"GET": "sale.view", "POST": "sale.create"}
+    action_permissions = {
+        "void": "sale.void",
+        "receipt": "sale.receipt.add",
+    }
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -720,7 +900,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
             TransactionSerializer(txn, context={"request": request}).data, status=201
         )
 
-    @action(detail=True, methods=["post"], permission_classes=[IsAdmin])
+    @action(detail=True, methods=["post"])
     def void(self, request, pk=None):
         txn = self.get_object()
         reason = (request.data.get("reason") or "").strip()
@@ -755,7 +935,14 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
 # ---------------------------------------------------------------------------
 class DebtViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = DebtSerializer
-    permission_classes = [IsStaff]
+    permission_classes = [ActionPermission]
+    required_permission = "credit.view"
+    permission_map = {"GET": "credit.view"}
+    action_permissions = {
+        "repayments": "credit.view",
+        "pay": "credit.collect",
+        "write_off": "credit.write_off",
+    }
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -811,7 +998,7 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
             "debt": DebtSerializer(debt).data,
         }, status=201)
 
-    @action(detail=True, methods=["post"], permission_classes=[IsAdmin])
+    @action(detail=True, methods=["post"])
     def write_off(self, request, pk=None):
         debt = self.get_object()
         reason = (request.data.get("reason") or "").strip()
@@ -825,7 +1012,7 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 @api_view(["GET"])
-@permission_classes([IsStaff])
+@permission_classes([requires("credit.view")])
 def credit_overview(request):
     user = request.user
     receivables = receivables_summary(user=user)
@@ -865,7 +1052,7 @@ def credit_overview(request):
 # Dashboard
 # ---------------------------------------------------------------------------
 @api_view(["GET"])
-@permission_classes([IsStaff])
+@permission_classes([requires("dashboard.view")])
 def dashboard(request):
     """
     Everything the home screen shows, in one round trip.
@@ -967,27 +1154,40 @@ def dashboard(request):
             products.needs_attention().order_by("stock_quantity")[:5],
             many=True, context={"request": request},
         ).data,
-        "can_view_financials": user.can_view_financials,
+        # Kept for older builds of the app; `permissions` below is the
+        # authoritative list and new screens should read that instead.
+        "can_view_financials": user.can_view_costs,
         "is_admin": user.is_admin,
+        "can_view_costs": user.can_view_costs,
+        "can_view_profit": user.can_view_profit,
+        "permissions": sorted(user.effective_permissions),
+        "data_scope": user.data_scope,
         "scope": "all" if sees_everything(user) else "own",
     }
 
-    # Profit and stock valuation never reach a Manager's device.
-    if user.can_view_financials:
-        month_profit = profit_summary(month_start, today, user=user)
+    # Cost and profit figures never reach a device that may not show them.
+    if user.can_view_costs or user.can_view_profit:
+        financials = {}
+        if user.can_view_profit:
+            month_profit = profit_summary(month_start, today, user=user)
+            financials.update(
+                {
+                    "month_cogs": str(month_profit["cogs"]),
+                    "month_gross_profit": str(month_profit["gross_profit"]),
+                    "month_margin_percent": str(month_profit["margin_percent"]),
+                }
+            )
         valuation = inventory_valuation(user=user)
-        payload["financials"] = {
-            "month_cogs": str(month_profit["cogs"]),
-            "month_gross_profit": str(month_profit["gross_profit"]),
-            "month_margin_percent": str(month_profit["margin_percent"]),
-            "stock_cost_value": str(valuation["cost_value"]),
-            "stock_retail_value": str(valuation["retail_value"]),
-            "potential_profit": str(valuation["potential_profit"]),
-        }
+        if user.can_view_costs:
+            financials["stock_cost_value"] = str(valuation["cost_value"])
+            financials["stock_retail_value"] = str(valuation["retail_value"])
+        if user.can_view_profit:
+            financials["potential_profit"] = str(valuation["potential_profit"])
+        payload["financials"] = financials
 
-    # Per-manager breakdown. Only an Admin has more than one row to compare,
-    # so a Manager is not shown a one-line table of their own total again.
-    if sees_everything(user):
+    # Per-person breakdown. Only somebody who can see more than their own
+    # records has more than one row to compare.
+    if user.data_scope in ("ALL", "TEAM"):
         payload["by_manager"] = [
             {
                 "name": row["name"],
@@ -1003,9 +1203,9 @@ def dashboard(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAdmin])
+@permission_classes([requires("report.profit")])
 def profit_report(request):
-    """Admin only. Deliberately a separate endpoint from the dashboard."""
+    """Deliberately a separate endpoint from the dashboard."""
     def parse(raw, fallback):
         try:
             return dt.date.fromisoformat(raw)
@@ -1027,6 +1227,125 @@ def profit_report(request):
         "count": data["count"],
         "valuation": {k: str(v) for k, v in inventory_valuation(user=user).items()},
     })
+
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+@api_view(["GET"])
+@permission_classes([requires("user.permissions", "role.manage", require_all=False)])
+def permission_catalog(request):
+    """
+    The permission catalogue, so the phone can render the same grid the web
+    app does without hard-coding a list that would go stale the first time a
+    permission is added on the server.
+    """
+    return Response(
+        {
+            "groups": catalog_as_dict(),
+            "total": len(ALL_CODES),
+            "scopes": [
+                {"value": "OWN", "label": "Own records only"},
+                {"value": "TEAM", "label": "Own records and their team's"},
+                {"value": "ALL", "label": "Everything in the business"},
+            ],
+        }
+    )
+
+
+class RoleViewSet(viewsets.ModelViewSet):
+    """
+    Roles, editable from the phone.
+
+    A built-in role can be edited but never deleted or deactivated - half the
+    system reads User.role, and a missing role leaves those accounts with no
+    permissions at all.
+    """
+
+    serializer_class = RoleDefinitionSerializer
+    permission_classes = [HasPermission]
+    required_permission = "role.manage"
+    pagination_class = None
+    queryset = RoleDefinition.objects.all()
+
+    def perform_create(self, serializer):
+        # Permissions are pulled out before the save and applied through the
+        # service afterwards, so the audit entry reads "12 added" rather than
+        # "nothing changed" - the row would already hold them otherwise.
+        ticked = serializer.validated_data.pop("permissions", [])
+        role = serializer.save(is_system=False, permissions=[])
+        apply_role_permissions(
+            role=role,
+            ticked=ticked,
+            editor=self.request.user,
+            source="the mobile app",
+        )
+        log_action(
+            AuditAction.CREATE,
+            instance=role,
+            description=(
+                f"Created role '{role.name}' ({role.code}) from the mobile app."
+            ),
+        )
+
+    def perform_update(self, serializer):
+        role = serializer.instance
+        ticked = serializer.validated_data.pop("permissions", None)
+        if role.is_system:
+            serializer.validated_data.pop("code", None)
+            serializer.validated_data["is_active"] = True
+        obj = serializer.save()
+        if ticked is not None:
+            apply_role_permissions(
+                role=obj, ticked=ticked, editor=self.request.user,
+                source="the mobile app",
+            )
+
+    def perform_destroy(self, instance):
+        if not instance.can_be_deleted:
+            # DRF's ValidationError, not Django's: Django's would escape the
+            # view layer as an unhandled exception and 500 instead of 400.
+            raise APIValidationError(
+                "Built-in roles, and roles still assigned to someone, cannot "
+                "be deleted."
+            )
+        log_action(
+            AuditAction.DELETE,
+            instance=instance,
+            description=f"Deleted role '{instance.name}' from the mobile app.",
+        )
+        instance.delete()
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([requires("settings.view")])
+def system_settings(request):
+    """Business configuration. Reading needs settings.view, writing settings.edit."""
+    conf = SystemSetting.load()
+
+    if request.method == "PATCH":
+        if not request.user.has_access("settings.edit"):
+            return Response(
+                {"detail": "You may view these settings but not change them."},
+                status=403,
+            )
+        serializer = SystemSettingSerializer(conf, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        obj = serializer.save(updated_by=request.user)
+        # The money filter caches the currency symbol for five minutes.
+        from django.core.cache import cache
+
+        from core.templatetags.core_extras import CURRENCY_CACHE_KEY
+
+        cache.delete(CURRENCY_CACHE_KEY)
+        log_action(
+            AuditAction.UPDATE,
+            instance=obj,
+            description="Updated business settings from the mobile app.",
+        )
+        return Response(SystemSettingSerializer(obj).data)
+
+    return Response(SystemSettingSerializer(conf).data)
 
 
 @api_view(["GET"])

@@ -8,11 +8,11 @@ from django.views.generic import CreateView, DetailView, ListView, UpdateView
 from accounts.models import AuditAction
 from accounts.services import diff_instance, log_action
 from core.mixins import (
-    AdminRequiredMixin,
     AuthorStampMixin,
     OwnerScopedMixin,
-    StaffRequiredMixin,
+    PermissionRequiredMixin,
     get_owned_or_404,
+    require,
 )
 from core.scoping import scoped
 
@@ -31,7 +31,8 @@ from .services import adjust_to, restock, return_from_customer, write_off
 # ---------------------------------------------------------------------------
 # Products
 # ---------------------------------------------------------------------------
-class ProductListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class ProductListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    required_permission = "product.view"
     model = Product
     template_name = "inventory/product_list.html"
     context_object_name = "products"
@@ -71,14 +72,15 @@ class ProductListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         ctx["total_products"] = alive.count()
         ctx["low_stock_count"] = alive.low_stock().count()
         ctx["out_of_stock_count"] = alive.out_of_stock().count()
-        if self.request.user.can_view_financials:
+        if self.request.user.can_view_costs:
             ctx["total_stock_value"] = (
                 alive.with_stock_value().aggregate(t=Sum("stock_value"))["t"] or 0
             )
         return ctx
 
 
-class ProductDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
+class ProductDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
+    required_permission = "product.view"
     model = Product
     template_name = "inventory/product_detail.html"
     context_object_name = "product"
@@ -102,7 +104,8 @@ class ProductDetailView(OwnerScopedMixin, StaffRequiredMixin, DetailView):
         return ctx
 
 
-class ProductCreateView(StaffRequiredMixin, AuthorStampMixin, CreateView):
+class ProductCreateView(PermissionRequiredMixin, AuthorStampMixin, CreateView):
+    required_permission = "product.create"
     model = Product
     form_class = ProductForm
     template_name = "inventory/product_form.html"
@@ -129,7 +132,8 @@ class ProductCreateView(StaffRequiredMixin, AuthorStampMixin, CreateView):
         return response
 
 
-class ProductUpdateView(OwnerScopedMixin, StaffRequiredMixin, AuthorStampMixin, UpdateView):
+class ProductUpdateView(OwnerScopedMixin, PermissionRequiredMixin, AuthorStampMixin, UpdateView):
+    required_permission = "product.edit"
     model = Product
     form_class = ProductForm
     template_name = "inventory/product_form.html"
@@ -168,10 +172,13 @@ class ProductUpdateView(OwnerScopedMixin, StaffRequiredMixin, AuthorStampMixin, 
 
 
 def product_delete(request, pk):
-    """Soft delete. Admin only - the record and its history survive."""
-    if not request.user.is_admin:
-        messages.error(request, "Only an administrator may delete products.")
-        return redirect("core:forbidden")
+    """Soft delete - the record and its history survive."""
+    blocked = require(
+        request, "product.archive",
+        message="You do not have permission to archive a product.",
+    )
+    if blocked:
+        return blocked
 
     product = get_owned_or_404(Product.objects.alive(), request.user, pk=pk)
 
@@ -212,8 +219,12 @@ def _announce_new_lookups(request, form):
 # Stock operations
 # ---------------------------------------------------------------------------
 def product_restock(request, pk):
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "stock.restock",
+        message="You do not have permission to receive stock.",
+    )
+    if blocked:
+        return blocked
 
     product = get_owned_or_404(Product.objects.alive(), request.user, pk=pk)
     form = RestockForm(request.POST or None, user=request.user)
@@ -247,8 +258,12 @@ def product_restock(request, pk):
 
 
 def product_adjust(request, pk):
-    if not request.user.is_authenticated:
-        return redirect("accounts:login")
+    blocked = require(
+        request, "stock.adjust",
+        message="You do not have permission to adjust stock.",
+    )
+    if blocked:
+        return blocked
 
     product = get_owned_or_404(Product.objects.alive(), request.user, pk=pk)
     form = StockAdjustForm(request.POST or None)
@@ -258,10 +273,14 @@ def product_adjust(request, pk):
         qty = form.cleaned_data["quantity"]
         reason = form.cleaned_data["reason"]
 
-        # A stock-take that changes the count is a financial event - Admin only.
-        if mode == "SET" and not request.user.is_admin:
+        # Overwriting a count outright is how shrinkage gets hidden, so it is
+        # a separate permission from recording damage or a return - the same
+        # form, two different levels of trust.
+        if mode == "SET" and not request.user.has_access("stock.recount"):
             messages.error(
-                request, "Only an administrator may overwrite a stock count."
+                request,
+                "You may record damage and returns, but not overwrite a "
+                "counted stock quantity.",
             )
             return redirect("inventory:product_detail", pk=product.pk)
 
@@ -290,11 +309,18 @@ def product_adjust(request, pk):
         return redirect("inventory:product_detail", pk=product.pk)
 
     return render(
-        request, "inventory/product_adjust.html", {"form": form, "product": product}
+        request,
+        "inventory/product_adjust.html",
+        {
+            "form": form,
+            "product": product,
+            "can_recount": request.user.has_access("stock.recount"),
+        },
     )
 
 
-class StockMovementListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
+class StockMovementListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    required_permission = "stock.view_movements"
     model = StockMovement
     template_name = "inventory/stock_movement_list.html"
     context_object_name = "movements"
@@ -326,7 +352,8 @@ class StockMovementListView(OwnerScopedMixin, StaffRequiredMixin, ListView):
         return ctx
 
 
-class LowStockView(StaffRequiredMixin, ListView):
+class LowStockView(PermissionRequiredMixin, ListView):
+    required_permission = "product.view"
     template_name = "inventory/low_stock.html"
     context_object_name = "products"
     paginate_by = 50
@@ -350,14 +377,16 @@ class LowStockView(StaffRequiredMixin, ListView):
 # ---------------------------------------------------------------------------
 # Categories & Suppliers
 # ---------------------------------------------------------------------------
-class CategoryListView(StaffRequiredMixin, ListView):
+class CategoryListView(PermissionRequiredMixin, ListView):
+    required_permission = "catalog.manage"
     model = Category
     template_name = "inventory/category_list.html"
     context_object_name = "categories"
     paginate_by = 30
 
 
-class CategoryCreateView(StaffRequiredMixin, CreateView):
+class CategoryCreateView(PermissionRequiredMixin, CreateView):
+    required_permission = "catalog.manage"
     model = Category
     form_class = CategoryForm
     template_name = "inventory/simple_form.html"
@@ -377,7 +406,8 @@ class CategoryCreateView(StaffRequiredMixin, CreateView):
         return response
 
 
-class CategoryUpdateView(StaffRequiredMixin, UpdateView):
+class CategoryUpdateView(PermissionRequiredMixin, UpdateView):
+    required_permission = "catalog.manage"
     model = Category
     form_class = CategoryForm
     template_name = "inventory/simple_form.html"
@@ -397,7 +427,8 @@ class CategoryUpdateView(StaffRequiredMixin, UpdateView):
         return response
 
 
-class SupplierListView(StaffRequiredMixin, ListView):
+class SupplierListView(PermissionRequiredMixin, ListView):
+    required_permission = "catalog.manage"
     model = Supplier
     template_name = "inventory/supplier_list.html"
     context_object_name = "suppliers"
@@ -413,7 +444,8 @@ class SupplierListView(StaffRequiredMixin, ListView):
         return qs
 
 
-class SupplierCreateView(StaffRequiredMixin, CreateView):
+class SupplierCreateView(PermissionRequiredMixin, CreateView):
+    required_permission = "catalog.manage"
     model = Supplier
     form_class = SupplierForm
     template_name = "inventory/simple_form.html"
@@ -433,7 +465,8 @@ class SupplierCreateView(StaffRequiredMixin, CreateView):
         return response
 
 
-class SupplierUpdateView(StaffRequiredMixin, UpdateView):
+class SupplierUpdateView(PermissionRequiredMixin, UpdateView):
+    required_permission = "catalog.manage"
     model = Supplier
     form_class = SupplierForm
     template_name = "inventory/simple_form.html"
@@ -451,7 +484,9 @@ class SupplierUpdateView(StaffRequiredMixin, UpdateView):
 # ---------------------------------------------------------------------------
 def product_search_api(request):
     """Typeahead/barcode lookup used by the sale entry screen."""
-    if not request.user.is_authenticated:
+    if not request.user.is_authenticated or not request.user.has_access("product.view"):
+        # 403 with an empty list rather than an error body: this is called from
+        # a keystroke handler, and a JSON shape change would break the caller.
         return JsonResponse({"results": []}, status=403)
 
     term = request.GET.get("q", "").strip()
@@ -464,7 +499,7 @@ def product_search_api(request):
         .select_related("category")[:20]
     )
 
-    show_cost = request.user.can_view_financials
+    show_cost = request.user.can_view_costs
     return JsonResponse(
         {
             "results": [

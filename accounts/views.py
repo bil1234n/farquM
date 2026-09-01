@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
-from core.mixins import AdminRequiredMixin, StaffRequiredMixin
+from core.mixins import PermissionRequiredMixin, StaffRequiredMixin, require
 from core.middleware import client_ip
 
 from .forms import (
@@ -19,7 +19,7 @@ from .forms import (
     UserCreateForm,
     UserUpdateForm,
 )
-from .models import AuditAction, AuditLog, Role, User
+from .models import AuditAction, AuditLog, RoleCode, RoleDefinition, User
 from .registration import RegistrationError, register_user, registration_open
 from .services import diff_instance, log_action
 
@@ -130,14 +130,17 @@ def register(request):
 # ---------------------------------------------------------------------------
 # User management - ADMIN ONLY
 # ---------------------------------------------------------------------------
-class UserListView(AdminRequiredMixin, ListView):
+class UserListView(PermissionRequiredMixin, ListView):
+    required_permission = "user.view"
     model = User
     template_name = "accounts/user_list.html"
     context_object_name = "users"
     paginate_by = 25
 
     def get_queryset(self):
-        qs = User.objects.all().order_by("-is_active", "role", "username")
+        qs = User.objects.select_related("manager").order_by(
+            "-is_active", "role", "username"
+        )
         q = self.request.GET.get("q", "").strip()
         role = self.request.GET.get("role", "").strip()
         status = self.request.GET.get("status", "").strip()
@@ -159,31 +162,47 @@ class UserListView(AdminRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        roles = list(RoleDefinition.objects.assignable())
         ctx.update(
             {
-                "roles": Role.choices,
+                "roles": [(r.code, r.name) for r in roles],
+                "role_objects": roles,
                 "q": self.request.GET.get("q", ""),
                 "selected_role": self.request.GET.get("role", ""),
                 "selected_status": self.request.GET.get("status", ""),
                 "admin_count": User.objects.admins().filter(is_active=True).count(),
                 "manager_count": User.objects.managers().filter(is_active=True).count(),
+                "sales_count": User.objects.sales().filter(is_active=True).count(),
+                "can_edit_access": self.request.user.has_access("user.permissions"),
+                "can_create": self.request.user.has_access("user.create"),
+                "can_edit": self.request.user.has_access("user.edit"),
+                "can_reset": self.request.user.has_access("user.reset_password"),
+                "can_deactivate": self.request.user.has_access("user.deactivate"),
             }
         )
         return ctx
 
 
-class UserDetailView(AdminRequiredMixin, DetailView):
+class UserDetailView(PermissionRequiredMixin, DetailView):
+    required_permission = "user.view"
     model = User
     template_name = "accounts/user_detail.html"
     context_object_name = "target_user"
 
     def get_context_data(self, **kwargs):
+        from core.access import access_summary, sensitive_grants
+
         ctx = super().get_context_data(**kwargs)
         ctx["recent_activity"] = AuditLog.objects.filter(user=self.object)[:30]
+        ctx["access"] = access_summary(self.object)
+        ctx["sensitive"] = sensitive_grants(self.object)
+        ctx["can_edit_access"] = self.request.user.has_access("user.permissions")
+        ctx["team"] = self.object.team.filter(is_active=True)
         return ctx
 
 
-class UserCreateView(AdminRequiredMixin, CreateView):
+class UserCreateView(PermissionRequiredMixin, CreateView):
+    required_permission = "user.create"
     model = User
     form_class = UserCreateForm
     template_name = "accounts/user_form.html"
@@ -201,11 +220,21 @@ class UserCreateView(AdminRequiredMixin, CreateView):
             instance=self.object,
             description=f"Created {self.object.get_role_display()} account '{self.object.username}'.",
         )
-        messages.success(self.request, f"User '{self.object.username}' created.")
+        messages.success(
+            self.request,
+            f"User '{self.object.username}' created as "
+            f"{self.object.get_role_display()}.",
+        )
+        if self.request.user.has_access("user.permissions"):
+            messages.info(
+                self.request,
+                "Fine-tune exactly what they can do from Access Control.",
+            )
         return response
 
 
-class UserUpdateView(AdminRequiredMixin, UpdateView):
+class UserUpdateView(PermissionRequiredMixin, UpdateView):
+    required_permission = "user.edit"
     model = User
     form_class = UserUpdateForm
     template_name = "accounts/user_form.html"
@@ -227,7 +256,8 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
         changes = diff_instance(
             before,
             self.object,
-            ["username", "first_name", "last_name", "email", "phone", "role", "is_active"],
+            ["username", "first_name", "last_name", "email", "phone", "role",
+             "manager", "is_active"],
         )
         log_action(
             AuditAction.UPDATE,
@@ -241,9 +271,12 @@ class UserUpdateView(AdminRequiredMixin, UpdateView):
 
 def user_toggle_active(request, pk):
     """Deactivate rather than delete - preserves every historical FK."""
-    if not request.user.is_admin:
-        messages.error(request, "Administrator privileges are required.")
-        return redirect("core:forbidden")
+    blocked = require(
+        request, "user.deactivate",
+        message="You do not have permission to activate or deactivate accounts.",
+    )
+    if blocked:
+        return blocked
 
     target = get_object_or_404(User, pk=pk)
 
@@ -253,7 +286,7 @@ def user_toggle_active(request, pk):
 
     if (
         target.is_active
-        and target.role == Role.ADMIN
+        and target.role == RoleCode.ADMIN
         and User.objects.admins().filter(is_active=True).exclude(pk=target.pk).count() == 0
     ):
         messages.error(request, "Cannot deactivate the only remaining administrator.")
@@ -275,9 +308,12 @@ def user_toggle_active(request, pk):
 
 
 def user_reset_password(request, pk):
-    if not request.user.is_admin:
-        messages.error(request, "Administrator privileges are required.")
-        return redirect("core:forbidden")
+    blocked = require(
+        request, "user.reset_password",
+        message="You do not have permission to reset passwords.",
+    )
+    if blocked:
+        return blocked
 
     target = get_object_or_404(User, pk=pk)
     form = AdminPasswordResetForm(request.POST or None)
@@ -359,7 +395,8 @@ def profile(request):
 # ---------------------------------------------------------------------------
 # Audit log - ADMIN ONLY
 # ---------------------------------------------------------------------------
-class AuditLogView(AdminRequiredMixin, ListView):
+class AuditLogView(PermissionRequiredMixin, ListView):
+    required_permission = "audit.view"
     model = AuditLog
     template_name = "accounts/audit_log.html"
     context_object_name = "entries"

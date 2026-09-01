@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% load static core_extras %}
+{% block title %}Access &middot; {{ target_user.display_name }}{% endblock %}
+{% block page_title %}Access &mdash; {{ target_user.display_name }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    <a href="{% url 'core:access_list' %}">Access Control</a> &rsaquo; @{{ target_user.username }}
+  </div>
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+<form method="post" id="accessForm">
+  {% csrf_token %}
+
+  <div class="row g-3">
+    {# ---- Left: identity, role, scope ---------------------------------- #}
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex align-items-center gap-3 mb-3">
+            {% if target_user.avatar_url %}
+              <img src="{{ target_user.avatar_url }}" alt="" class="avatar" style="object-fit:cover;padding:0">
+            {% else %}
+              <div class="avatar">{{ target_user|initials }}</div>
+            {% endif %}
+            <div class="min-w-0">
+              <div class="fw-semibold text-truncate">{{ target_user.display_name }}</div>
+              <div class="text-muted-sm">@{{ target_user.username }}</div>
+              {% if not target_user.is_active %}
+                <span class="badge text-bg-dark mt-1">Deactivated</span>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if editing_self %}
+            <div class="alert alert-warning small py-2">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              This is your own account. The permissions that keep this page
+              reachable are locked on, so a mistake here cannot lock you out.
+            </div>
+          {% endif %}
+
+          {% for field in form %}
+            <div class="mb-3">
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+              {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+          {% endfor %}
+
+          <div class="scope-help">
+            {% for value, label, blurb in scopes %}
+              <div class="scope-row {% if access.data_scope == value %}is-current{% endif %}">
+                <i class="bi bi-{% if value == 'ALL' %}globe2{% elif value == 'TEAM' %}people{% else %}lock{% endif %}"></i>
+                <div>
+                  <div class="fw-semibold">{{ label }}</div>
+                  <div class="text-muted-sm">{{ blurb }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <h3 class="h6">Effective access</h3>
+          <div class="d-flex align-items-baseline gap-2 mb-2">
+            <span class="display-6 fw-bold" id="permTally">{{ access.permission_count }}</span>
+            <span class="text-muted-sm">of {{ total_permissions }} permissions</span>
+          </div>
+          <div class="progress perm-bar mb-3">
+            <div class="progress-bar bg-primary" id="permTallyBar"
+                 style="width:{% widthratio access.permission_count total_permissions 100 %}%"></div>
+          </div>
+          <dl class="kv">
+            <dt>Added for this person</dt><dd class="text-success">{{ access.extra_count }}</dd>
+            <dt>Removed for this person</dt><dd class="text-danger">{{ access.denied_count }}</dd>
+            <dt>Data scope</dt><dd>{{ access.data_scope_label }}</dd>
+          </dl>
+
+          {% if sensitive %}
+            <div class="text-muted-sm mt-3 mb-1">Sensitive permissions held:</div>
+            <ul class="sensitive-list">
+              {% for label in sensitive %}<li><i class="bi bi-exclamation-triangle-fill"></i>{{ label }}</li>{% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="d-grid gap-2">
+        <button class="btn btn-primary"><i class="bi bi-check2 me-1"></i> Save access</button>
+        <a href="{% url 'core:access_list' %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </div>
+
+    {# ---- Right: the grid ---------------------------------------------- #}
+    <div class="col-lg-8">
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <div class="legend">
+          <span class="pill pill-inherited">From role</span>
+          <span class="pill pill-granted">Added</span>
+          <span class="pill pill-denied">Removed</span>
+        </div>
+        <div class="ms-auto d-flex gap-2">
+          <input type="search" class="form-control form-control-sm" id="permSearch"
+                 placeholder="Filter permissions..." style="max-width:220px">
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="permResetToRole">
+            <i class="bi bi-arrow-counterclockwise me-1"></i> Match role
+          </button>
+        </div>
+      </div>
+
+      {% include "partials/permission_matrix.html" with show_state=True readonly=False %}
+    </div>
+  </div>
+</form>
+
+{% if not editing_self %}
+  <form method="post" action="{% url 'core:user_access_reset' target_user.pk %}" class="mt-3">
+    {% csrf_token %}
+    <div class="card border-warning-subtle">
+      <div class="card-body d-flex flex-wrap align-items-center gap-3">
+        <div class="flex-grow-1">
+          <h3 class="h6 mb-1">Reset to the plain role</h3>
+          <p class="text-muted-sm mb-0">
+            Removes every individual grant and denial, leaving
+            {{ target_user.display_name }} with exactly what
+            {{ access.role_name }} gives. The role itself is not changed.
+          </p>
+        </div>
+        <button class="btn btn-outline-warning btn-sm"
+                onclick="return confirm('Remove all individual permission changes for {{ target_user.display_name|escapejs }}?')">
+          <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+        </button>
+      </div>
+    </div>
+  </form>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/permission-matrix.js' %}"></script>
+{% endblock %}

@@ -90,10 +90,25 @@ def create_sale(
             )
         provisional_total += (price * qty) - line_disc
 
+    # Discounts are checked here, not only in the form, because this is the
+    # one doorway every client uses. A hand-crafted POST or an API call that
+    # bypassed the form would otherwise give money away.
+    any_line_discount = any(money(l.get("line_discount", ZERO)) > ZERO for l in cart)
+    if (discount_amount > ZERO or any_line_discount) and not _may(user, "sale.discount"):
+        raise SaleError(
+            "You do not have permission to apply a discount. Record the sale "
+            "at full price, or ask someone who can approve the discount."
+        )
+
     provisional_total = money(provisional_total - discount_amount + tax_amount)
     credit_needed = money(max(provisional_total - amount_paid, ZERO))
 
     if credit_needed > ZERO:
+        if not _may(user, "sale.credit"):
+            raise SaleError(
+                "You do not have permission to sell on credit. Collect the "
+                f"full amount ({provisional_total}) to complete this sale."
+            )
         _validate_credit_eligibility(customer, credit_needed)
 
     # --- 2. Header ----------------------------------------------------------
@@ -149,6 +164,12 @@ def create_sale(
     return txn
 
 
+def _may(user, code: str) -> bool:
+    """Permission check that tolerates a user object without the method."""
+    checker = getattr(user, "has_access", None)
+    return bool(checker and checker(code))
+
+
 def _validate_ownership(user, cart, customer):
     """
     Every product and the customer must belong to the person making the sale.
@@ -182,7 +203,13 @@ def _validate_credit_eligibility(customer, credit_needed: Decimal):
         )
     if not customer.is_active:
         raise SaleError(f"Customer '{customer.name}' is inactive.")
-    if not customer.is_credit_approved:
+
+    # Whether explicit approval is required is a business decision an
+    # administrator makes once, in Settings. Blocked accounts and credit
+    # limits below are NOT optional - those are per-customer judgements
+    # somebody already made about this person, and a global switch has no
+    # business overriding them.
+    if not customer.is_credit_approved and _credit_approval_required():
         raise SaleError(
             f"'{customer.name}' is not approved for credit. "
             "An administrator must approve them first."
@@ -204,6 +231,16 @@ def _validate_credit_eligibility(customer, credit_needed: Decimal):
                 f"Limit: {account.credit_limit}, current debt: "
                 f"{account.outstanding_balance}, this sale adds: {credit_needed}."
             )
+
+
+def _credit_approval_required() -> bool:
+    try:
+        from core.models import SystemSetting
+
+        return bool(SystemSetting.load().require_credit_approval)
+    except Exception:
+        # Fail closed: if the setting cannot be read, keep the stricter rule.
+        return True
 
 
 @db_transaction.atomic

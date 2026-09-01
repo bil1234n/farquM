@@ -40,24 +40,53 @@
       </div>
     </div>
 
+    {% comment %}
+      Read from the user's ACTUAL permission set, not from their role name.
+      Two people with the same role can legitimately differ here, and a list
+      that says "Manager" when the answer is "Manager, minus discounts" is
+      worse than no list at all.
+    {% endcomment %}
     <div class="card">
-      <div class="card-header"><i class="bi bi-key me-1"></i> What your role allows</div>
+      <div class="card-header"><i class="bi bi-key me-1"></i> What you can do</div>
       <div class="card-body small">
-        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Record sales and manage customers</div>
-        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Create and edit products</div>
-        <div class="py-1"><i class="bi bi-check-circle-fill text-success me-1"></i> Collect debt repayments</div>
         <div class="py-1">
-          <i class="bi bi-{% if user.can_view_financials %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
-          View cost prices and profit margins</div>
+          <i class="bi bi-{% if user|can:'sale.create' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Record sales</div>
         <div class="py-1">
-          <i class="bi bi-{% if user.can_manage_users %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
-          Manage users and roles</div>
+          <i class="bi bi-{% if user|can:'sale.credit' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Sell on credit</div>
         <div class="py-1">
-          <i class="bi bi-{% if user.can_delete_records %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
-          Void sales, write off debts, delete records</div>
+          <i class="bi bi-{% if user|can:'customer.create' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Register customers</div>
         <div class="py-1">
-          <i class="bi bi-{% if user.can_change_settings %}check-circle-fill text-success{% else %}x-circle-fill text-danger{% endif %} me-1"></i>
+          <i class="bi bi-{% if user|can:'credit.collect' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Collect debt repayments</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'product.create,product.edit' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Create and edit products</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'stock.restock' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Receive and adjust stock</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'product.view_cost' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          See cost prices</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'report.profit' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          See profit and margins</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'sale.void,credit.write_off,credit.reverse_payment' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Void sales and write off debts</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'user.view' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
+          Manage staff accounts</div>
+        <div class="py-1">
+          <i class="bi bi-{% if user|can:'settings.edit' %}check-circle-fill text-success{% else %}x-circle-fill text-muted{% endif %} me-1"></i>
           Change system settings</div>
+      </div>
+      <div class="card-footer bg-light small text-muted">
+        <i class="bi bi-eye me-1"></i>
+        {{ user.scope_label }}.
+        {% if user.manager %}You sell stock belonging to {{ user.manager.display_name }}.{% endif %}
       </div>
     </div>
   </div>

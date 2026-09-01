@@ -8,7 +8,7 @@ from django.views.generic import TemplateView
 
 from accounts.models import AuditAction
 from accounts.services import log_action
-from core.mixins import AdminRequiredMixin, StaffRequiredMixin
+from core.mixins import PermissionRequiredMixin, require
 from core.scoping import scoped, sees_everything
 from credit.models import DebtRecord
 from inventory.models import Product, StockMovement
@@ -27,12 +27,17 @@ from .selectors import (
 )
 
 
-class DashboardView(StaffRequiredMixin, TemplateView):
+class DashboardView(PermissionRequiredMixin, TemplateView):
     """
-    The landing page. Shows the same operational picture to both roles,
-    but every financial panel is gated on user.can_view_financials.
+    The landing page.
+
+    Everyone sees the operational picture for the records they own. Cost and
+    profit panels are gated separately, because "may see what the stock is
+    worth" and "may see what we make on it" are different amounts of trust -
+    a manager buying stock needs the first and not necessarily the second.
     """
 
+    required_permission = "dashboard.view"
     template_name = "reports/dashboard.html"
 
     def get_context_data(self, **kwargs):
@@ -75,7 +80,12 @@ class DashboardView(StaffRequiredMixin, TemplateView):
                 "product_count": products.filter(is_active=True).count(),
                 "customer_count": customers.active().count(),
                 "debtor_count": customers.with_debt().count(),
-                "show_financials": user.can_view_financials,
+                "show_financials": user.can_view_costs,
+                "show_costs": user.can_view_costs,
+                "show_profit": user.can_view_profit,
+                "can_sell": user.has_access("sale.create"),
+                "can_see_credit": user.has_access("credit.view"),
+                "can_see_products": user.has_access("product.view"),
                 # Tells the template whether it is looking at the whole
                 # business or one person's slice, so the headings can say so
                 # rather than leaving an admin guessing.
@@ -83,22 +93,29 @@ class DashboardView(StaffRequiredMixin, TemplateView):
             }
         )
 
-        # ---- Admin-only financial panels ---------------------------------
-        if user.can_view_financials:
+        # ---- Profit panels ------------------------------------------------
+        if user.can_view_profit:
             ctx["today_profit"] = profit_summary(today, today, user=user)
             ctx["month_profit"] = profit_summary(month_start, today, user=user)
+
+        # ---- Stock valuation ----------------------------------------------
+        # Needed by both the cost card and the "potential profit" card, so it
+        # is fetched when either permission is held rather than only for cost.
+        if user.can_view_costs or user.can_view_profit:
             ctx["valuation"] = inventory_valuation(user=user)
 
-        # ---- Per-manager comparison, admins only -------------------------
-        if sees_everything(user):
+        # ---- Per-person comparison ----------------------------------------
+        # Only useful to somebody who can see more than one person's figures.
+        if user.data_scope in ("ALL", "TEAM"):
             ctx["by_manager"] = sales_by_staff(month_start, today, user=user)
 
         return ctx
 
 
-class SalesReportView(StaffRequiredMixin, TemplateView):
-    """Operational sales report - safe for Managers (no cost or margin)."""
+class SalesReportView(PermissionRequiredMixin, TemplateView):
+    """Operational sales report. Cost and margin columns are gated."""
 
+    required_permission = "report.sales"
     template_name = "reports/sales_report.html"
 
     def get_context_data(self, **kwargs):
@@ -123,19 +140,22 @@ class SalesReportView(StaffRequiredMixin, TemplateView):
                 "transaction_count": transactions.count(),
                 "top_products": top_products(
                     start, end, limit=15,
-                    include_cost=user.can_view_financials, user=user,
+                    include_cost=user.can_view_profit, user=user,
                 ),
-                "show_financials": user.can_view_financials,
+                "show_financials": user.can_view_profit,
+                "show_costs": user.can_view_costs,
+                "show_profit": user.can_view_profit,
                 "by_staff": sales_by_staff(start, end, user=user),
-                "show_staff_table": sees_everything(user),
+                "show_staff_table": user.data_scope in ("ALL", "TEAM"),
             }
         )
         return ctx
 
 
-class ProfitReportView(AdminRequiredMixin, TemplateView):
-    """ADMIN ONLY. Cost of goods, gross profit and per-product margins."""
+class ProfitReportView(PermissionRequiredMixin, TemplateView):
+    """Cost of goods, gross profit and per-product margins."""
 
+    required_permission = "report.profit"
     template_name = "reports/profit_report.html"
 
     def get_context_data(self, **kwargs):
@@ -157,7 +177,8 @@ class ProfitReportView(AdminRequiredMixin, TemplateView):
         return ctx
 
 
-class InventoryReportView(StaffRequiredMixin, TemplateView):
+class InventoryReportView(PermissionRequiredMixin, TemplateView):
+    required_permission = "report.inventory"
     template_name = "reports/inventory_report.html"
 
     def get_context_data(self, **kwargs):
@@ -179,17 +200,19 @@ class InventoryReportView(StaffRequiredMixin, TemplateView):
                     scoped(StockMovement.objects.all(), user)
                     .select_related("product", "performed_by")[:30]
                 ),
-                "show_financials": user.can_view_financials,
+                "show_financials": user.can_view_costs,
+                "show_costs": user.can_view_costs,
             }
         )
-        if user.can_view_financials:
+        if user.can_view_costs:
             ctx["valuation"] = inventory_valuation(user=user)
         return ctx
 
 
-class ReceivablesReportView(StaffRequiredMixin, TemplateView):
-    """Accounts receivable / borrower report. Managers may collect debts."""
+class ReceivablesReportView(PermissionRequiredMixin, TemplateView):
+    """Accounts receivable / borrower report."""
 
+    required_permission = "report.receivables"
     template_name = "reports/receivables_report.html"
 
     def get_context_data(self, **kwargs):
@@ -221,16 +244,21 @@ class ReceivablesReportView(StaffRequiredMixin, TemplateView):
 # ---------------------------------------------------------------------------
 def export_sales_csv(request):
     """
-    CSV export. Cost and profit columns are only written for an Admin -
-    a Manager exporting the same URL gets the operational columns only.
-    """
-    if not request.user.is_authenticated:
-        from django.shortcuts import redirect
+    CSV export.
 
-        return redirect("accounts:login")
+    Cost and profit columns are written only for someone who may see them. A
+    user without `report.profit` hitting this same URL gets the operational
+    columns and nothing else - the filter is on the writer, not on the link.
+    """
+    blocked = require(
+        request, "report.export",
+        message="You do not have permission to export data.",
+    )
+    if blocked:
+        return blocked
 
     start, end = period_bounds(request)
-    show_financials = request.user.can_view_financials
+    show_financials = request.user.can_view_profit
 
     response = HttpResponse(content_type="text/csv")
     response["Content-Disposition"] = (
@@ -283,10 +311,12 @@ def export_sales_csv(request):
 
 
 def export_receivables_csv(request):
-    if not request.user.is_authenticated:
-        from django.shortcuts import redirect
-
-        return redirect("accounts:login")
+    blocked = require(
+        request, "report.export",
+        message="You do not have permission to export data.",
+    )
+    if blocked:
+        return blocked
 
     response = HttpResponse(content_type="text/csv")
     response["Content-Disposition"] = (

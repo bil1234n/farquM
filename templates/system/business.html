@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Business settings{% endblock %}
+{% block page_title %}Business details{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    {% if conf.updated_at %}Last changed {{ conf.updated_at|date:"d M Y, H:i" }}
+      {% if conf.updated_by %}by {{ conf.updated_by.display_name }}{% endif %}
+    {% else %}Never changed{% endif %}
+  </div>
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+{% if not can_edit %}
+  <div class="alert alert-secondary small">
+    <i class="bi bi-eye me-1"></i>
+    You can see these settings but not change them. Changing them needs the
+    <em>Change system settings</em> permission.
+  </div>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <div class="row g-3">
+
+    <div class="col-lg-7">
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3"><i class="bi bi-shop me-1"></i> Identity</h2>
+          <p class="text-muted-sm">
+            Printed on receipts and shown in the sidebar. Leave a field blank to
+            keep using the value from the server configuration &mdash; the grey
+            text in each box shows what that is.
+          </p>
+          <div class="row g-3">
+            {% for field in form %}
+              {% if forloop.counter <= 5 %}
+                <div class="col-md-6">
+                  <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                  {{ field }}
+                  {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                  {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h6 mb-3"><i class="bi bi-gear me-1"></i> Operational defaults</h2>
+          <div class="row g-3">
+            {% for field in form %}
+              {% if forloop.counter > 5 %}
+                <div class="{% if field.field.widget.input_type == 'checkbox' %}col-12{% else %}col-md-6{% endif %}">
+                  {% if field.field.widget.input_type == 'checkbox' %}
+                    <div class="form-check">
+                      {{ field }}
+                      <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                      {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                    </div>
+                  {% else %}
+                    <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                    {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                  {% endif %}
+                  {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      {% if can_edit %}
+        <button class="btn btn-primary"><i class="bi bi-check2 me-1"></i> Save settings</button>
+      {% endif %}
+    </div>
+
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-3">In effect now</h2>
+          <dl class="kv">
+            <dt>Business name</dt><dd>{{ conf.name }}</dd>
+            <dt>Phone</dt><dd>{{ conf.phone|default:"&mdash;" }}</dd>
+            <dt>Address</dt><dd>{{ conf.address|default:"&mdash;" }}</dd>
+            <dt>Currency</dt><dd>{{ conf.currency }} <span class="text-muted-sm">e.g. {{ 1234.5|money }}</span></dd>
+            <dt>Credit terms</dt><dd>{{ conf.default_credit_due_days }} days</dd>
+          </dl>
+
+          <hr>
+          <h3 class="h6">Set on the server</h3>
+          <p class="text-muted-sm">
+            These come from environment variables and cannot be changed here,
+            because getting them wrong from a web form would take the site down.
+          </p>
+          <dl class="kv">
+            <dt>Registration passcodes</dt>
+            <dd>{% if registration_open %}
+                  <span class="badge text-bg-success">Configured</span>
+                {% else %}<span class="badge text-bg-secondary">Not set</span>{% endif %}</dd>
+            <dt>Time zone</dt><dd>{{ TIME_ZONE|default:"Africa/Addis_Ababa" }}</dd>
+            <dt>Debug mode</dt>
+            <dd>{% if DEBUG %}<span class="badge text-bg-warning">On</span>
+                {% else %}<span class="badge text-bg-success">Off</span>{% endif %}</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

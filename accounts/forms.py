@@ -2,11 +2,96 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.password_validation import validate_password
 
-from .models import Role, User
+from .models import RoleCode, RoleDefinition, User
 from .registration import available_roles
 
 INPUT = "form-control"
 SELECT = "form-select"
+
+
+def role_choices(include_blank=False):
+    """
+    Every assignable role, read from the database.
+
+    A hard-coded list here would silently exclude any role an administrator
+    created, which is the whole feature.
+    """
+    choices = RoleDefinition.objects.assignable().as_choices()
+    if include_blank:
+        return [("", "All roles")] + choices
+    return choices
+
+
+class RoleFieldMixin:
+    """Turns the plain `role` CharField into a populated dropdown."""
+
+    def _install_role_choices(self):
+        if "role" not in self.fields:
+            return
+        choices = role_choices()
+        self.fields["role"] = forms.ChoiceField(
+            choices=choices,
+            label="Role",
+            help_text=(
+                "The starting set of permissions. Fine-tune this person "
+                "afterwards from Access Control."
+            ),
+            widget=forms.Select(attrs={"class": SELECT}),
+        )
+        if self.instance and self.instance.pk:
+            self.fields["role"].initial = self.instance.role
+
+    def clean_role(self):
+        role = self.cleaned_data["role"]
+        if not RoleDefinition.objects.filter(code=role, is_active=True).exists():
+            raise forms.ValidationError("That role no longer exists.")
+        # Guard: never let the last remaining administrator be demoted.
+        if (
+            self.instance.pk
+            and self.instance.role == RoleCode.ADMIN
+            and role != RoleCode.ADMIN
+            and not User.objects.admins()
+            .filter(is_active=True)
+            .exclude(pk=self.instance.pk)
+            .exists()
+        ):
+            raise forms.ValidationError(
+                "This is the only active administrator. Promote another user first."
+            )
+        return role
+
+
+class ManagerFieldMixin:
+    """Adds the 'reports to' dropdown, and stops a reporting loop."""
+
+    def _install_manager_choices(self):
+        if "manager" not in self.fields:
+            return
+        qs = User.objects.filter(is_active=True).exclude(role=RoleCode.SALES)
+        if self.instance and self.instance.pk:
+            # Somebody cannot report to themselves, and letting them try just
+            # produces a scoping loop nobody can debug from the UI.
+            qs = qs.exclude(pk=self.instance.pk)
+        self.fields["manager"].queryset = qs.order_by("username")
+        self.fields["manager"].required = False
+        self.fields["manager"].empty_label = "Nobody - works independently"
+        self.fields["manager"].label = "Reports to"
+        self.fields["manager"].help_text = (
+            "A sales user sells from this person's stock. Their own sales, "
+            "customers and debts still belong to them."
+        )
+
+    def clean_manager(self):
+        manager = self.cleaned_data.get("manager")
+        if manager and self.instance.pk and manager.pk == self.instance.pk:
+            raise forms.ValidationError("A user cannot report to themselves.")
+        # One hop is enough to catch A->B->A. Deeper chains are not possible
+        # here because only non-sales users can be chosen as a manager.
+        if manager and self.instance.pk and manager.manager_id == self.instance.pk:
+            raise forms.ValidationError(
+                f"{manager.display_name} already reports to this user."
+            )
+        return manager
 
 
 class StyledFormMixin:
@@ -42,7 +127,7 @@ class LoginForm(StyledFormMixin, AuthenticationForm):
     }
 
 
-class UserCreateForm(StyledFormMixin, UserCreationForm):
+class UserCreateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCreationForm):
     class Meta:
         model = User
         fields = [
@@ -53,19 +138,19 @@ class UserCreateForm(StyledFormMixin, UserCreationForm):
             "phone",
             "employee_id",
             "role",
+            "manager",
             "is_active",
             "notes",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 2})}
 
-    def clean_role(self):
-        role = self.cleaned_data["role"]
-        if role not in Role.values:
-            raise forms.ValidationError("Invalid role.")
-        return role
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._install_role_choices()
+        self._install_manager_choices()
 
 
-class UserUpdateForm(StyledFormMixin, forms.ModelForm):
+class UserUpdateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, forms.ModelForm):
     """Password is changed separately - never on the profile edit form."""
 
     class Meta:
@@ -78,6 +163,7 @@ class UserUpdateForm(StyledFormMixin, forms.ModelForm):
             "phone",
             "employee_id",
             "role",
+            "manager",
             "is_active",
             "notes",
         ]
@@ -86,26 +172,26 @@ class UserUpdateForm(StyledFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.editing_user = kwargs.pop("editing_user", None)
         super().__init__(*args, **kwargs)
+        self._install_role_choices()
+        self._install_manager_choices()
 
     def clean_is_active(self):
         active = self.cleaned_data["is_active"]
         if not active and self.editing_user and self.instance.pk == self.editing_user.pk:
             raise forms.ValidationError("You cannot deactivate your own account.")
-        return active
-
-    def clean_role(self):
-        role = self.cleaned_data["role"]
-        # Guard: never let the last remaining admin demote themselves.
         if (
-            self.instance.pk
-            and self.instance.role == Role.ADMIN
-            and role != Role.ADMIN
-            and User.objects.admins().filter(is_active=True).exclude(pk=self.instance.pk).count() == 0
+            not active
+            and self.instance.pk
+            and self.instance.role == RoleCode.ADMIN
+            and not User.objects.admins()
+            .filter(is_active=True)
+            .exclude(pk=self.instance.pk)
+            .exists()
         ):
             raise forms.ValidationError(
-                "This is the only active administrator. Promote another user first."
+                "Cannot deactivate the only remaining administrator."
             )
-        return role
+        return active
 
 
 class AdminPasswordResetForm(StyledFormMixin, forms.Form):

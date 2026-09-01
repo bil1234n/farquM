@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Access Control{% endblock %}
+{% block page_title %}Access Control{% endblock %}
+{% block breadcrumb %}<div class="crumb">Who may do what, and whose records they see</div>{% endblock %}
+
+{% block page_actions %}
+  {% if user|can:"user.create" %}
+    <a href="{% url 'accounts:user_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-person-plus me-1"></i> Add User</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5"><label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+             placeholder="Username, name or email..."></div>
+    <div class="col-md-3"><label class="form-label">Role</label>
+      <select name="role" class="form-select form-select-sm">
+        <option value="">All roles</option>
+        {% for role in roles %}
+          <option value="{{ role.code }}" {% if selected_role == role.code %}selected{% endif %}>{{ role.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="col-md-3"><label class="form-label">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All</option>
+        <option value="active" {% if selected_status == 'active' %}selected{% endif %}>Active</option>
+        <option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>Deactivated</option>
+        <option value="custom" {% if selected_status == 'custom' %}selected{% endif %}>Customised access</option>
+      </select></div>
+    <div class="col-md-1 d-grid"><button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button></div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Role</th>
+          <th>Sees</th>
+          <th>Sells stock of</th>
+          <th style="min-width:190px">Permissions</th>
+          <th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% with u=row.user a=row.access %}
+            <tr class="{% if not u.is_active %}table-secondary{% endif %}">
+              <td>
+                <div class="d-flex align-items-center gap-2">
+                  <div class="avatar" style="width:30px;height:30px;font-size:.68rem">{{ u|initials }}</div>
+                  <div>
+                    <a href="{% url 'core:user_access' u.pk %}" class="fw-semibold">{{ u.display_name }}</a>
+                    <div class="text-muted-sm">@{{ u.username }}
+                      {% if u.pk == user.pk %}<span class="badge text-bg-info ms-1">You</span>{% endif %}
+                      {% if not u.is_active %}<span class="badge text-bg-dark ms-1">Deactivated</span>{% endif %}</div>
+                  </div>
+                </div>
+              </td>
+              <td>
+                <span class="badge text-bg-{% if a.full_access %}primary{% else %}secondary{% endif %}">{{ a.role_name }}</span>
+                {% if a.is_customised %}
+                  <div><span class="badge text-bg-warning-subtle text-warning-emphasis border border-warning-subtle mt-1">
+                    Customised</span></div>
+                {% endif %}
+              </td>
+              <td class="text-muted-sm">
+                {% if a.data_scope == 'ALL' %}<i class="bi bi-globe2 me-1"></i>Everything
+                {% elif a.data_scope == 'TEAM' %}<i class="bi bi-people me-1"></i>Own + team
+                {% else %}<i class="bi bi-lock me-1"></i>Own only{% endif %}
+              </td>
+              <td class="text-muted-sm">{{ a.manager|default:"&mdash;" }}</td>
+              <td>
+                {% if a.full_access %}
+                  <div class="text-muted-sm">Full access</div>
+                  <div class="progress perm-bar"><div class="progress-bar bg-primary" style="width:100%"></div></div>
+                {% else %}
+                  <div class="text-muted-sm">{{ a.permission_count }} of {{ a.total_permissions }}
+                    {% if a.extra_count %}<span class="text-success">+{{ a.extra_count }}</span>{% endif %}
+                    {% if a.denied_count %}<span class="text-danger">&minus;{{ a.denied_count }}</span>{% endif %}
+                  </div>
+                  <div class="progress perm-bar">
+                    <div class="progress-bar bg-secondary"
+                         style="width:{% widthratio a.permission_count a.total_permissions 100 %}%"></div>
+                  </div>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <a href="{% url 'core:user_access' u.pk %}" class="btn btn-outline-primary btn-sm">
+                  <i class="bi bi-sliders2 me-1"></i> Edit access</a>
+              </td>
+            </tr>
+          {% endwith %}
+        {% empty %}
+          <tr><td colspan="6"><div class="empty-state"><i class="bi bi-people"></i>No users match your filters.</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

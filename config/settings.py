@@ -298,7 +298,11 @@ DEFAULT_CREDIT_DUE_DAYS = config("DEFAULT_CREDIT_DUE_DAYS", default=30, cast=int
 # an unconfigured deployment cannot be signed up to by strangers.
 REGISTRATION_PASSCODE_ADMIN = config("PASSCODE_ADMIN", default="")
 REGISTRATION_PASSCODE_MANAGER = config("PASSCODE_MANAGER", default="")
+REGISTRATION_PASSCODE_SALES = config("PASSCODE_SALES", default="")
 REGISTRATION_ENABLED = config("REGISTRATION_ENABLED", default=True, cast=bool)
+# An administrator can also switch self-registration off from System Settings
+# without a redeploy - see core.models.SystemSetting.allow_self_registration.
+# Both have to be on for the registration page to work.
 
 # ---------------------------------------------------------------------------
 # Logging

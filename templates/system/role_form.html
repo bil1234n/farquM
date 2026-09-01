@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% load static core_extras %}
+{% block title %}{% if is_new %}New role{% else %}{{ role.name }}{% endif %}{% endblock %}
+{% block page_title %}{% if is_new %}New role{% else %}Edit role &mdash; {{ role.name }}{% endif %}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb"><a href="{% url 'core:role_list' %}">Roles</a>
+    &rsaquo; {% if is_new %}New{% else %}{{ role.code }}{% endif %}</div>
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+<form method="post" id="accessForm">
+  {% csrf_token %}
+  <div class="row g-3">
+
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="card-body">
+          {% if role.is_system %}
+            <div class="alert alert-info small py-2">
+              <i class="bi bi-shield-lock me-1"></i>
+              A built-in role. You can change what it grants; you cannot rename
+              its code, switch it off or delete it.
+            </div>
+          {% endif %}
+
+          {% for field in form %}
+            <div class="mb-3">
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+              {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+          {% endfor %}
+
+          {% if not is_new %}
+            <dl class="kv">
+              <dt>Users holding this role</dt><dd>{{ user_count }}</dd>
+            </dl>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="d-grid gap-2">
+        <button class="btn btn-primary">
+          <i class="bi bi-check2 me-1"></i>
+          {% if is_new %}Create role{% else %}Save role{% endif %}
+        </button>
+        <a href="{% url 'core:role_list' %}" class="btn btn-outline-secondary">Cancel</a>
+      </div>
+    </div>
+
+    <div class="col-lg-8">
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <div class="text-muted-sm">
+          <span id="permTally">0</span> of {{ total_permissions }} permissions selected
+        </div>
+        <div class="ms-auto d-flex gap-2">
+          <input type="search" class="form-control form-control-sm" id="permSearch"
+                 placeholder="Filter permissions..." style="max-width:220px">
+        </div>
+      </div>
+
+      {% include "partials/permission_matrix.html" with show_state=False readonly=False %}
+    </div>
+  </div>
+</form>
+
+{% if not is_new %}
+  <div class="row g-3 mt-1">
+    {% if can_reset %}
+      <div class="col-lg-6">
+        <form method="post" action="{% url 'core:role_reset' role.pk %}">
+          {% csrf_token %}
+          <div class="card h-100 border-warning-subtle">
+            <div class="card-body">
+              <h3 class="h6">Restore defaults</h3>
+              <p class="text-muted-sm">
+                Put this role back to the permissions it shipped with. Affects
+                {{ user_count }} user{{ user_count|pluralize }}.
+              </p>
+              <button class="btn btn-outline-warning btn-sm"
+                      onclick="return confirm('Restore {{ role.name|escapejs }} to its shipped defaults?')">
+                <i class="bi bi-arrow-counterclockwise me-1"></i> Restore defaults
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if not role.is_system %}
+      <div class="col-lg-6">
+        <form method="post" action="{% url 'core:role_delete' role.pk %}">
+          {% csrf_token %}
+          <div class="card h-100 border-danger-subtle">
+            <div class="card-body">
+              <h3 class="h6">Delete this role</h3>
+              {% if user_count %}
+                <p class="text-muted-sm">
+                  {{ user_count }} user{{ user_count|pluralize }} still
+                  hold{{ user_count|pluralize:"s," }} this role. Move them to
+                  another role first &mdash; deleting it would leave them with
+                  no permissions at all.
+                </p>
+                <button class="btn btn-outline-danger btn-sm" disabled>
+                  <i class="bi bi-trash me-1"></i> Delete role</button>
+              {% else %}
+                <p class="text-muted-sm">Nobody holds this role. Safe to remove.</p>
+                <button class="btn btn-outline-danger btn-sm"
+                        onclick="return confirm('Delete the role {{ role.name|escapejs }}?')">
+                  <i class="bi bi-trash me-1"></i> Delete role</button>
+              {% endif %}
+            </div>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/permission-matrix.js' %}"></script>
+{% endblock %}

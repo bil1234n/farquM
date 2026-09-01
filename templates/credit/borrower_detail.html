@@ -8,13 +8,15 @@
 {% endblock %}
 
 {% block page_actions %}
-  {% if account.outstanding_balance > 0 %}
+  {% if account.outstanding_balance > 0 and user|can:"credit.collect" %}
     <a href="{% url 'credit:bulk_repayment' customer.pk %}" class="btn btn-success btn-sm">
       <i class="bi bi-cash-coin me-1"></i> Collect Payment</a>
   {% endif %}
-  <a href="{% url 'sales:customer_detail' customer.pk %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-person me-1"></i> Customer Record</a>
-  {% if user.is_admin %}
+  {% if user|can:"customer.view" %}
+    <a href="{% url 'sales:customer_detail' customer.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-person me-1"></i> Customer Record</a>
+  {% endif %}
+  {% if user|can:"credit.limits" %}
     <a href="{% url 'credit:account_update' account.pk %}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-sliders me-1"></i> Credit Terms</a>
     <a href="{% url 'credit:account_block' account.pk %}" class="btn btn-outline-{% if account.is_blocked %}success{% else %}danger{% endif %} btn-sm">
@@ -125,7 +127,7 @@
                   {% else %}<span class="text-muted-sm">&mdash;</span>{% endif %}
                 </td>
                 <td class="text-end">
-                  {% if user.can_delete_records and not p.is_reversed %}
+                  {% if user|can:"credit.reverse_payment" and not p.is_reversed %}
                     <a href="{% url 'credit:repayment_reverse' p.pk %}" class="btn btn-sm btn-outline-danger" title="Reverse">
                       <i class="bi bi-arrow-counterclockwise"></i></a>
                   {% endif %}

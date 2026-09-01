@@ -5,11 +5,19 @@
 {% block breadcrumb %}<div class="crumb">@{{ target_user.username }} &middot; {{ target_user.get_role_display }}</div>{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'accounts:user_update' target_user.pk %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-pencil me-1"></i> Edit</a>
-  <a href="{% url 'accounts:user_reset_password' target_user.pk %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-key me-1"></i> Reset Password</a>
-  {% if target_user.pk != user.pk %}
+  {% if can_edit_access %}
+    <a href="{% url 'core:user_access' target_user.pk %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-sliders2 me-1"></i> Edit access</a>
+  {% endif %}
+  {% if user|can:"user.edit" %}
+    <a href="{% url 'accounts:user_update' target_user.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-pencil me-1"></i> Edit</a>
+  {% endif %}
+  {% if user|can:"user.reset_password" %}
+    <a href="{% url 'accounts:user_reset_password' target_user.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-key me-1"></i> Reset Password</a>
+  {% endif %}
+  {% if target_user.pk != user.pk and user|can:"user.deactivate" %}
     <a href="{% url 'accounts:user_toggle' target_user.pk %}"
        class="btn btn-outline-{% if target_user.is_active %}danger{% else %}success{% endif %} btn-sm">
       <i class="bi bi-person-{% if target_user.is_active %}slash{% else %}check{% endif %} me-1"></i>
@@ -42,6 +50,54 @@
           <span>{{ target_user.last_login|date:"d M Y, H:i"|default:"Never" }}</span></div>
         {% if target_user.notes %}<hr class="my-2"><div class="text-muted mb-1">Notes</div>
           <div>{{ target_user.notes|linebreaksbr }}</div>{% endif %}
+      </div>
+    </div>
+
+    {% comment %}
+      Access at a glance. The full grid lives in Access Control; this is the
+      summary somebody needs when they are asking "why can't they do X?".
+    {% endcomment %}
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-shield-lock me-1"></i> Access</span>
+        {% if can_edit_access %}
+          <a href="{% url 'core:user_access' target_user.pk %}" class="btn btn-sm btn-outline-primary">Edit</a>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <dl class="kv">
+          <dt>Role</dt><dd>{{ access.role_name }}</dd>
+          <dt>Permissions</dt>
+          <dd>{% if access.full_access %}All{% else %}{{ access.permission_count }} of {{ access.total_permissions }}{% endif %}</dd>
+          <dt>Sees</dt><dd>{{ access.data_scope_label }}</dd>
+          {% if access.manager %}<dt>Sells stock of</dt><dd>{{ access.manager }}</dd>{% endif %}
+        </dl>
+        {% if access.is_customised %}
+          <div class="mt-2">
+            <span class="badge text-bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+              Customised</span>
+            <span class="text-muted-sm">
+              {% if access.extra_count %}+{{ access.extra_count }} added{% endif %}
+              {% if access.denied_count %}&minus;{{ access.denied_count }} removed{% endif %}
+            </span>
+          </div>
+        {% endif %}
+        {% if sensitive %}
+          <div class="text-muted-sm mt-3 mb-1">Sensitive permissions held:</div>
+          <ul class="sensitive-list">
+            {% for label in sensitive %}<li><i class="bi bi-exclamation-triangle-fill"></i>{{ label }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+        {% if team %}
+          <hr>
+          <div class="text-muted-sm mb-1">Sells this person's stock:</div>
+          <div class="d-flex flex-wrap gap-1">
+            {% for member in team %}
+              <a href="{% url 'accounts:user_detail' member.pk %}"
+                 class="badge text-bg-light border text-decoration-none">{{ member.display_name }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
     </div>
   </div>

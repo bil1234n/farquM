@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% load core_extras humanize %}
+{% comment %}
+  Panels are gated on permission, not just on whether their data is empty:
+  an empty "Overdue Debts" card still tells a sales user that a credit module
+  exists and invites them to go looking for it.
+{% endcomment %}
 
 {% block title %}Dashboard{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
@@ -14,12 +19,16 @@
 </div>{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-cart-plus me-1"></i> New Sale
-  </a>
-  <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
-    <i class="bi bi-cash-stack me-1"></i> Credit
-  </a>
+  {% if can_sell %}
+    <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-cart-plus me-1"></i> New Sale
+    </a>
+  {% endif %}
+  {% if can_see_credit %}
+    <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-cash-stack me-1"></i> Credit
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -61,70 +70,82 @@
   </div>
 </div>
 
-{# ---------------- Admin-only financials ---------------- #}
-{% if show_financials %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-lg-3">
-      <div class="stat-card accent-info">
-        <div class="label">Month Revenue</div>
-        <div class="value money">{{ month_profit.revenue|money }}</div>
-        <div class="hint">{{ month_profit.count }} transactions</div>
-      </div>
+{% comment %}
+  This month. Four slots, each with a fallback. Cost figures and profit
+  figures are separate permissions, so somebody who buys the stock can see
+  what it is worth without also being shown the margin on it - and a sales
+  user sees neither, but never gets an empty row where the numbers used to be.
+{% endcomment %}
+<div class="row g-3 mb-3">
+
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-info">
+      <div class="label">Month Revenue</div>
+      <div class="value money">{{ month_stats.revenue|money }}</div>
+      <div class="hint">{{ month_stats.count }} transaction{{ month_stats.count|pluralize }}</div>
     </div>
-    <div class="col-6 col-lg-3">
+  </div>
+
+  <div class="col-6 col-lg-3">
+    {% if show_profit %}
       <div class="stat-card accent-success">
-        <div class="label">Month Gross Profit <span class="badge text-bg-secondary ms-1">Admin</span></div>
+        <div class="label">Month Gross Profit <span class="badge text-bg-secondary ms-1">Restricted</span></div>
         <div class="value money text-success">{{ month_profit.gross_profit|money }}</div>
         <div class="hint">{{ month_profit.margin_percent }}% margin &middot; COGS {{ month_profit.cogs|money }}</div>
       </div>
-    </div>
-    <div class="col-6 col-lg-3">
+    {% else %}
+      <div class="stat-card accent-success">
+        <div class="label">Collected This Month</div>
+        <div class="value money">{{ month_stats.collected|money }}</div>
+        <div class="hint">{{ month_collections.collected|money }} off older debts</div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-6 col-lg-3">
+    {% if show_costs %}
       <div class="stat-card accent-primary">
         <div class="label">Stock Value (Cost)</div>
         <div class="value money">{{ valuation.cost_value|money }}</div>
         <div class="hint">{{ valuation.units|intcomma }} units &middot; {{ valuation.skus }} SKUs</div>
       </div>
-    </div>
-    <div class="col-6 col-lg-3">
-      <div class="stat-card accent-warning">
-        <div class="label">Potential Retail Profit</div>
-        <div class="value money">{{ valuation.potential_profit|money }}</div>
-        <div class="hint">If all current stock sells</div>
-      </div>
-    </div>
-  </div>
-{% else %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-lg-3">
-      <div class="stat-card accent-info">
-        <div class="label">Month Revenue</div>
-        <div class="value money">{{ month_stats.revenue|money }}</div>
-        <div class="hint">{{ month_stats.count }} transactions</div>
-      </div>
-    </div>
-    <div class="col-6 col-lg-3">
+    {% elif can_see_products %}
       <div class="stat-card accent-primary">
         <div class="label">Active Products</div>
         <div class="value">{{ product_count }}</div>
         <div class="hint">{{ low_stock_count }} need restocking</div>
       </div>
-    </div>
-    <div class="col-6 col-lg-3">
-      <div class="stat-card accent-success">
+    {% else %}
+      <div class="stat-card accent-primary">
         <div class="label">Customers</div>
         <div class="value">{{ customer_count }}</div>
         <div class="hint">{{ debtor_count }} currently owe money</div>
       </div>
-    </div>
-    <div class="col-6 col-lg-3">
+    {% endif %}
+  </div>
+
+  <div class="col-6 col-lg-3">
+    {% if show_profit %}
+      <div class="stat-card accent-warning">
+        <div class="label">Potential Retail Profit</div>
+        <div class="value money">{{ valuation.potential_profit|money }}</div>
+        <div class="hint">If all current stock sells</div>
+      </div>
+    {% elif can_see_products %}
       <div class="stat-card accent-warning">
         <div class="label">Low Stock Items</div>
         <div class="value">{{ low_stock_count }}</div>
         <div class="hint"><a href="{% url 'inventory:low_stock' %}">Review now</a></div>
       </div>
-    </div>
+    {% else %}
+      <div class="stat-card accent-warning">
+        <div class="label">Average Sale</div>
+        <div class="value money">{{ month_stats.average_sale|money }}</div>
+        <div class="hint">This month</div>
+      </div>
+    {% endif %}
   </div>
-{% endif %}
+</div>
 
 <div class="row g-3">
 
@@ -202,6 +223,7 @@
   </div>
 
   {# ---------------- Recent sales ---------------- #}
+  {% if user|can:"sale.view" %}
   <div class="col-lg-7">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -235,8 +257,10 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
   {# ---------------- Overdue ---------------- #}
+  {% if can_see_credit %}
   <div class="col-lg-5">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -264,8 +288,9 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
-  {# ---------------- Per-manager breakdown, admins only ---------------- #}
+  {# ---------------- Per-person breakdown ---------------- #}
   {# The payoff of per-manager isolation: with each manager's records kept #}
   {# apart, they can finally be compared side by side. A manager scoped to #}
   {# their own rows would see a one-line table of their own total, so this #}
@@ -274,13 +299,13 @@
   <div class="col-12">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-people me-1"></i> By Manager &mdash; this month</span>
-        <span class="badge text-bg-secondary">Admin</span>
+        <span><i class="bi bi-people me-1"></i>
+          {% if scope_is_global %}By staff member{% else %}My team{% endif %} &mdash; this month</span>
       </div>
       <div class="table-responsive">
         <table class="table table-hover mb-0">
           <thead><tr>
-            <th>Manager</th><th class="num">Sales</th><th class="num">Revenue</th>
+            <th>Staff member</th><th class="num">Sales</th><th class="num">Revenue</th>
             <th class="num">Collected</th><th class="num">Still owed</th>
           </tr></thead>
           <tbody>
@@ -303,6 +328,7 @@
   {% endif %}
 
   {# ---------------- Low stock ---------------- #}
+  {% if can_see_products %}
   <div class="col-12">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -325,7 +351,9 @@
                 <td class="num text-muted">{{ p.low_stock_threshold }}</td>
                 <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
                 <td class="text-end">
-                  <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-sm btn-outline-primary">Restock</a>
+                  {% if user|can:"stock.restock" %}
+                    <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-sm btn-outline-primary">Restock</a>
+                  {% endif %}
                 </td>
               </tr>
             {% empty %}
@@ -336,5 +364,6 @@
       </div>
     </div>
   </div>
+  {% endif %}
 </div>
 {% endblock %}

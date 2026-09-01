@@ -7,8 +7,10 @@
 {% block page_actions %}
   <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-speedometer2 me-1"></i> Credit Dashboard</a>
-  <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-download me-1"></i> Export</a>
+  {% if user|can:"report.export" %}
+    <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-download me-1"></i> Export</a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -74,7 +76,7 @@
                 {% endif %}
                 <a href="{% url 'credit:borrower_detail' a.customer.pk %}" class="btn btn-outline-secondary" title="Profile">
                   <i class="bi bi-eye"></i></a>
-                {% if user.is_admin %}
+                {% if user|can:"credit.limits" %}
                   <a href="{% url 'credit:account_update' a.pk %}" class="btn btn-outline-secondary" title="Credit terms">
                     <i class="bi bi-sliders"></i></a>
                 {% endif %}

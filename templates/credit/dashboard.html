@@ -12,9 +12,11 @@
   <a href="{% url 'credit:aging_report' %}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-hourglass-split me-1"></i> Aging Report
   </a>
-  <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
-    <i class="bi bi-download me-1"></i> Export
-  </a>
+  {% if user|can:"report.export" %}
+    <a href="{% url 'reports:export_receivables_csv' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-download me-1"></i> Export
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
