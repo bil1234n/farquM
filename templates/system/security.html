@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Registration security{% endblock %}
+{% block page_title %}Registration &amp; passcodes{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    {% comment %}
+      "role{{ n|pluralize }}" rather than "role(s)": the browser's translator
+      matches a rendered sentence against a template whose "(s)" means "an
+      optional s", so a literal "(s)" on screen matches nothing and the line
+      stays in English.
+    {% endcomment %}
+    {% if open_count %}{{ open_count }} role{{ open_count|pluralize }} open for registration
+    {% else %}Registration is closed{% endif %}
+  </div>
+{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+{% comment %}
+  This screen is the answer to "why can nobody register as Sales?".
+
+  Before it existed the passcodes lived only in the server's .env file, so a
+  role with no variable set simply vanished from the registration form with
+  nothing anywhere to explain the absence. Every role now shows its own state
+  in words, and an administrator can set a code without touching the server.
+
+  The code itself is stored hashed and can never be shown back - not here, not
+  in the audit log, not in the database. The only thing this page can tell you
+  is whether one is set.
+{% endcomment %}
+
+{% if not can_edit %}
+  <div class="alert alert-secondary small">
+    <i class="bi bi-eye me-1"></i>
+    <span>You can see these settings but not change them. Changing them needs the "Change system settings" permission.</span>
+  </div>
+{% endif %}
+
+<form method="post" autocomplete="off">
+  {% csrf_token %}
+
+  <div class="row g-3">
+    <div class="col-lg-8">
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h6 mb-2"><i class="bi bi-door-open me-1"></i> Self-registration</h2>
+          <p class="text-muted-sm">
+            The master switch. When this is off, nobody can create their own
+            account no matter which passcodes are set, and new staff can only
+            be added from Users &amp; Roles.
+          </p>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   id="allow_self_registration" name="allow_self_registration"
+                   {% if conf.allow_self_registration %}checked{% endif %}
+                   {% if not can_edit %}disabled{% endif %}>
+            <label class="form-check-label" for="allow_self_registration">
+              Let new staff sign themselves up with a passcode
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h6 mb-2"><i class="bi bi-key me-1"></i> Passcode per role</h2>
+          <p class="text-muted-sm">
+            Each role has its own code, so somebody handed the sales code can
+            only ever create a sales account. Leave a box empty to keep the
+            code that is already set &mdash; codes are stored scrambled and
+            cannot be read back, so an empty box is normal.
+          </p>
+
+          {% for row in rows %}
+            <div class="border rounded-3 p-3 mb-3 {% if row.available %}border-success-subtle{% endif %}">
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <div class="flex-grow-1">
+                  <span class="fw-semibold">{{ row.role.name }}</span>
+                  <span class="badge text-bg-light ms-1 mono">{{ row.role.code }}</span>
+                  {% if row.is_system %}
+                    <span class="badge text-bg-secondary ms-1">Built-in</span>
+                  {% else %}
+                    <span class="badge text-bg-info ms-1">Custom role</span>
+                  {% endif %}
+                </div>
+                <div>
+                  {% if row.available %}
+                    <span class="badge text-bg-success">
+                      <i class="bi bi-unlock me-1"></i>Open for registration
+                    </span>
+                  {% elif row.enabled and not row.configured %}
+                    <span class="badge text-bg-warning">
+                      <i class="bi bi-exclamation-triangle me-1"></i>Switched on, no passcode
+                    </span>
+                  {% elif row.configured %}
+                    <span class="badge text-bg-secondary">
+                      <i class="bi bi-lock me-1"></i>Passcode set, switched off
+                    </span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">
+                      <i class="bi bi-lock me-1"></i>No passcode set
+                    </span>
+                  {% endif %}
+                </div>
+              </div>
+
+              {% if row.error %}
+                <div class="alert alert-danger py-2 px-3 small">
+                  <i class="bi bi-exclamation-octagon me-1"></i>{{ row.error }}
+                </div>
+              {% endif %}
+
+              <div class="row g-2 align-items-end">
+                <div class="col-md-5">
+                  <label class="form-label small" for="passcode_{{ row.role.code }}">
+                    {% if row.has_passcode %}Replace the passcode{% else %}Set a passcode{% endif %}
+                  </label>
+                  <input type="password" class="form-control form-control-sm"
+                         id="passcode_{{ row.role.code }}" name="passcode_{{ row.role.code }}"
+                         autocomplete="new-password" placeholder="Leave blank to keep it"
+                         {% if not can_edit %}disabled{% endif %}>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small" for="note_{{ row.role.code }}">
+                    Reminder for administrators
+                  </label>
+                  <input type="text" class="form-control form-control-sm"
+                         id="note_{{ row.role.code }}" name="note_{{ row.role.code }}"
+                         value="{{ row.note }}" maxlength="120"
+                         placeholder="e.g. given to shop staff"
+                         {% if not can_edit %}disabled{% endif %}>
+                </div>
+                <div class="col-md-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="enabled_{{ row.role.code }}" name="enabled_{{ row.role.code }}"
+                           {% if row.enabled %}checked{% endif %}
+                           {% if not can_edit %}disabled{% endif %}>
+                    <label class="form-check-label small" for="enabled_{{ row.role.code }}">
+                      Allow registration
+                    </label>
+                  </div>
+                  {% if row.has_passcode and can_edit %}
+                    <div class="form-check mt-1">
+                      <input class="form-check-input" type="checkbox"
+                             id="clear_{{ row.role.code }}" name="clear_{{ row.role.code }}">
+                      <label class="form-check-label small text-danger" for="clear_{{ row.role.code }}">
+                        Clear the passcode
+                      </label>
+                    </div>
+                  {% endif %}
+                </div>
+              </div>
+
+              {% comment %}
+                One span per fact rather than one running sentence.
+
+                The browser translates this page by matching whole text nodes
+                against a dictionary, so a sentence interrupted by a date or a
+                count arrives as fragments no entry can match - which is how
+                half a paragraph ends up in English. Each span below is a
+                complete phrase on its own.
+              {% endcomment %}
+              <div class="text-muted-sm mt-2 d-flex flex-wrap gap-3">
+                {% if row.from_env and not row.has_passcode %}
+                  <span><i class="bi bi-hdd-network me-1"></i>Using the code set on the server. Typing a new one here replaces it.</span>
+                {% elif row.has_passcode %}
+                  <span><i class="bi bi-shield-check me-1"></i>A passcode is set from this screen.</span>
+                {% endif %}
+                {% if row.use_count %}
+                  <span>Used {{ row.use_count }} time{{ row.use_count|pluralize }}</span>
+                {% endif %}
+                {% if row.last_used_at %}
+                  <span>Last used {{ row.last_used_at|date:"d M Y" }}</span>
+                {% endif %}
+                <span>{{ row.users }} user{{ row.users|pluralize }} with this role</span>
+              </div>
+            </div>
+          {% endfor %}
+
+          {% if can_edit %}
+            <button class="btn btn-primary">
+              <i class="bi bi-check2 me-1"></i> Save registration settings
+            </button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="card-body">
+          <h2 class="h6 mb-2">How a passcode behaves</h2>
+          <ul class="text-muted-sm ps-3 mb-0">
+            <li>It is shared, so treat it like the shop keys: anyone who
+              learns the administrator code can create an administrator.</li>
+            <li>At least {{ min_length }} characters.</li>
+            <li>Wrong codes are throttled &mdash; {{ max_attempts }} tries from one
+              device, then a 15 minute wait.</li>
+            <li>Every attempt, right or wrong, is written to the audit log
+              with the address it came from.</li>
+            <li>It cannot be read back. To hand it out again, set a new one.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <h2 class="h6 mb-2">What a new sales user gets</h2>
+          <p class="text-muted-sm mb-2">
+            Someone registering with the sales code is asked who they report
+            to. That choice is what gives them products to sell: they see
+            their supervisor's stock, while their own sales, customers and
+            debts stay theirs alone.
+          </p>
+          <p class="text-muted-sm mb-0">
+            Everything else about them is the Sales role's defaults, which you
+            can change under Roles &mdash; or per person under Access Control.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

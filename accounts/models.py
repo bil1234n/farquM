@@ -172,6 +172,133 @@ class RoleDefinition(TimeStampedModel):
         return reverse("core:role_update", args=[self.pk])
 
 
+class RegistrationPasscode(TimeStampedModel):
+    """
+    The shared code a new hire types to prove which role they may register as.
+
+    WHY THIS IS A TABLE AND NOT ONLY AN ENVIRONMENT VARIABLE
+    --------------------------------------------------------
+    It started as `PASSCODE_ADMIN` / `PASSCODE_MANAGER` in the .env file, and
+    that is still supported as a fallback. But an environment variable has two
+    problems for this particular secret:
+
+      * Adding a role means editing a file on the server and restarting. That
+        is why the Sales role never appeared on the registration form - the
+        variable simply was not set, and nothing in the app said so.
+      * A custom role (Cashier, Stock Clerk) can never have one at all,
+        because you cannot invent an environment variable per database row.
+
+    So the code lives here, where an administrator can set it from Settings ->
+    Security, and the environment variable is the fallback for a deployment
+    that has not set one yet.
+
+    IT IS STORED HASHED, exactly like a password, using Django's configured
+    password hasher. Consequences worth understanding:
+
+      * Nobody - not even an administrator, not even someone with the database
+        - can read an existing passcode back out. The screen shows only
+        whether one is set. To "see" it you set a new one.
+      * Verification is `check_password`, which is already constant-time and
+        salted, so the timing-attack concern that made the env path use
+        `hmac.compare_digest` is handled by the hasher itself.
+
+    `role_code` is a string rather than a ForeignKey for the same reason
+    `User.role` is: it survives a role being deleted and recreated, and a
+    passcode row for a role that no longer exists is simply inert.
+    """
+
+    role_code = models.CharField(
+        max_length=32,
+        unique=True,
+        help_text="The RoleDefinition.code this passcode registers for.",
+    )
+    passcode_hash = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Hashed. Blank means no passcode has been set from the app.",
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Off means nobody may register as this role, even if a passcode "
+            "is set. Turning it off is the quick way to close a door without "
+            "losing the code."
+        ),
+    )
+    note = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text=(
+            "A reminder for administrators, e.g. 'given to shop staff on "
+            "1 Jan'. Never shown to the person registering."
+        ),
+    )
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    use_count = models.PositiveIntegerField(default=0)
+    updated_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
+    class Meta:
+        ordering = ["role_code"]
+        verbose_name = "Registration passcode"
+        verbose_name_plural = "Registration passcodes"
+
+    def __str__(self):
+        return f"Passcode for {self.role_code}"
+
+    # -- Reading -------------------------------------------------------------
+    @cached_property
+    def role(self):
+        return RoleDefinition.objects.filter(code=self.role_code).first()
+
+    @property
+    def role_name(self) -> str:
+        role = self.role
+        return role.name if role else self.role_code.replace("_", " ").title()
+
+    @property
+    def has_passcode(self) -> bool:
+        return bool(self.passcode_hash)
+
+    # -- Writing -------------------------------------------------------------
+    def set_passcode(self, raw: str) -> None:
+        """
+        Store a new code, or clear it when handed a blank string.
+
+        Clearing also disables the role: a row that is enabled but has no code
+        would fall through to the environment variable, which is the opposite
+        of what an administrator who just emptied the box intends.
+        """
+        from django.contrib.auth.hashers import make_password
+
+        raw = (raw or "").strip()
+        if not raw:
+            self.passcode_hash = ""
+            self.is_enabled = False
+            return
+        self.passcode_hash = make_password(raw)
+
+    def verify(self, raw: str) -> bool:
+        # NOT called `check`: django.db.models.Model.check is a classmethod the
+        # system-check framework calls on every model, and shadowing it makes
+        # `manage.py check` fail with models.E020.
+        from django.contrib.auth.hashers import check_password
+
+        if not self.passcode_hash or not raw:
+            return False
+        return check_password(raw, self.passcode_hash)
+
+    def record_use(self) -> None:
+        self.last_used_at = timezone.now()
+        self.use_count = (self.use_count or 0) + 1
+        self.save(update_fields=["last_used_at", "use_count", "updated_at"])
+
+
 class UserQuerySet(models.QuerySet):
     def admins(self):
         return self.filter(role=RoleCode.ADMIN)

@@ -1,0 +1,39 @@
+{% load core_extras %}
+{% comment %}
+  The payoff of per-person isolation: with each person's records kept apart,
+  they can finally be compared side by side. Only reached when the dashboard
+  found more than one row to show - a manager with no sales staff yet would
+  otherwise get a one-line table repeating their own total.
+{% endcomment %}
+<div class="col-lg-{{ col|default:12 }}">
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-people me-1"></i>
+        {% if scope_is_global %}Every staff member{% else %}My team{% endif %} &mdash; this month</span>
+      {% if user|can:"report.sales" %}
+        <a href="{% url 'reports:sales_report' %}" class="btn btn-sm btn-outline-secondary">Full report</a>
+      {% endif %}
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr>
+          <th>Staff member</th><th class="num">Sales</th><th class="num">Revenue</th>
+          <th class="num">Collected</th><th class="num">Still owed</th>
+        </tr></thead>
+        <tbody>
+          {% for m in by_manager %}
+            <tr>
+              <td class="fw-semibold">{{ m.name }}</td>
+              <td class="num">{{ m.count }}</td>
+              <td class="num money">{{ m.revenue|money }}</td>
+              <td class="num money text-success">{{ m.collected|money }}</td>
+              <td class="num money {% if m.outstanding > 0 %}text-danger{% endif %}">{{ m.outstanding|money }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5"><div class="empty-state py-4"><i class="bi bi-people"></i>No sales this month.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

@@ -14,6 +14,7 @@ from credit.models import DebtRecord
 from inventory.models import Product, StockMovement
 from sales.models import Customer, Transaction
 
+from .dashboards import BLURBS, TITLES, build_cards, build_panels, profile_for
 from .selectors import (
     collections_summary,
     daily_series,
@@ -29,11 +30,17 @@ from .selectors import (
 
 class DashboardView(PermissionRequiredMixin, TemplateView):
     """
-    The landing page.
+    The landing page, laid out for whoever is looking at it.
 
-    Everyone sees the operational picture for the records they own. Cost and
-    profit panels are gated separately, because "may see what the stock is
-    worth" and "may see what we make on it" are different amounts of trust -
+    The shape of the page comes from reports/dashboards.py, which picks one of
+    four layouts from the viewer's permissions and data scope - an owner sees
+    margins and a staff league table, a manager sees the shelf and their team,
+    a sales assistant sees their own counter. This view's job is to gather the
+    figures each layout might want and hand them over; it decides nothing
+    about arrangement.
+
+    Cost and profit stay separate permissions, because "may see what the stock
+    is worth" and "may see what we make on it" are different amounts of trust -
     a manager buying stock needs the first and not necessarily the second.
     """
 
@@ -105,10 +112,29 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
             ctx["valuation"] = inventory_valuation(user=user)
 
         # ---- Per-person comparison ----------------------------------------
-        # Only useful to somebody who can see more than one person's figures.
+        # Only useful to somebody who can see more than one person's figures,
+        # and only worth a table when it holds more than one row.
         if user.data_scope in ("ALL", "TEAM"):
-            ctx["by_manager"] = sales_by_staff(month_start, today, user=user)
+            by_staff = sales_by_staff(month_start, today, user=user)
+            if len(by_staff) > 1 or user.data_scope == "ALL":
+                ctx["by_manager"] = by_staff
 
+        # ---- The sales assistant's own book -------------------------------
+        # Their customers, the ones who owe them money first. Scoped like
+        # everything else, so "my customers" really is only theirs.
+        if user.has_access("customer.view"):
+            ctx["my_customers"] = (
+                customers.select_related("credit_account")
+                .order_by("-credit_account__outstanding_balance", "name")[:8]
+            )
+
+        # ---- Which dashboard is this? -------------------------------------
+        profile = profile_for(user)
+        ctx["profile"] = profile
+        ctx["profile_title"] = TITLES[profile]
+        ctx["profile_blurb"] = BLURBS[profile]
+        ctx["cards"] = build_cards(user, ctx)
+        ctx["panels"] = build_panels(user, profile, ctx)
         return ctx
 
 

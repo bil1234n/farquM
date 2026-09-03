@@ -13,12 +13,17 @@
 
 <div class="alert alert-info small d-flex gap-2">
   <i class="bi bi-info-circle mt-1"></i>
+  {% comment %}
+    Kept as one unbroken sentence on purpose. Inline <strong> tags used to
+    split it into four text nodes, and the browser's translator matches whole
+    nodes - so the paragraph rendered as a mix of Amharic and English with no
+    obvious cause. Emphasis is not worth that.
+  {% endcomment %}
   <div>
-    Access is two separate questions. <strong>Permissions</strong> decide what a
-    person may do; <strong>data scope</strong> decides whose records they may
-    see. A sales user with permission to view sales still only ever sees their
-    own. Both are set per person under
-    {% if user|can:"user.permissions" %}<a href="{% url 'core:access_list' %}">Access Control</a>{% else %}Access Control{% endif %}.
+    <span>Access is two separate questions. Permissions decide what a person may do; data scope decides whose records they may see. A sales user with permission to view sales still only ever sees their own. Both are set per person under Access Control.</span>
+    {% if user|can:"user.permissions" %}
+      <a href="{% url 'core:access_list' %}">Open Access Control</a>
+    {% endif %}
   </div>
 </div>
 
@@ -110,10 +115,6 @@
           <dt>Name</dt><dd>{{ conf.name }}</dd>
           <dt>Currency</dt><dd>{{ conf.currency }}</dd>
           <dt>Credit terms</dt><dd>{{ conf.default_credit_due_days }} days</dd>
-          <dt>Self-registration</dt>
-          <dd>{% if conf.allow_self_registration %}
-                <span class="badge text-bg-success">On</span>
-              {% else %}<span class="badge text-bg-secondary">Off</span>{% endif %}</dd>
         </dl>
         <a href="{% url 'core:business_settings' %}" class="btn btn-outline-secondary btn-sm">
           <i class="bi bi-pencil me-1"></i> Edit business details</a>
@@ -134,7 +135,18 @@
           <div class="mini-stat"><span>{{ user_count }}</span>active</div>
           <div class="mini-stat"><span>{{ inactive_count }}</span>deactivated</div>
         </div>
+        <dl class="kv mb-3">
+          <dt>Self-registration</dt>
+          <dd>{% if conf.allow_self_registration %}
+                <span class="badge text-bg-success">On</span>
+              {% else %}<span class="badge text-bg-secondary">Off</span>{% endif %}</dd>
+          <dt>Open to</dt>
+          <dd>{% if open_roles %}{{ open_roles|join:", " }}
+              {% else %}<span class="text-muted">No role</span>{% endif %}</dd>
+        </dl>
         <div class="d-flex flex-wrap gap-2">
+          <a href="{% url 'core:security_settings' %}" class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-key me-1"></i> Registration &amp; passcodes</a>
           {% if user|can:"user.view" %}
             <a href="{% url 'accounts:user_list' %}" class="btn btn-outline-secondary btn-sm">
               <i class="bi bi-person-gear me-1"></i> Users &amp; Roles</a>

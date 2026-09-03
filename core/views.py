@@ -25,7 +25,20 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from accounts.models import AuditAction, RoleCode, RoleDefinition, User
+from accounts.models import (
+    AuditAction,
+    RegistrationPasscode,
+    RoleCode,
+    RoleDefinition,
+    User,
+)
+from accounts.registration import (
+    MAX_ATTEMPTS,
+    available_roles,
+    ensure_passcode_rows,
+    has_server_passcode,
+    registration_status,
+)
 from accounts.roles import BLUEPRINTS, reset_to_blueprint
 from accounts.services import log_action
 
@@ -50,6 +63,30 @@ from .templatetags.core_extras import CURRENCY_CACHE_KEY
 #: screen that could undo it, and the fix becomes a Django shell on the server.
 #: Rendered as ticked-and-disabled with an explanation, not silently forced.
 SELF_LOCKED = frozenset({"user.permissions", "user.view", "settings.view"})
+
+#: Minimum length for a registration passcode.
+#:
+#: Short by password standards on purpose - this is a code read aloud to a new
+#: hire, not something typed daily - but long enough that the 5-attempts-per-
+#: 15-minutes throttle makes guessing hopeless.
+MIN_PASSCODE_LENGTH = 6
+
+#: Codes that are the same as no code at all. Not a security control, a
+#: courtesy: it stops the obvious accident rather than a determined mistake.
+OBVIOUS_PASSCODES = frozenset(
+    {
+        "123456",
+        "1234567",
+        "12345678",
+        "password",
+        "passcode",
+        "admin123",
+        "000000",
+        "111111",
+        "abcdef",
+        "qwerty",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +147,12 @@ def settings_hub(request):
             "customised_count": customised.count(),
             "customised": customised.select_related("manager")[:6],
             "group_count": len(CATALOG),
+            # Names of the roles somebody could register as right now. Shown
+            # on the hub because "self-registration: on" alone never answered
+            # the question people actually have, which is "on for whom?".
+            "open_roles": [
+                name for _code, name in available_roles()
+            ],
             "active_tab": "hub",
         },
     )
@@ -153,6 +196,143 @@ def business_settings(request):
         request,
         "system/business.html",
         {"form": form, "conf": conf, "can_edit": can_edit, "active_tab": "business"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Security: who may sign themselves up, and with which code
+# ---------------------------------------------------------------------------
+def _apply_passcode_changes(request, conf) -> dict:
+    """
+    Save the Security screen. Returns {role_code: error message}.
+
+    Written by hand rather than as a Django formset because the number of rows
+    is the number of roles, which an administrator can change - and because
+    each row has three controls (a code, a switch, a clear button) whose
+    interactions are the interesting part:
+
+      * clearing a code also switches the role off, so an administrator cannot
+        leave a door marked open with no lock on it;
+      * switching a role on without a code is refused rather than silently
+        ignored, because "I ticked it and nothing happened" is the bug report
+        this whole screen exists to prevent;
+      * an empty code box means "leave it alone", not "erase it" - the code
+        cannot be read back to pre-fill the box, so a blank box is the normal
+        state of a role that already has one.
+    """
+    errors: dict[str, str] = {}
+    changes: list[str] = []
+
+    allow = "allow_self_registration" in request.POST
+    if conf.allow_self_registration != allow:
+        conf.allow_self_registration = allow
+        conf.updated_by = request.user
+        conf.save()
+        changes.append(
+            "self-registration turned " + ("on" if allow else "off")
+        )
+
+    ensure_passcode_rows()
+
+    for role in RoleDefinition.objects.assignable():
+        code = role.code
+        row, _ = RegistrationPasscode.objects.get_or_create(role_code=code)
+        raw = (request.POST.get(f"passcode_{code}") or "").strip()
+        clearing = f"clear_{code}" in request.POST
+        wanted_on = f"enabled_{code}" in request.POST
+
+        if clearing:
+            row.set_passcode("")  # also switches the role off
+            changes.append(f"cleared the {role.name} passcode")
+            wanted_on = False
+        elif raw:
+            if len(raw) < MIN_PASSCODE_LENGTH:
+                errors[code] = (
+                    f"Use at least {MIN_PASSCODE_LENGTH} characters."
+                )
+                continue
+            if raw.lower() in OBVIOUS_PASSCODES:
+                errors[code] = (
+                    "That code is one of the first things anyone would try. "
+                    "Pick something else."
+                )
+                continue
+            row.set_passcode(raw)
+            changes.append(f"set a new {role.name} passcode")
+
+        if wanted_on and not (row.has_passcode or has_server_passcode(code)):
+            errors[code] = (
+                "Set a passcode first - a role cannot be opened for "
+                "registration without one."
+            )
+            wanted_on = False
+
+        if row.is_enabled != wanted_on:
+            row.is_enabled = wanted_on
+            changes.append(
+                f"{role.name} registration turned " + ("on" if wanted_on else "off")
+            )
+
+        note = (request.POST.get(f"note_{code}") or "").strip()[:120]
+        if note != (row.note or ""):
+            row.note = note
+
+        row.updated_by = request.user
+        row.save()
+
+    if changes:
+        # The description names what changed but NEVER the code itself. An
+        # audit log is read by more people than the settings screen is.
+        log_action(
+            AuditAction.UPDATE,
+            instance=conf,
+            description="Registration security: " + "; ".join(changes) + ".",
+        )
+        messages.success(request, "Registration settings saved.")
+    elif not errors:
+        messages.info(request, "Nothing changed.")
+
+    return errors
+
+
+def security_settings(request):
+    blocked = require(
+        request, "settings.view",
+        message="You do not have permission to open system settings.",
+    )
+    if blocked:
+        return blocked
+
+    conf = SystemSetting.load()
+    can_edit = request.user.has_access("settings.edit")
+    errors: dict[str, str] = {}
+
+    if request.method == "POST":
+        if not can_edit:
+            messages.error(request, "You may view these settings but not change them.")
+            return redirect("core:security_settings")
+        errors = _apply_passcode_changes(request, conf)
+        if not errors:
+            return redirect("core:security_settings")
+
+    rows = registration_status()
+    for row in rows:
+        # Attached to the row rather than passed as a separate dict, because
+        # Django templates cannot subscript a dict by a variable key.
+        row["error"] = errors.get(row["role"].code, "")
+
+    return render(
+        request,
+        "system/security.html",
+        {
+            "conf": conf,
+            "rows": rows,
+            "can_edit": can_edit,
+            "open_count": sum(1 for r in rows if r["available"]),
+            "min_length": MIN_PASSCODE_LENGTH,
+            "max_attempts": MAX_ATTEMPTS,
+            "active_tab": "security",
+        },
     )
 
 

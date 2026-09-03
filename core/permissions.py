@@ -232,12 +232,73 @@ SENSITIVE_CODES: frozenset[str] = frozenset(
 )
 
 
-def label_for(code: str) -> str:
+# ---------------------------------------------------------------------------
+# Translation
+# ---------------------------------------------------------------------------
+# The English above is the source text. Other languages live in
+# core/permissions_am.py, keyed by the shapes below, so that adding a
+# permission never means editing a second structure to keep it compiling.
+#
+# `lang=""` or an unknown language means English, which is why every caller
+# can pass a raw Accept-Language header straight through without checking it.
+def perm_label_key(code: str) -> str:
+    return f"perm.{code}.label"
+
+
+def perm_help_key(code: str) -> str:
+    return f"perm.{code}.help"
+
+
+def group_label_key(key: str) -> str:
+    return f"group.{key}.label"
+
+
+def group_blurb_key(key: str) -> str:
+    return f"group.{key}.blurb"
+
+
+def _tr(key: str, lang: str, default: str) -> str:
+    from .permissions_am import translate
+
+    return translate(key, lang, default)
+
+
+def label_for(code: str, lang: str = "") -> str:
     """Human label for a code, falling back to the code itself."""
     if code == WILDCARD:
-        return "Full access to everything"
+        return _tr("perm.wildcard.label", lang, "Full access to everything")
     perm = PERM_BY_CODE.get(code)
-    return perm.label if perm else code
+    if not perm:
+        return code
+    return _tr(perm_label_key(code), lang, perm.label)
+
+
+def help_for(code: str, lang: str = "") -> str:
+    perm = PERM_BY_CODE.get(code)
+    if not perm:
+        return ""
+    return _tr(perm_help_key(code), lang, perm.help)
+
+
+def translation_pairs() -> list[tuple[str, str]]:
+    """
+    Every (key, English source) pair in the catalogue.
+
+    Used by `manage.py sync_permission_i18n` to write the same strings into
+    the JSON dictionaries the browser fetches, so the web app and the phone
+    app cannot drift apart.
+    """
+    pairs: list[tuple[str, str]] = [
+        ("perm.wildcard.label", "Full access to everything"),
+    ]
+    for group in CATALOG:
+        pairs.append((group_label_key(group.key), group.label))
+        pairs.append((group_blurb_key(group.key), group.blurb))
+        for perm in group.perms:
+            pairs.append((perm_label_key(perm.code), perm.label))
+            if perm.help:
+                pairs.append((perm_help_key(perm.code), perm.help))
+    return pairs
 
 
 def clean_codes(codes) -> list[str]:
@@ -301,19 +362,26 @@ PAGE_PERMISSIONS: dict[str, str] = {
 }
 
 
-def catalog_as_dict() -> list[dict]:
-    """JSON-serialisable catalogue, for the API and the mobile matrix UI."""
+def catalog_as_dict(lang: str = "") -> list[dict]:
+    """
+    JSON-serialisable catalogue, for the API and the mobile matrix UI.
+
+    Translated on the server rather than on the phone. The phone would
+    otherwise need its own copy of every label, which is a second place to
+    forget when a permission is added - and the screen that showed English
+    checkboxes inside an Amharic app is exactly what that costs.
+    """
     return [
         {
             "key": g.key,
-            "label": g.label,
+            "label": _tr(group_label_key(g.key), lang, g.label),
             "icon": g.icon,
-            "blurb": g.blurb,
+            "blurb": _tr(group_blurb_key(g.key), lang, g.blurb),
             "permissions": [
                 {
                     "code": p.code,
-                    "label": p.label,
-                    "help": p.help,
+                    "label": _tr(perm_label_key(p.code), lang, p.label),
+                    "help": _tr(perm_help_key(p.code), lang, p.help),
                     "sensitive": p.sensitive,
                 }
                 for p in g.perms

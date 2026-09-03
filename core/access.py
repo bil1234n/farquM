@@ -36,7 +36,12 @@ from core.permissions import (
     PERM_BY_CODE,
     WILDCARD,
     clean_codes,
+    _tr,
+    group_blurb_key,
+    group_label_key,
     label_for,
+    perm_help_key,
+    perm_label_key,
 )
 
 INHERITED = "inherited"
@@ -61,13 +66,20 @@ def describe_permission_state(code: str, role_codes, extra, denied) -> str:
     return INHERITED if in_role else ABSENT
 
 
-def build_matrix(*, role, extra=(), denied=(), locked: set[str] | None = None):
+def build_matrix(
+    *, role, extra=(), denied=(), locked: set[str] | None = None, lang: str = ""
+):
     """
     The catalogue, annotated for rendering.
 
     Returns a list of groups, each with its permissions and their state. Both
     the web grid and the mobile grid are built from this, so the two clients
     cannot drift into showing different things.
+
+    `lang` translates the captions. The web grid leaves it blank because the
+    browser swaps the text itself after the page loads (static/js/i18n.js);
+    the API passes the phone's language, because the phone has no such sweep
+    and would otherwise show English checkboxes inside an Amharic app.
     """
     role_codes = role_permission_set(role)
     extra = set(extra or ())
@@ -82,8 +94,8 @@ def build_matrix(*, role, extra=(), denied=(), locked: set[str] | None = None):
             rows.append(
                 {
                     "code": perm.code,
-                    "label": perm.label,
-                    "help": perm.help,
+                    "label": _tr(perm_label_key(perm.code), lang, perm.label),
+                    "help": _tr(perm_help_key(perm.code), lang, perm.help),
                     "sensitive": perm.sensitive,
                     "state": state,
                     "checked": state in (INHERITED, GRANTED),
@@ -94,9 +106,9 @@ def build_matrix(*, role, extra=(), denied=(), locked: set[str] | None = None):
         groups.append(
             {
                 "key": group.key,
-                "label": group.label,
+                "label": _tr(group_label_key(group.key), lang, group.label),
                 "icon": group.icon,
-                "blurb": group.blurb,
+                "blurb": _tr(group_blurb_key(group.key), lang, group.blurb),
                 "permissions": rows,
                 "checked_count": sum(1 for r in rows if r["checked"]),
                 "total": len(rows),
@@ -281,10 +293,10 @@ def access_summary(user: User) -> dict:
     }
 
 
-def sensitive_grants(user: User) -> list[str]:
+def sensitive_grants(user: User, lang: str = "") -> list[str]:
     """Labels of the risky permissions this user actually holds."""
     return [
-        PERM_BY_CODE[c].label
+        label_for(c, lang)
         for c in sorted(user.effective_permissions)
         if c in PERM_BY_CODE and PERM_BY_CODE[c].sensitive
     ]

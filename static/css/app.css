@@ -336,6 +336,31 @@ dl.kv dd{margin:0;text-align:right;font-weight:600;word-break:break-word}
   .perm-group-head{flex-wrap:wrap}
 }
 
+/* ---------- Role-aware dashboard ---------- */
+/* The one-line explanation of whose figures this page is showing. Quiet by
+   design: it answers a question rather than competing with the numbers. */
+.dash-intro{display:flex;align-items:flex-start;gap:.15rem;font-size:.8rem;
+  color:var(--muted);background:var(--brand-light);border:1px solid var(--line);
+  border-radius:var(--radius);padding:.6rem .85rem}
+.dash-intro i{color:var(--brand)}
+[data-bs-theme="dark"] .dash-intro{background:#1a222c;color:var(--muted)}
+
+/* Today's figures as a single strip rather than four more tiles - they are
+   context for the headline row, not competitors to it. */
+.today-strip{display:flex;flex-wrap:wrap;gap:.35rem 1.4rem;align-items:center;
+  background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+  padding:.55rem .9rem;font-size:.8rem;color:var(--muted)}
+.today-strip strong{color:var(--ink);font-weight:650}
+.today-strip .today-label{font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.06em;font-weight:700;color:var(--brand)}
+.today-strip .t-label{margin-right:.3rem}
+[data-bs-theme="dark"] .today-strip{background:#1a222c}
+
+.stat-card.accent-secondary{border-left:3px solid #64748b}
+.stat-card .label i{opacity:.6}
+.stat-card .hint a{color:inherit;text-decoration:none;border-bottom:1px dotted currentColor}
+.stat-card .hint a:hover{color:var(--brand)}
+
 @media print{
   .sidebar,.topbar,.no-print{display:none!important}
   .main-area{margin-left:0}

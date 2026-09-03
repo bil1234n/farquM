@@ -49,6 +49,7 @@ from credit.services import (
 )
 from inventory.models import Category, Product, StockMovement, Supplier
 from inventory.services import restock as do_restock
+from reports.dashboards import profile_for as dashboard_profile
 from reports.selectors import (
     collections_summary,
     daily_series,
@@ -108,6 +109,31 @@ class StandardPagination(PageNumberPagination):
 def _error(exc, default="Something went wrong."):
     msgs = getattr(exc, "messages", None) or [str(exc) or default]
     return Response({"detail": msgs[0], "errors": msgs}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def request_language(request) -> str:
+    """
+    Which language this client wants, as a bare two-letter code.
+
+    Checked in the order the caller controls best: an explicit `?lang=` beats
+    the Accept-Language header, because the app lets somebody choose Amharic
+    on a phone whose system language is English, and that choice has to win.
+
+    Returns "" when nothing is asked for, which every translator here reads as
+    "use the English source". Only the permission catalogue uses this so far:
+    the rest of the API sends codes and numbers, which need no translating,
+    and the app renders its own words around them.
+    """
+    explicit = (request.query_params.get("lang") or "").strip()
+    if explicit:
+        return explicit.lower().split("-")[0][:5]
+    header = (request.META.get("HTTP_ACCEPT_LANGUAGE") or "").strip()
+    if not header:
+        return ""
+    # "am-ET,am;q=0.9,en;q=0.8" -> "am". Quality values are deliberately not
+    # weighed: the first entry is the client's own first choice, and picking a
+    # different one because of a decimal would surprise everybody.
+    return header.split(",")[0].strip().lower().split("-")[0][:5]
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +426,7 @@ class UserViewSet(viewsets.ModelViewSet):
                             if target.pk == request.user.pk
                             else set()
                         ),
+                        lang=request_language(request),
                     ),
                     "total_permissions": len(ALL_CODES),
                 }
@@ -1163,6 +1190,12 @@ def dashboard(request):
         "permissions": sorted(user.effective_permissions),
         "data_scope": user.data_scope,
         "scope": "all" if sees_everything(user) else "own",
+        # Which of the four dashboard layouts this person gets. Computed by
+        # the same function the web dashboard uses, so the phone and the
+        # browser never disagree about what somebody's home screen is for.
+        # The app translates the title and the caption itself - sending them
+        # in English would put English in the middle of an Amharic screen.
+        "profile": dashboard_profile(user),
     }
 
     # Cost and profit figures never reach a device that may not show them.
@@ -1197,6 +1230,23 @@ def dashboard(request):
                 "outstanding": str(row["outstanding"]),
             }
             for row in sales_by_staff(month_start, today, user=user)
+        ]
+
+    # The sales assistant's own book: the customers they registered, the ones
+    # owing the most first. Sent to every layout that can see customers,
+    # because a manager wants the same list for their own counter work.
+    if user.has_access("customer.view"):
+        payload["my_customers"] = [
+            {
+                "id": c.pk,
+                "name": c.name,
+                "phone": c.phone,
+                "outstanding": str(c.outstanding_balance),
+                "credit_limit": str(c.credit_limit),
+            }
+            for c in customers.select_related("credit_account").order_by(
+                "-credit_account__outstanding_balance", "name"
+            )[:5]
         ]
 
     return Response(payload)
@@ -1240,15 +1290,29 @@ def permission_catalog(request):
     app does without hard-coding a list that would go stale the first time a
     permission is added on the server.
     """
+    lang = request_language(request)
+    # Scope labels are short and few, so they are translated inline rather
+    # than through the catalogue table - there is nothing here that a
+    # permission being added could make stale.
+    scopes = {
+        "am": [
+            {"value": "OWN", "label": "የራሱን መዝገቦች ብቻ"},
+            {"value": "TEAM", "label": "የራሱንና የቡድኑን መዝገቦች"},
+            {"value": "ALL", "label": "በንግዱ ውስጥ ያለውን ሁሉ"},
+        ],
+    }.get(
+        lang,
+        [
+            {"value": "OWN", "label": "Own records only"},
+            {"value": "TEAM", "label": "Own records and their team's"},
+            {"value": "ALL", "label": "Everything in the business"},
+        ],
+    )
     return Response(
         {
-            "groups": catalog_as_dict(),
+            "groups": catalog_as_dict(lang),
             "total": len(ALL_CODES),
-            "scopes": [
-                {"value": "OWN", "label": "Own records only"},
-                {"value": "TEAM", "label": "Own records and their team's"},
-                {"value": "ALL", "label": "Everything in the business"},
-            ],
+            "scopes": scopes,
         }
     )
 

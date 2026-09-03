@@ -96,6 +96,7 @@ def register(request):
                 password=form.cleaned_data["password1"],
                 role=form.cleaned_data["role"],
                 passcode=form.cleaned_data["passcode"],
+                manager=form.cleaned_data.get("manager"),
                 first_name=form.cleaned_data.get("first_name", ""),
                 last_name=form.cleaned_data.get("last_name", ""),
                 email=form.cleaned_data.get("email", ""),

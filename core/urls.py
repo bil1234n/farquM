@@ -9,6 +9,7 @@ urlpatterns = [
     # Settings hub
     path("settings/", views.settings_hub, name="settings"),
     path("settings/business/", views.business_settings, name="business_settings"),
+    path("settings/security/", views.security_settings, name="security_settings"),
     # Access control - who may do what
     path("access/", views.access_list, name="access_list"),
     path("access/<int:pk>/", views.user_access, name="user_access"),

@@ -99,10 +99,8 @@
             because getting them wrong from a web form would take the site down.
           </p>
           <dl class="kv">
-            <dt>Registration passcodes</dt>
-            <dd>{% if registration_open %}
-                  <span class="badge text-bg-success">Configured</span>
-                {% else %}<span class="badge text-bg-secondary">Not set</span>{% endif %}</dd>
+            <dt>Registration</dt>
+            <dd><a href="{% url 'core:security_settings' %}">Manage on the Security tab</a></dd>
             <dt>Time zone</dt><dd>{{ TIME_ZONE|default:"Africa/Addis_Ababa" }}</dd>
             <dt>Debug mode</dt>
             <dd>{% if DEBUG %}<span class="badge text-bg-warning">On</span>

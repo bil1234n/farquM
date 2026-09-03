@@ -1,0 +1,54 @@
+{% load core_extras %}
+{% comment %}
+  The sales assistant's own book. "Add your customers" was one of the things
+  the sales role was created for, so their dashboard puts that list in front
+  of them rather than making them go and find it, and orders it by who owes
+  the most - which is the only order that ever prompts an action.
+{% endcomment %}
+<div class="col-lg-{{ col|default:12 }}">
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-people me-1"></i> My Customers</span>
+      <span class="d-flex gap-2">
+        {% if user|can:"customer.create" %}
+          <a href="{% url 'sales:customer_create' %}" class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-person-plus me-1"></i> Add customer</a>
+        {% endif %}
+        <a href="{% url 'sales:customer_list' %}" class="btn btn-sm btn-outline-secondary">View all</a>
+      </span>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr>
+          <th>Customer</th><th>Phone</th><th class="num">Owes me</th>
+          <th class="num">Credit limit</th><th></th>
+        </tr></thead>
+        <tbody>
+          {% for c in my_customers %}
+            <tr>
+              <td><a href="{% url 'sales:customer_detail' c.pk %}">{{ c.name }}</a></td>
+              <td class="text-muted-sm">{{ c.phone|default:"&mdash;" }}</td>
+              <td class="num money {% if c.outstanding_balance > 0 %}text-danger fw-semibold{% else %}text-muted{% endif %}">
+                {{ c.outstanding_balance|money }}
+              </td>
+              <td class="num text-muted money">{{ c.credit_limit|money }}</td>
+              <td class="text-end">
+                {% if c.outstanding_balance > 0 and user|can:"credit.collect" %}
+                  <a href="{% url 'credit:debt_list' %}?q={{ c.name|urlencode }}"
+                     class="btn btn-sm btn-outline-success">Collect</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5">
+              <div class="empty-state py-4">
+                <i class="bi bi-people"></i>
+                You have not registered any customers yet.
+              </div>
+            </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

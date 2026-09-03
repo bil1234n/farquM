@@ -1,0 +1,35 @@
+{% load core_extras %}
+<div class="col-lg-{{ col|default:7 }}">
+  <div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-receipt me-1"></i>
+        {% if profile == 'counter' %}My Recent Sales{% else %}Recent Sales{% endif %}</span>
+      <a href="{% url 'sales:transaction_list' %}" class="btn btn-sm btn-outline-secondary">View all</a>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr>
+          <th>Reference</th><th>Customer</th><th class="num">Total</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          {% for t in recent_sales %}
+            <tr>
+              <td>
+                <a href="{% url 'sales:transaction_detail' t.pk %}" class="mono">{{ t.reference }}</a>
+                <div class="text-muted-sm">{{ t.created_at|date:"d M, H:i" }}</div>
+              </td>
+              <td>
+                {{ t.customer_display }}
+                <div class="text-muted-sm">{{ t.item_count }} item{{ t.item_count|pluralize }}</div>
+              </td>
+              <td class="num money">{{ t.total_amount|money }}</td>
+              <td><span class="badge text-bg-{{ t.status_class }}">{{ t.get_payment_status_display }}</span></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4"><div class="empty-state"><i class="bi bi-receipt"></i>No sales recorded yet.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

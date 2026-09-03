@@ -29,10 +29,28 @@ from django.conf import settings
 from django.template.loader import get_template
 from django.test import Client, TestCase
 
-from accounts.models import DataScope, RoleDefinition, User
+from accounts.models import (
+    DataScope,
+    RegistrationPasscode,
+    RoleDefinition,
+    User,
+)
+from accounts.registration import (
+    RegistrationError,
+    available_roles,
+    register_user,
+)
 from accounts.roles import BLUEPRINTS, ensure_system_roles
 from core.access import apply_user_access, build_matrix, diff_against_role
-from core.permissions import ALL_CODES, PAGE_PERMISSIONS, WILDCARD
+from core.permissions import (
+    ALL_CODES,
+    PAGE_PERMISSIONS,
+    WILDCARD,
+    catalog_as_dict,
+    translation_pairs,
+)
+from core.permissions_am import AMHARIC
+from reports.dashboards import profile_for
 from core.scoping import scoped
 from credit.models import DebtRecord
 from inventory.models import Category, Product
@@ -451,9 +469,42 @@ class RenderedOutputTests(AccessTestBase):
         # The failure this catches did not 500 - it returned 200 with the
         # layout wrecked, which is why "the page loaded" is not enough.
         html = self.client.get("/reports/").content.decode()
-        self.assertIn("Today's Revenue", html)
         self.assertIn('class="stat-card', html)
+        self.assertIn("today-strip", html)
         self.assertIn("sidebar-footer", html)
+
+    def test_each_role_gets_its_own_dashboard(self):
+        """
+        The three built-in roles must not land on the same page.
+
+        Asserted through the rendered HTML rather than through profile_for()
+        alone, because the bug worth catching is a layout that computes the
+        right profile and then renders the wrong panels anyway.
+        """
+        expectations = [
+            # user, title, must contain, must NOT contain
+            (self.admin, "Business overview", "Month Gross Profit", "Quick actions"),
+            (self.manager, "Stock and team", "Needs Restocking", "Month Gross Profit"),
+            (self.sales, "My sales", "Quick actions", "Stock Value (Cost)"),
+        ]
+        for user, title, present, absent in expectations:
+            with self.subTest(user=user.username):
+                client = Client()
+                client.force_login(user)
+                html = client.get("/reports/").content.decode()
+                self.assertIn(title, html)
+                self.assertIn(present, html)
+                self.assertNotIn(absent, html)
+
+    def test_a_sales_dashboard_never_shows_anyone_elses_totals(self):
+        client = Client()
+        client.force_login(self.sales)
+        html = client.get("/reports/").content.decode()
+        # The staff league table compares people against each other. Somebody
+        # scoped to their own records must never be handed one.
+        self.assertNotIn("Every staff member", html)
+        self.assertNotIn("My team", html)
+        self.assertIn("My Customers", html)
 
     def test_the_access_grid_actually_renders(self):
         html = self.client.get(
@@ -516,3 +567,243 @@ class AccessApiTests(AccessTestBase):
         self.client.force_login(self.admin)
         codes = {r["code"] for r in self.client.get("/api/roles/").json()}
         self.assertTrue({"ADMIN", "MANAGER", "SALES"} <= codes)
+
+    def test_the_phone_gets_the_catalogue_in_its_own_language(self):
+        """
+        The bug this protects: English checkboxes inside an Amharic app.
+
+        The phone has no client-side sweep like the browser does, so the
+        server has to send the wording already translated.
+        """
+        self.client.force_login(self.admin)
+        english = self.client.get("/api/access/catalog/").json()
+        amharic = self.client.get(
+            "/api/access/catalog/", HTTP_ACCEPT_LANGUAGE="am-ET,am;q=0.9"
+        ).json()
+
+        def first_label(payload):
+            return payload["groups"][0]["permissions"][0]["label"]
+
+        self.assertEqual(first_label(english), "Open the dashboard")
+        self.assertNotEqual(first_label(amharic), first_label(english))
+
+        # Codes are identifiers, not words. They are what the tick boxes post
+        # back, so translating one would break saving rather than reading.
+        self.assertEqual(
+            [p["code"] for g in english["groups"] for p in g["permissions"]],
+            [p["code"] for g in amharic["groups"] for p in g["permissions"]],
+        )
+
+        # An explicit choice in the app beats the phone's system language.
+        picked = self.client.get(
+            "/api/access/catalog/?lang=am", HTTP_ACCEPT_LANGUAGE="en-GB,en"
+        ).json()
+        self.assertEqual(first_label(picked), first_label(amharic))
+
+
+class TranslationCoverageTests(TestCase):
+    """
+    A permission added without a translation is the bug that keeps coming
+    back: it works, it ships, and months later somebody notices one English
+    line in the middle of an Amharic screen. Failing here is cheaper.
+    """
+
+    def test_every_catalogue_string_has_amharic(self):
+        missing = [key for key, _english in translation_pairs() if key not in AMHARIC]
+        self.assertEqual(
+            missing, [],
+            "Add these to core/permissions_am.py, then run "
+            "`manage.py sync_permission_i18n`: " + ", ".join(missing),
+        )
+
+    def test_amharic_has_no_entries_for_permissions_that_vanished(self):
+        known = {key for key, _english in translation_pairs()}
+        stale = sorted(set(AMHARIC) - known)
+        self.assertEqual(
+            stale, [],
+            "These translations no longer match any permission: "
+            + ", ".join(stale),
+        )
+
+    def test_translation_never_changes_a_permission_code(self):
+        english = catalog_as_dict("")
+        amharic = catalog_as_dict("am")
+        self.assertEqual(
+            [p["code"] for g in english for p in g["permissions"]],
+            [p["code"] for g in amharic for p in g["permissions"]],
+        )
+
+    def test_an_unknown_language_falls_back_to_english(self):
+        # Not a nicety: Accept-Language arrives from the outside world and
+        # can say anything at all.
+        self.assertEqual(catalog_as_dict("zz"), catalog_as_dict(""))
+
+
+class RegistrationPasscodeTests(AccessTestBase):
+    """
+    Sales registration - the feature that looked broken because it was
+    switched off with nothing on screen to say so.
+
+    The old rule was "a role is offered if an environment variable holds a
+    passcode for it". PASSCODE_SALES had never been set, so Sales silently
+    vanished from the form. These tests pin the replacement: an administrator
+    turns a role on from Settings, and only then does it appear.
+    """
+
+    def setUp(self):
+        self.client = Client()
+
+    def open_sales(self, code="shop-sales-2026"):
+        row, _ = RegistrationPasscode.objects.get_or_create(role_code="SALES")
+        row.set_passcode(code)
+        row.is_enabled = True
+        row.save()
+        return row
+
+    def test_a_role_with_no_passcode_is_not_offered(self):
+        self.assertEqual(available_roles(), [])
+        html = self.client.get("/accounts/register/", follow=True).content.decode()
+        self.assertNotIn('value="SALES"', html)
+
+    def test_setting_a_passcode_puts_sales_on_the_form(self):
+        self.open_sales()
+        self.assertIn(("SALES", "Sales"), available_roles())
+        html = self.client.get("/accounts/register/").content.decode()
+        self.assertIn('value="SALES"', html)
+
+    def test_the_passcode_is_never_stored_or_shown_in_the_clear(self):
+        row = self.open_sales("shop-sales-2026")
+        self.assertNotIn("shop-sales-2026", row.passcode_hash)
+        self.assertTrue(row.verify("shop-sales-2026"))
+        self.assertFalse(row.verify("shop-sales-2027"))
+
+        client = Client()
+        client.force_login(self.admin)
+        page = client.get("/system/settings/security/").content.decode()
+        self.assertNotIn("shop-sales-2026", page)
+
+    def test_registering_as_sales_attaches_a_supervisor(self):
+        self.open_sales()
+        response = self.client.post(
+            "/accounts/register/",
+            {
+                "username": "selam",
+                "role": "SALES",
+                "manager": self.manager.pk,
+                "passcode": "shop-sales-2026",
+                "password1": "Str0ngPass!42",
+                "password2": "Str0ngPass!42",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        new = User.objects.get(username="selam")
+        # Without a supervisor a sales account sees no products at all, which
+        # looks exactly like a broken install.
+        self.assertEqual(new.manager, self.manager)
+        self.assertEqual(new.role, "SALES")
+        self.assertIn("sale.create", new.effective_permissions)
+        self.assertNotIn("product.view_cost", new.effective_permissions)
+
+    def test_a_wrong_passcode_creates_nothing(self):
+        self.open_sales()
+        self.client.post(
+            "/accounts/register/",
+            {
+                "username": "intruder",
+                "role": "SALES",
+                "manager": self.manager.pk,
+                "passcode": "guess",
+                "password1": "Str0ngPass!42",
+                "password2": "Str0ngPass!42",
+            },
+        )
+        self.assertFalse(User.objects.filter(username="intruder").exists())
+
+    def test_a_sales_user_cannot_be_somebody_elses_supervisor(self):
+        self.open_sales()
+        with self.assertRaises(RegistrationError):
+            register_user(
+                username="chain",
+                password="Str0ngPass!42",
+                role="SALES",
+                passcode="shop-sales-2026",
+                manager=self.sales,
+            )
+
+    def test_the_security_screen_will_not_open_a_role_with_no_code(self):
+        client = Client()
+        client.force_login(self.admin)
+        client.post(
+            "/system/settings/security/",
+            {"allow_self_registration": "on", "enabled_SALES": "on"},
+        )
+        row = RegistrationPasscode.objects.get(role_code="SALES")
+        self.assertFalse(row.is_enabled)
+        self.assertEqual(available_roles(), [])
+
+    def test_clearing_a_passcode_also_closes_the_door(self):
+        self.open_sales()
+        client = Client()
+        client.force_login(self.admin)
+        client.post(
+            "/system/settings/security/",
+            {
+                "allow_self_registration": "on",
+                "clear_SALES": "on",
+                "enabled_SALES": "on",
+            },
+        )
+        row = RegistrationPasscode.objects.get(role_code="SALES")
+        self.assertFalse(row.has_passcode)
+        self.assertFalse(row.is_enabled)
+
+    def test_turning_self_registration_off_closes_every_role(self):
+        self.open_sales()
+        client = Client()
+        client.force_login(self.admin)
+        client.post("/system/settings/security/", {})
+        self.assertEqual(available_roles(), [])
+
+
+class DashboardProfileTests(AccessTestBase):
+    """The layout is chosen by permission, never by the role's name."""
+
+    def test_each_built_in_role_lands_on_its_own_layout(self):
+        self.assertEqual(profile_for(self.admin), "owner")
+        self.assertEqual(profile_for(self.manager), "stock")
+        self.assertEqual(profile_for(self.sales), "counter")
+
+    def test_a_custom_role_that_restocks_gets_the_manager_layout(self):
+        role = RoleDefinition.objects.create(
+            code="STOCKCLERK",
+            name="Stock Clerk",
+            permissions=["dashboard.view", "product.view", "stock.restock"],
+            data_scope=DataScope.OWN,
+        )
+        clerk = User.objects.create_user("cliff", password="pw", role=role.code)
+        self.assertEqual(profile_for(clerk), "stock")
+
+    def test_stripping_profit_access_changes_the_admin_layout(self):
+        apply_user_access(
+            user=self.admin,
+            role_code="ADMIN",
+            ticked=sorted(ALL_CODES - {"report.profit"}),
+            editor=self.admin,
+        )
+        self.refresh(self.admin)
+        self.assertNotEqual(profile_for(self.admin), "owner")
+
+    def test_somebody_with_almost_nothing_still_gets_a_page(self):
+        watcher = User.objects.create_user("wanda", password="pw", role="SALES")
+        apply_user_access(
+            user=watcher,
+            role_code="SALES",
+            ticked=["dashboard.view"],
+            editor=self.admin,
+        )
+        self.refresh(watcher)
+        self.assertEqual(profile_for(watcher), "viewer")
+        client = Client()
+        client.force_login(watcher)
+        self.assertEqual(client.get("/reports/").status_code, 200)

@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.password_validation import validate_password
 
-from .models import RoleCode, RoleDefinition, User
+from .models import DataScope, RoleCode, RoleDefinition, User
 from .registration import available_roles
 
 INPUT = "form-control"
@@ -288,6 +288,16 @@ class RegisterForm(StyledFormMixin, forms.Form):
         label="I am registering as",
         help_text="You need the passcode for the role you pick.",
     )
+    manager = forms.ModelChoiceField(
+        queryset=User.objects.none(),
+        required=False,
+        label="I report to",
+        help_text=(
+            "Sales staff sell from their supervisor's stock, so this decides "
+            "which products you will see. Leave blank if you work "
+            "independently."
+        ),
+    )
     passcode = forms.CharField(
         widget=forms.PasswordInput(attrs={"autocomplete": "one-time-code"}),
         label="Registration passcode",
@@ -309,6 +319,31 @@ class RegisterForm(StyledFormMixin, forms.Form):
         # a stranger the role exists and invite guessing.
         self.fields["role"].choices = available_roles()
 
+        # Who a new hire can report to. Sales users are excluded because a
+        # sales user's stock comes from somebody above them, and letting one
+        # report to another produces a scoping chain nobody asked for.
+        self.fields["manager"].queryset = (
+            User.objects.filter(is_active=True)
+            .exclude(role=RoleCode.SALES)
+            .order_by("first_name", "username")
+        )
+        self.fields["manager"].empty_label = "Nobody - I work independently"
+
+    @staticmethod
+    def _needs_a_manager(role_code: str) -> bool:
+        """
+        True for a role that can only see its own records.
+
+        Such a person sees no products at all until they are attached to
+        somebody, so registering without a supervisor produces an account that
+        looks broken. The administrator role is exempt - it sees everything -
+        and so is any role whose scope is TEAM or ALL.
+        """
+        if not role_code or role_code == RoleCode.ADMIN:
+            return False
+        role = RoleDefinition.objects.filter(code=role_code).first()
+        return bool(role and role.data_scope == DataScope.OWN)
+
     def clean_username(self):
         username = (self.cleaned_data["username"] or "").strip()
         if User.objects.filter(username__iexact=username).exists():
@@ -327,4 +362,20 @@ class RegisterForm(StyledFormMixin, forms.Form):
                 validate_password(p1)
             except forms.ValidationError as exc:
                 self.add_error("password1", exc)
+
+        # Only insisted on when there is somebody to pick. On a brand-new
+        # deployment the first account is often a sales user registering
+        # before any manager exists, and blocking that would leave nobody
+        # able to get in at all.
+        if (
+            not cleaned.get("manager")
+            and self._needs_a_manager(cleaned.get("role", ""))
+            and self.fields["manager"].queryset.exists()
+        ):
+            self.add_error(
+                "manager",
+                "Choose who you report to. Your role only sees its own "
+                "records, so without a supervisor you would see no products "
+                "to sell.",
+            )
         return cleaned

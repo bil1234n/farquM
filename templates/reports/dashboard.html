@@ -1,18 +1,28 @@
 {% extends "base.html" %}
 {% load core_extras humanize %}
 {% comment %}
-  Panels are gated on permission, not just on whether their data is empty:
-  an empty "Overdue Debts" card still tells a sales user that a credit module
-  exists and invites them to go looking for it.
+  There is no single dashboard any more.
+
+  reports/dashboards.py picks one of four layouts from the viewer's
+  permissions and data scope, and hands this template two lists: `cards` (the
+  headline tiles) and `panels` (the larger blocks, already in the right order
+  for that layout). Both are filtered before they arrive, so nothing here
+  needs a second permission check and no tile is ever a consolation prize for
+  a figure the viewer is not allowed to see.
+
+  Adding a tile or re-ordering a dashboard is a change in that Python file,
+  not in this HTML.
 {% endcomment %}
 
-{% block title %}Dashboard{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
+{% block title %}{{ profile_title }}{% endblock %}
+{% block page_title %}{{ profile_title }}{% endblock %}
 {% block breadcrumb %}<div class="crumb">
   {{ today|date:"l, d F Y" }}
   &middot;
   {% if scope_is_global %}
-    <i class="bi bi-people"></i> All managers
+    <i class="bi bi-people"></i> Every record in the business
+  {% elif user.data_scope == 'TEAM' %}
+    <i class="bi bi-diagram-3"></i> You and your team
   {% else %}
     <i class="bi bi-person"></i> Your own records
   {% endif %}
@@ -24,6 +34,11 @@
       <i class="bi bi-cart-plus me-1"></i> New Sale
     </a>
   {% endif %}
+  {% if user|can:"stock.restock" %}
+    <a href="{% url 'inventory:low_stock' %}" class="btn btn-outline-warning btn-sm">
+      <i class="bi bi-box-arrow-in-down me-1"></i> Restock
+    </a>
+  {% endif %}
   {% if can_see_credit %}
     <a href="{% url 'credit:dashboard' %}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-cash-stack me-1"></i> Credit
@@ -33,337 +48,62 @@
 
 {% block content %}
 
-{# ---------------- Today ---------------- #}
-<div class="row g-3 mb-3">
-  <div class="col-6 col-lg-3">
-    <div class="stat-card accent-primary">
-      <div class="label">Today's Revenue</div>
-      <div class="value money">{{ today_stats.revenue|money }}</div>
-      <div class="hint">{{ today_stats.count }} sale{{ today_stats.count|pluralize }} recorded</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-3">
-    <div class="stat-card accent-success">
-      <div class="label">Collected Today</div>
-      <div class="value money">{{ today_stats.collected|money }}</div>
-      <div class="hint">
-        Cash at the till
-        {% if today_collections.collected %}
-          &middot; {{ today_collections.collected|money }} off old debts
-        {% endif %}
-      </div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-3">
-    <div class="stat-card accent-warning">
-      <div class="label">Total Receivables</div>
-      <div class="value money">{{ receivables.outstanding|money }}</div>
-      <div class="hint">{{ receivables.debt_count }} open debt{{ receivables.debt_count|pluralize }}</div>
-    </div>
-  </div>
-  <div class="col-6 col-lg-3">
-    <div class="stat-card accent-danger">
-      <div class="label">Overdue</div>
-      <div class="value money">{{ receivables.overdue_amount|money }}</div>
-      <div class="hint">{{ receivables.overdue_count }} past due date</div>
-    </div>
-  </div>
+<div class="dash-intro mb-3">
+  <i class="bi bi-info-circle me-2"></i><span>{{ profile_blurb }}</span>
 </div>
 
-{% comment %}
-  This month. Four slots, each with a fallback. Cost figures and profit
-  figures are separate permissions, so somebody who buys the stock can see
-  what it is worth without also being shown the margin on it - and a sales
-  user sees neither, but never gets an empty row where the numbers used to be.
-{% endcomment %}
+{# ---------------- Headline tiles, chosen for this person ---------------- #}
 <div class="row g-3 mb-3">
-
-  <div class="col-6 col-lg-3">
-    <div class="stat-card accent-info">
-      <div class="label">Month Revenue</div>
-      <div class="value money">{{ month_stats.revenue|money }}</div>
-      <div class="hint">{{ month_stats.count }} transaction{{ month_stats.count|pluralize }}</div>
-    </div>
-  </div>
-
-  <div class="col-6 col-lg-3">
-    {% if show_profit %}
-      <div class="stat-card accent-success">
-        <div class="label">Month Gross Profit <span class="badge text-bg-secondary ms-1">Restricted</span></div>
-        <div class="value money text-success">{{ month_profit.gross_profit|money }}</div>
-        <div class="hint">{{ month_profit.margin_percent }}% margin &middot; COGS {{ month_profit.cogs|money }}</div>
-      </div>
-    {% else %}
-      <div class="stat-card accent-success">
-        <div class="label">Collected This Month</div>
-        <div class="value money">{{ month_stats.collected|money }}</div>
-        <div class="hint">{{ month_collections.collected|money }} off older debts</div>
-      </div>
-    {% endif %}
-  </div>
-
-  <div class="col-6 col-lg-3">
-    {% if show_costs %}
-      <div class="stat-card accent-primary">
-        <div class="label">Stock Value (Cost)</div>
-        <div class="value money">{{ valuation.cost_value|money }}</div>
-        <div class="hint">{{ valuation.units|intcomma }} units &middot; {{ valuation.skus }} SKUs</div>
-      </div>
-    {% elif can_see_products %}
-      <div class="stat-card accent-primary">
-        <div class="label">Active Products</div>
-        <div class="value">{{ product_count }}</div>
-        <div class="hint">{{ low_stock_count }} need restocking</div>
-      </div>
-    {% else %}
-      <div class="stat-card accent-primary">
-        <div class="label">Customers</div>
-        <div class="value">{{ customer_count }}</div>
-        <div class="hint">{{ debtor_count }} currently owe money</div>
-      </div>
-    {% endif %}
-  </div>
-
-  <div class="col-6 col-lg-3">
-    {% if show_profit %}
-      <div class="stat-card accent-warning">
-        <div class="label">Potential Retail Profit</div>
-        <div class="value money">{{ valuation.potential_profit|money }}</div>
-        <div class="hint">If all current stock sells</div>
-      </div>
-    {% elif can_see_products %}
-      <div class="stat-card accent-warning">
-        <div class="label">Low Stock Items</div>
-        <div class="value">{{ low_stock_count }}</div>
-        <div class="hint"><a href="{% url 'inventory:low_stock' %}">Review now</a></div>
-      </div>
-    {% else %}
-      <div class="stat-card accent-warning">
-        <div class="label">Average Sale</div>
-        <div class="value money">{{ month_stats.average_sale|money }}</div>
-        <div class="hint">This month</div>
-      </div>
-    {% endif %}
-  </div>
-</div>
-
-<div class="row g-3">
-
-  {# ---------------- Chart ---------------- #}
-  <div class="col-lg-8">
-    <div class="card h-100">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-bar-chart me-1"></i> Revenue &mdash; last 14 days</span>
-        <a href="{% url 'reports:sales_report' %}" class="btn btn-sm btn-outline-secondary">Full report</a>
-      </div>
-      <div class="card-body">
-        {% if chart %}
-          {% with max_rev=chart|dictsortreversed:"revenue"|first %}
-            <div class="chart">
-              <div class="chart-peak">{{ max_rev.revenue|money }}</div>
-              {% for d in chart %}
-                <div class="bar" data-value="{{ d.label }}: {{ d.revenue|money }} ({{ d.count }})">
-                  <span style="height:{% if max_rev.revenue %}{% widthratio d.revenue max_rev.revenue 100 %}{% else %}0{% endif %}%"></span>
-                </div>
-              {% endfor %}
-            </div>
-            <div class="chart-labels">
-              {% for d in chart %}<div>{{ d.label }}</div>{% endfor %}
-            </div>
-            <div class="text-muted-sm mt-2">Peak day: {{ max_rev.revenue|money }}</div>
-          {% endwith %}
-        {% else %}
-          <div class="empty-state"><i class="bi bi-bar-chart"></i>No sales in this period yet.</div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-
-  {# ---------------- Aging ---------------- #}
-  <div class="col-lg-4">
-    <div class="card h-100">
-      <div class="card-header"><i class="bi bi-hourglass-split me-1"></i> Receivables Aging</div>
-      <div class="card-body">
-        {% with a=receivables.aging %}
-          {% if a.total %}
-            {% for bucket, amount in a.buckets.items %}
-              <div class="mb-2">
-                <div class="d-flex justify-content-between small">
-                  <span>
-                    {% if bucket == 'CURRENT' %}Not yet due
-                    {% elif bucket == '90+' %}Over 90 days
-                    {% else %}{{ bucket }} days overdue{% endif %}
-                    <span class="text-muted">({{ a.counts|dictsort:0|first }}{{ '' }})</span>
-                  </span>
-                  <span class="money fw-semibold">{{ amount|money }}</span>
-                </div>
-                <div class="progress">
-                  <div class="progress-bar
-                    {% if bucket == 'CURRENT' %}bg-info
-                    {% elif bucket == '1-30' %}bg-warning
-                    {% elif bucket == '31-60' %}bg-warning
-                    {% else %}bg-danger{% endif %}"
-                    style="width:{% widthratio amount a.total 100 %}%"></div>
-                </div>
-              </div>
-            {% endfor %}
-            <div class="d-flex justify-content-between border-top pt-2 mt-3 fw-bold">
-              <span>Total outstanding</span>
-              <span class="money">{{ a.total|money }}</span>
-            </div>
-          {% else %}
-            <div class="empty-state py-4">
-              <i class="bi bi-check-circle text-success"></i>
-              No outstanding debts.
-            </div>
+  {% for card in cards %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-{{ card.accent }}">
+        <div class="label">
+          <i class="bi {{ card.icon }} me-1"></i>{{ card.label }}
+          {% if card.restricted %}
+            <span class="badge text-bg-secondary ms-1">Restricted</span>
           {% endif %}
-        {% endwith %}
+        </div>
+        <div class="value {% if card.is_money %}money{% endif %}">
+          {% if card.is_money %}{{ card.value|money }}{% else %}{{ card.value|intcomma }}{% endif %}
+        </div>
+        <div class="hint">
+          {% if card.url %}<a href="{% url card.url %}">{{ card.hint }}</a>
+          {% else %}{{ card.hint }}{% endif %}
+        </div>
       </div>
     </div>
-  </div>
+  {% endfor %}
+</div>
 
-  {# ---------------- Recent sales ---------------- #}
-  {% if user|can:"sale.view" %}
-  <div class="col-lg-7">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-receipt me-1"></i> Recent Sales</span>
-        <a href="{% url 'sales:transaction_list' %}" class="btn btn-sm btn-outline-secondary">View all</a>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-hover">
-          <thead><tr>
-            <th>Reference</th><th>Customer</th><th class="num">Total</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            {% for t in recent_sales %}
-              <tr>
-                <td>
-                  <a href="{% url 'sales:transaction_detail' t.pk %}" class="mono">{{ t.reference }}</a>
-                  <div class="text-muted-sm">{{ t.created_at|date:"d M, H:i" }}</div>
-                </td>
-                <td>
-                  {{ t.customer_display }}
-                  <div class="text-muted-sm">{{ t.item_count }} item{{ t.item_count|pluralize }}</div>
-                </td>
-                <td class="num money">{{ t.total_amount|money }}</td>
-                <td><span class="badge text-bg-{{ t.status_class }}">{{ t.get_payment_status_display }}</span></td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="4"><div class="empty-state"><i class="bi bi-receipt"></i>No sales recorded yet.</div></td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% endif %}
+{# ---------------- Today, in one line ---------------- #}
+{% if user|can:"sale.view" %}
+  {% comment %}
+    Label first, figure second, each in its own element.
 
-  {# ---------------- Overdue ---------------- #}
-  {% if can_see_credit %}
-  <div class="col-lg-5">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span class="text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Overdue Debts</span>
-        <a href="{% url 'credit:debt_list' %}?status=OVERDUE" class="btn btn-sm btn-outline-danger">View all</a>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-hover">
-          <thead><tr><th>Customer</th><th class="num">Balance</th><th class="num">Late</th></tr></thead>
-          <tbody>
-            {% for d in overdue_debts %}
-              <tr>
-                <td>
-                  <a href="{% url 'credit:debt_detail' d.pk %}">{{ d.customer.name }}</a>
-                  <div class="text-muted-sm">{{ d.customer.phone }}</div>
-                </td>
-                <td class="num money fw-semibold">{{ d.balance|money }}</td>
-                <td class="num"><span class="badge text-bg-danger">{{ d.days_overdue }}d</span></td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="3"><div class="empty-state py-4"><i class="bi bi-check-circle text-success"></i>Nothing overdue.</div></td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    Written this way for the translator, not for the designer: the page is
+    translated in the browser by matching whole text nodes against a
+    dictionary, so "{{ amount }} sold" would arrive as a stranded " sold"
+    that no dictionary entry can match. A label on its own always matches.
+  {% endcomment %}
+  <div class="today-strip mb-3">
+    <span class="today-label"><i class="bi bi-sun me-1"></i>Today</span>
+    <span><span class="t-label">Sold today</span>
+      <strong class="money">{{ today_stats.revenue|money }}</strong></span>
+    <span><span class="t-label">Sales recorded</span>
+      <strong>{{ today_stats.count }}</strong></span>
+    <span><span class="t-label">Taken at the till</span>
+      <strong class="money">{{ today_stats.collected|money }}</strong></span>
+    {% if can_see_credit %}
+      <span><span class="t-label">Off older debts</span>
+        <strong class="money">{{ today_collections.collected|money }}</strong></span>
+    {% endif %}
   </div>
-  {% endif %}
+{% endif %}
 
-  {# ---------------- Per-person breakdown ---------------- #}
-  {# The payoff of per-manager isolation: with each manager's records kept #}
-  {# apart, they can finally be compared side by side. A manager scoped to #}
-  {# their own rows would see a one-line table of their own total, so this #}
-  {# is gated on the role rather than shown to everyone. #}
-  {% if by_manager %}
-  <div class="col-12">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-people me-1"></i>
-          {% if scope_is_global %}By staff member{% else %}My team{% endif %} &mdash; this month</span>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-hover mb-0">
-          <thead><tr>
-            <th>Staff member</th><th class="num">Sales</th><th class="num">Revenue</th>
-            <th class="num">Collected</th><th class="num">Still owed</th>
-          </tr></thead>
-          <tbody>
-            {% for m in by_manager %}
-              <tr>
-                <td class="fw-semibold">{{ m.name }}</td>
-                <td class="num">{{ m.count }}</td>
-                <td class="num money">{{ m.revenue|money }}</td>
-                <td class="num money text-success">{{ m.collected|money }}</td>
-                <td class="num money {% if m.outstanding > 0 %}text-danger{% endif %}">{{ m.outstanding|money }}</td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="5"><div class="empty-state py-4"><i class="bi bi-people"></i>No sales this month.</div></td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
-  {# ---------------- Low stock ---------------- #}
-  {% if can_see_products %}
-  <div class="col-12">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span class="text-warning-emphasis"><i class="bi bi-box-seam me-1"></i> Stock Needing Attention</span>
-        <a href="{% url 'inventory:low_stock' %}" class="btn btn-sm btn-outline-warning">View all</a>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-hover">
-          <thead><tr>
-            <th>Product</th><th>SKU</th><th>Category</th>
-            <th class="num">In stock</th><th class="num">Threshold</th><th>Status</th><th></th>
-          </tr></thead>
-          <tbody>
-            {% for p in low_stock_products %}
-              <tr>
-                <td><a href="{% url 'inventory:product_detail' p.pk %}">{{ p.name }}</a></td>
-                <td class="mono text-muted">{{ p.sku }}</td>
-                <td>{{ p.category.name|default:"&mdash;" }}</td>
-                <td class="num fw-semibold">{{ p.stock_quantity }}</td>
-                <td class="num text-muted">{{ p.low_stock_threshold }}</td>
-                <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
-                <td class="text-end">
-                  {% if user|can:"stock.restock" %}
-                    <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-sm btn-outline-primary">Restock</a>
-                  {% endif %}
-                </td>
-              </tr>
-            {% empty %}
-              <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-check-circle text-success"></i>All stock levels are healthy.</div></td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% endif %}
+{# ---------------- Panels, in this layout's order ---------------- #}
+<div class="row g-3">
+  {% for panel in panels %}
+    {% include panel.template with col=panel.col %}
+  {% endfor %}
 </div>
 {% endblock %}

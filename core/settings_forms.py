@@ -169,9 +169,12 @@ class SystemSettingForm(StyledMixin, forms.ModelForm):
             "currency_symbol",
             "default_credit_due_days",
             "low_stock_threshold",
-            "allow_self_registration",
             "require_credit_approval",
         ]
+        # `allow_self_registration` is deliberately absent: it lives on the
+        # Security tab next to the passcodes it governs. A switch that opens
+        # the front door should not be filed under "operational defaults"
+        # between the reorder level and the credit terms.
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

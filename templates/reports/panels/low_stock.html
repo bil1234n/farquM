@@ -1,0 +1,36 @@
+{% load core_extras %}
+<div class="col-lg-{{ col|default:12 }}">
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span class="text-warning-emphasis"><i class="bi bi-box-seam me-1"></i> Stock Needing Attention</span>
+      <a href="{% url 'inventory:low_stock' %}" class="btn btn-sm btn-outline-warning">View all</a>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr>
+          <th>Product</th><th>SKU</th><th>Category</th>
+          <th class="num">In stock</th><th class="num">Threshold</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>
+          {% for p in low_stock_products %}
+            <tr>
+              <td><a href="{% url 'inventory:product_detail' p.pk %}">{{ p.name }}</a></td>
+              <td class="mono text-muted">{{ p.sku }}</td>
+              <td>{{ p.category.name|default:"&mdash;" }}</td>
+              <td class="num fw-semibold">{{ p.stock_quantity }}</td>
+              <td class="num text-muted">{{ p.low_stock_threshold }}</td>
+              <td><span class="badge text-bg-{{ p.stock_status_class }}">{{ p.stock_status_label }}</span></td>
+              <td class="text-end">
+                {% if user|can:"stock.restock" %}
+                  <a href="{% url 'inventory:product_restock' p.pk %}" class="btn btn-sm btn-outline-primary">Restock</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-check-circle text-success"></i>All stock levels are healthy.</div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

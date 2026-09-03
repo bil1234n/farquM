@@ -33,7 +33,13 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 
-from .models import AuditAction, RoleCode, RoleDefinition, User
+from .models import (
+    AuditAction,
+    RegistrationPasscode,
+    RoleCode,
+    RoleDefinition,
+    User,
+)
 from .services import log_action
 
 #: Historical alias - this module used to import the TextChoices as `Role`.
@@ -58,20 +64,70 @@ class RegistrationError(Exception):
     """Registration refused. The message is safe to show a user."""
 
 
-def _passcode_for(role: str) -> str:
+def _env_passcode(role: str) -> str:
     """
-    The configured passcode for a role, or "" if it has none.
+    The passcode set on the server for a role, or "" if it has none.
 
-    Only the three built-in roles can be self-registered for. A custom role is
-    created by an administrator for a specific person, so there is nobody to
-    hand a shared code to - and inventing an environment variable per custom
-    role would mean a redeploy every time somebody adds one.
+    This is the fallback path, kept so a deployment that configured
+    PASSCODE_ADMIN / PASSCODE_MANAGER in its .env keeps working with no
+    action required. Only the three built-in roles can have one: you cannot
+    invent an environment variable per custom role. Custom roles get their
+    code from the database instead.
     """
-    return {
-        RoleCode.ADMIN: settings.REGISTRATION_PASSCODE_ADMIN,
-        RoleCode.MANAGER: settings.REGISTRATION_PASSCODE_MANAGER,
-        RoleCode.SALES: getattr(settings, "REGISTRATION_PASSCODE_SALES", ""),
-    }.get(role, "")
+    return (
+        {
+            RoleCode.ADMIN: getattr(settings, "REGISTRATION_PASSCODE_ADMIN", ""),
+            RoleCode.MANAGER: getattr(settings, "REGISTRATION_PASSCODE_MANAGER", ""),
+            RoleCode.SALES: getattr(settings, "REGISTRATION_PASSCODE_SALES", ""),
+        }.get(role, "")
+        or ""
+    )
+
+
+def has_server_passcode(role: str) -> bool:
+    """Public read of the .env fallback, for the Security settings screen."""
+    return bool(_env_passcode(role))
+
+
+def passcode_row(role: str) -> RegistrationPasscode | None:
+    """
+    The database row for a role's passcode, or None if there is none.
+
+    Swallows database errors on purpose: this is reached from the login page's
+    context processor, and a missing table during a half-finished migration
+    must not take the login page down. Returning None means "fall back to the
+    environment", which is the safe direction - it can only ever close doors,
+    never open one.
+    """
+    try:
+        return RegistrationPasscode.objects.filter(role_code=role).first()
+    except Exception:
+        return None
+
+
+def ensure_passcode_rows() -> None:
+    """
+    Give every assignable role a passcode row so Settings -> Security can
+    show it. A new row is disabled and codeless: creating a role must never
+    open a registration door by itself.
+    """
+    try:
+        existing = set(
+            RegistrationPasscode.objects.values_list("role_code", flat=True)
+        )
+        missing = [
+            RegistrationPasscode(
+                role_code=role.code,
+                is_enabled=bool(_env_passcode(role.code)),
+            )
+            for role in RoleDefinition.objects.assignable()
+            if role.code not in existing
+        ]
+        if missing:
+            RegistrationPasscode.objects.bulk_create(missing, ignore_conflicts=True)
+    except Exception:
+        # Same reasoning as passcode_row: never 500 a page over housekeeping.
+        pass
 
 
 def _self_registration_allowed() -> bool:
@@ -93,22 +149,82 @@ def _self_registration_allowed() -> bool:
 
 
 def role_available(role: str) -> bool:
-    """A role can only be registered for if its passcode is configured."""
-    return bool(_self_registration_allowed() and _passcode_for(role))
+    """
+    May somebody register as this role right now?
+
+    Three switches, all of which must be on:
+
+      1. self-registration is allowed at all (env + the administrator's
+         setting);
+      2. the role's own switch is on - a row that exists but is disabled is
+         an administrator saying "not at the moment";
+      3. an actual passcode exists to check against, in the database or in
+         the environment. A blank code must never mean "anything passes".
+
+    A role with no row at all falls back to the environment, which is how
+    a deployment that upgrades without visiting Settings keeps working.
+    """
+    if not _self_registration_allowed():
+        return False
+
+    row = passcode_row(role)
+    if row is not None:
+        if not row.is_enabled:
+            return False
+        return row.has_passcode or bool(_env_passcode(role))
+
+    return bool(_env_passcode(role))
 
 
 def available_roles() -> list[tuple[str, str]]:
-    """Role choices to offer on the registration form."""
-    names = dict(
-        RoleDefinition.objects.filter(code__in=RoleCode.values).values_list(
-            "code", "name"
+    """
+    Role choices to offer on the registration form.
+
+    Read from RoleDefinition, not from the RoleCode enum, so a custom role an
+    administrator created and gave a passcode is offered too. Ordered by rank,
+    so Administrator/Manager/Sales appear in seniority order rather than
+    alphabetically.
+    """
+    try:
+        roles = list(RoleDefinition.objects.assignable())
+    except Exception:
+        return []
+    return [(role.code, role.name) for role in roles if role_available(role.code)]
+
+
+def registration_status() -> list[dict]:
+    """
+    One row per assignable role, for the Security settings screen.
+
+    Deliberately never includes the passcode itself - it is stored hashed and
+    cannot be read back. `configured` answers the only question the screen
+    needs: is there a code, and where does it come from.
+    """
+    ensure_passcode_rows()
+    rows_by_code = {
+        row.role_code: row for row in RegistrationPasscode.objects.all()
+    }
+    out = []
+    for role in RoleDefinition.objects.assignable():
+        row = rows_by_code.get(role.code)
+        from_env = bool(_env_passcode(role.code))
+        out.append(
+            {
+                "role": role,
+                "row": row,
+                "enabled": bool(row and row.is_enabled),
+                "has_passcode": bool(row and row.has_passcode),
+                "from_env": from_env,
+                "configured": bool(row and row.has_passcode) or from_env,
+                "available": role_available(role.code),
+                "is_system": role.is_system,
+                "users": role.user_count,
+                "last_used_at": row.last_used_at if row else None,
+                "use_count": row.use_count if row else 0,
+                "note": row.note if row else "",
+            }
         )
-    )
-    return [
-        (value, names.get(value, label))
-        for value, label in RoleCode.choices
-        if role_available(value)
-    ]
+    return out
 
 
 def registration_open() -> bool:
@@ -159,17 +275,32 @@ def check_passcode(role: str, supplied: str, *, ip: str = "", request=None) -> N
             "account for you."
         )
 
-    expected = _passcode_for(role)
-    if not expected:
+    if not role_available(role):
         # Do not reveal WHICH roles are configured beyond what the form shows.
         raise RegistrationError(
             "Registration is not enabled for that role. Contact an administrator."
         )
 
-    # hmac.compare_digest, not ==. A plain comparison returns as soon as two
-    # characters differ, and that timing difference is enough to recover the
-    # passcode one character at a time over many requests.
-    if not hmac.compare_digest(str(supplied or ""), str(expected)):
+    # Two sources, checked in a deliberate order. A code an administrator set
+    # from Settings SUPERSEDES the one in the server environment - otherwise
+    # "change the passcode" would leave the old one quietly working, which is
+    # the opposite of what changing a passcode is for.
+    row = passcode_row(role)
+    if row is not None and row.has_passcode:
+        # check_password is salted and constant-time, so the hmac dance below
+        # is neither needed nor possible here (there is no plaintext to
+        # compare against - that is the point of storing it hashed).
+        correct = row.verify(supplied)
+    else:
+        expected = _env_passcode(role)
+        # hmac.compare_digest, not ==. A plain comparison returns as soon as
+        # two characters differ, and that timing difference is enough to
+        # recover the passcode one character at a time over many requests.
+        correct = bool(expected) and hmac.compare_digest(
+            str(supplied or ""), str(expected)
+        )
+
+    if not correct:
         count = _record_failure(ip)
         log_action(
             AuditAction.LOGIN_FAILED,
@@ -199,6 +330,7 @@ def register_user(
     password: str,
     role: str,
     passcode: str,
+    manager=None,
     first_name: str = "",
     last_name: str = "",
     email: str = "",
@@ -221,14 +353,25 @@ def register_user(
     if User.objects.filter(username__iexact=username).exists():
         raise RegistrationError("That username is already taken.")
 
-    if role not in RoleCode.values:
+    # Checked against the database rather than the RoleCode enum, so a custom
+    # role an administrator opened for registration works, and a role deleted
+    # between loading the form and submitting it does not.
+    if not RoleDefinition.objects.filter(code=role, is_active=True).exists():
         raise RegistrationError(
             "Registration is not enabled for that role. Contact an administrator."
         )
 
+    if manager is not None and getattr(manager, "role", "") == RoleCode.SALES:
+        # Belt and braces: the form already excludes sales users from the
+        # dropdown, but a hand-crafted POST must not build a sales-reports-to-
+        # sales chain, because catalog scoping walks exactly one hop upward
+        # and a chain would silently stop resolving products.
+        raise RegistrationError("That person cannot be chosen as a supervisor.")
+
     user = User(
         username=username,
         role=role,
+        manager=manager,
         first_name=(first_name or "").strip(),
         last_name=(last_name or "").strip(),
         email=(email or "").strip(),
@@ -248,6 +391,16 @@ def register_user(
     user.save()
 
     clear_attempts(ip)
+    row = passcode_row(role)
+    if row is not None:
+        # Best-effort bookkeeping so an administrator can see on the Security
+        # screen whether a code is actually in use. Never worth failing a
+        # completed registration over.
+        try:
+            row.record_use()
+        except Exception:
+            logger.warning("Could not record passcode use for role %s", role)
+
     log_action(
         AuditAction.CREATE,
         instance=user,
