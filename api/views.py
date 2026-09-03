@@ -45,10 +45,19 @@ from credit.services import (
     aging_summary,
     bulk_settle_customer,
     record_repayment,
+    restore_debt,
+    reverse_repayment,
+    set_block,
+    update_credit_limit,
     write_off_debt,
 )
 from inventory.models import Category, Product, StockMovement, Supplier
-from inventory.services import restock as do_restock
+from inventory.services import (
+    adjust_to as do_recount,
+    restock as do_restock,
+    return_from_customer as do_return,
+    write_off as do_write_off,
+)
 from reports.dashboards import profile_for as dashboard_profile
 from reports.selectors import (
     collections_summary,
@@ -77,6 +86,9 @@ from .models import DeviceToken, NotificationLog
 from .permissions import ActionPermission, HasPermission, IsStaff, requires
 from .serializers import (
     CategorySerializer,
+    CreditAccountSerializer,
+    CreditLimitSerializer,
+    RescheduleSerializer,
     CustomerSerializer,
     DebtSerializer,
     DeviceTokenSerializer,
@@ -84,8 +96,11 @@ from .serializers import (
     NotificationSerializer,
     ProductSerializer,
     RepaymentCreateSerializer,
+    ReceiptSerializer,
     RepaymentSerializer,
     RestockSerializer,
+    StockAdjustSerializer,
+    StockRecountSerializer,
     RoleDefinitionSerializer,
     SaleCreateSerializer,
     StockMovementSerializer,
@@ -109,6 +124,18 @@ class StandardPagination(PageNumberPagination):
 def _error(exc, default="Something went wrong."):
     msgs = getattr(exc, "messages", None) or [str(exc) or default]
     return Response({"detail": msgs[0], "errors": msgs}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _credit_account_for(customer):
+    """
+    This customer's credit account, creating it if it has never existed.
+
+    Created rather than 404'd because a customer with no account is not an
+    error - it just means nobody has extended them credit yet, and "set their
+    limit" is exactly the request that should bring the account into being.
+    """
+    account, _ = CreditAccount.objects.get_or_create(customer=customer)
+    return account
 
 
 def request_language(request) -> str:
@@ -618,8 +645,15 @@ class ProductViewSet(viewsets.ModelViewSet):
         "barcode": "product.view",
         "low_stock": "product.view",
         "restock": "stock.restock",
+        "adjust": "stock.adjust",
+        "recount": "stock.recount",
         "movements": "stock.view_movements",
+        "photo": "product.edit",
     }
+    # Multipart as well as JSON: a product photo arrives as a file part, and
+    # without these parsers DRF answers 415 to the phone's upload with a
+    # message nobody can act on.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -718,6 +752,134 @@ class ProductViewSet(viewsets.ModelViewSet):
                                 f"from the mobile app."))
         return Response(StockMovementSerializer(movement).data, status=201)
 
+    @action(detail=True, methods=["post"])
+    def adjust(self, request, pk=None):
+        """
+        Damage, write-off, or a customer return - the stock corrections that
+        are not a delivery and not a sale.
+
+        A separate permission from `stock.restock` on purpose: receiving goods
+        adds units somebody paid for, while adjusting removes units nobody has
+        to account for. They are different amounts of trust.
+        """
+        product = self.get_object()
+        serializer = StockAdjustSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        kind = data["kind"]
+
+        try:
+            if kind == "DAMAGE":
+                movement = do_write_off(
+                    product, data["quantity"],
+                    user=request.user, reason=data.get("reason", ""),
+                )
+            else:  # RETURN_IN
+                movement = do_return(
+                    product, data["quantity"],
+                    user=request.user,
+                    reason=data.get("reason", ""),
+                    reference=data.get("reference", ""),
+                )
+        except ValidationError as exc:
+            return _error(exc)
+
+        log_action(
+            AuditAction.STOCK,
+            instance=product,
+            description=(
+                f"Adjusted '{product.name}' by {movement.quantity_delta:+d} "
+                f"({movement.get_movement_type_display()}) from the mobile app."
+            ),
+        )
+        return Response(StockMovementSerializer(movement).data, status=201)
+
+    @action(detail=True, methods=["post"])
+    def recount(self, request, pk=None):
+        """
+        Set the stock to a counted figure, writing the difference as a
+        movement so the trail still adds up.
+
+        The most dangerous of the three stock permissions, which is why it has
+        its own: restocking and adjusting both say what happened, while a
+        recount simply asserts a number and buries whatever the difference
+        was. `stock.recount` is deliberately narrow.
+        """
+        product = self.get_object()
+        serializer = StockRecountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            movement = do_recount(
+                product,
+                serializer.validated_data["counted_quantity"],
+                user=request.user,
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except ValidationError as exc:
+            return _error(exc)
+
+        if movement is None:
+            # The count matched. Not an error, and not worth an audit row.
+            return Response(
+                {"detail": "The count already matches. Nothing changed.",
+                 "changed": False},
+                status=200,
+            )
+
+        log_action(
+            AuditAction.STOCK, instance=product,
+            description=(
+                f"Recounted '{product.name}' to {product.stock_quantity} "
+                f"({movement.quantity_delta:+d}) from the mobile app."
+            ),
+        )
+        return Response(StockMovementSerializer(movement).data, status=201)
+
+    @action(detail=True, methods=["post", "delete"])
+    def photo(self, request, pk=None):
+        """
+        Attach or remove a product photo.
+
+        Its own endpoint rather than a field on PATCH because a phone sends a
+        photo as multipart and the rest of an edit as JSON; making one request
+        carry both means the app has to re-send every field to change a
+        picture, and re-sending a price by accident is how prices drift.
+        """
+        product = self.get_object()
+
+        if request.method == "DELETE":
+            if product.image:
+                old = product.image
+                product.image = None
+                product.save(update_fields=["image"])
+                try:
+                    old.delete(save=False)
+                except Exception:
+                    # An orphaned blob costs storage; failing the request
+                    # costs the user their edit. Keep the edit.
+                    logger.warning("Could not delete image for product %s", product.pk)
+                log_action(
+                    AuditAction.UPDATE, instance=product,
+                    description=f"Removed the photo of '{product.name}'.",
+                )
+            return Response({"image_url": None, "has_image": False})
+
+        upload = request.FILES.get("image") or request.FILES.get("file")
+        if upload is None:
+            return Response({"detail": "No file was submitted."}, status=400)
+
+        serializer = self.get_serializer(
+            product, data={"image": upload}, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        log_action(
+            AuditAction.UPDATE, instance=product,
+            description=f"Added a photo to '{product.name}' from the mobile app.",
+        )
+        return Response(self.get_serializer(product).data)
+
     @action(detail=True, methods=["get"])
     def movements(self, request, pk=None):
         qs = self.get_object().stock_movements.select_related("performed_by")[:100]
@@ -753,7 +915,12 @@ class CustomerViewSet(viewsets.ModelViewSet):
         "PATCH": "customer.edit",
         "PUT": "customer.edit",
     }
-    action_permissions = {"debts": "credit.view", "pay": "credit.collect"}
+    action_permissions = {
+        "debts": "credit.view",
+        "pay": "credit.collect",
+        "credit_limit": "credit.limits",
+        "block": "credit.limits",
+    }
     # No DELETE: removing a customer would orphan their sales and debts, and
     # `owner` is SET_NULL, so the records would survive but become invisible.
     http_method_names = ["get", "post", "patch", "put", "head", "options"]
@@ -822,6 +989,81 @@ class CustomerViewSet(viewsets.ModelViewSet):
             "repayments": RepaymentSerializer(receipts, many=True).data,
         }, status=201)
 
+    @action(detail=True, methods=["get", "post"], url_path="credit-limit")
+    def credit_limit(self, request, pk=None):
+        """
+        Read or set how deep this customer may go.
+
+        A financial control, not a detail of the customer record, which is why
+        it is behind `credit.limits` rather than `customer.edit`: whoever can
+        correct a misspelt name should not thereby be able to extend the
+        shop's exposure.
+        """
+        customer = self.get_object()
+        account = _credit_account_for(customer)
+
+        if request.method == "GET":
+            return Response(
+                CreditAccountSerializer(account, context={"request": request}).data
+            )
+
+        serializer = CreditLimitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            update_credit_limit(
+                account=account,
+                new_limit=serializer.validated_data["credit_limit"],
+                user=request.user,
+                reason=serializer.validated_data.get("reason", ""),
+            )
+        except (CreditError, ValidationError) as exc:
+            return _error(exc)
+
+        account.refresh_from_db()
+        log_action(
+            AuditAction.UPDATE, instance=customer,
+            description=(
+                f"Set {customer.name}'s credit limit to "
+                f"{account.credit_limit} via the mobile app."
+            ),
+        )
+        return Response(
+            CreditAccountSerializer(account, context={"request": request}).data
+        )
+
+    @action(detail=True, methods=["post"])
+    def block(self, request, pk=None):
+        """Stop, or resume, this customer's ability to buy on credit."""
+        customer = self.get_object()
+        account = _credit_account_for(customer)
+
+        blocked = bool(request.data.get("blocked", True))
+        reason = (request.data.get("reason") or "").strip()
+        if blocked and not reason:
+            # An unexplained block is one nobody else can safely lift.
+            return Response(
+                {"detail": "A reason is required to block a customer."}, status=400
+            )
+
+        try:
+            set_block(
+                account=account, blocked=blocked, user=request.user, reason=reason
+            )
+        except (CreditError, ValidationError) as exc:
+            return _error(exc)
+
+        account.refresh_from_db()
+        log_action(
+            AuditAction.OVERRIDE, instance=customer,
+            description=(
+                f"{'Blocked' if blocked else 'Unblocked'} credit for "
+                f"{customer.name} via the mobile app. Reason: {reason or 'none given'}"
+            ),
+        )
+        return Response(
+            CreditAccountSerializer(account, context={"request": request}).data
+        )
+
 
 # ---------------------------------------------------------------------------
 # Sales
@@ -833,7 +1075,12 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     action_permissions = {
         "void": "sale.void",
         "receipt": "sale.receipt.add",
+        "delete_receipt": "sale.receipt.delete",
     }
+    # Receipts arrive as file parts. Without MultiPartParser the phone's
+    # upload comes back 415 with a message about content types that means
+    # nothing to the person holding the camera.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -941,20 +1188,86 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"])
     def receipt(self, request, pk=None):
+        """
+        Attach one or more photos of proof to a sale.
+
+        Accepts a list so a phone can send the front and back of a paper slip
+        in one go on a bad connection, rather than two requests either of
+        which can fail alone.
+        """
         txn = self.get_object()
-        files = request.FILES.getlist("file")
+        files = request.FILES.getlist("file") or request.FILES.getlist("files")
         if not files:
-            return Response({"detail": "No file supplied."}, status=400)
-        created = [
-            Receipt.objects.create(
-                transaction=txn, file=f,
+            return Response({"detail": "No file was submitted."}, status=400)
+
+        created = []
+        for upload in files:
+            receipt = Receipt(
+                transaction=txn,
+                file=upload,
                 kind=request.data.get("kind", "SALE"),
                 caption=request.data.get("caption", ""),
                 uploaded_by=request.user,
             )
-            for f in files
-        ]
-        return Response({"attached": len(created)}, status=201)
+            try:
+                # full_clean runs validate_receipt_file, which is what keeps
+                # a 40 MB video or an .exe out of the receipts folder. Saving
+                # straight past it would let anything through.
+                receipt.full_clean(exclude=["transaction", "uploaded_by"])
+            except ValidationError as exc:
+                return _error(exc)
+            receipt.save()
+            created.append(receipt)
+
+        log_action(
+            AuditAction.UPDATE, instance=txn,
+            description=(
+                f"Attached {len(created)} receipt(s) to {txn.reference} "
+                f"from the mobile app."
+            ),
+        )
+        return Response(
+            {
+                "attached": len(created),
+                # Re-queried rather than read off `txn.receipts`: the list
+                # queryset prefetches receipts, so the cached list is the one
+                # from before this upload and the app would be told it
+                # attached a file that is not in the response.
+                "receipts": ReceiptSerializer(
+                    Receipt.objects.filter(transaction=txn).order_by("-created_at"),
+                    many=True,
+                    context={"request": request},
+                ).data,
+            },
+            status=201,
+        )
+
+    @action(detail=True, methods=["delete"], url_path=r"receipt/(?P<receipt_id>\d+)")
+    def delete_receipt(self, request, pk=None, receipt_id=None):
+        """
+        Remove one attachment.
+
+        Its own permission (`sale.receipt.delete`), not the one that attaches
+        them: adding proof is bookkeeping, removing it is destroying evidence
+        of a payment.
+        """
+        txn = self.get_object()
+        receipt = txn.receipts.filter(pk=receipt_id).first()
+        if receipt is None:
+            return Response({"detail": "Not found."}, status=404)
+
+        blob = receipt.file
+        receipt.delete()
+        try:
+            blob.delete(save=False)
+        except Exception:
+            logger.warning("Could not delete receipt blob for %s", txn.reference)
+
+        log_action(
+            AuditAction.DELETE, instance=txn,
+            description=f"Deleted a receipt from {txn.reference} via the mobile app.",
+        )
+        return Response(status=204)
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +1282,9 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
         "repayments": "credit.view",
         "pay": "credit.collect",
         "write_off": "credit.write_off",
+        "reschedule": "credit.reschedule",
+        "reverse": "credit.reverse_payment",
+        "restore": "credit.write_off",
     }
     pagination_class = StandardPagination
 
@@ -1036,6 +1352,89 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
         log_action(AuditAction.OVERRIDE, instance=debt,
                    description=f"WROTE OFF {debt.reference} from the mobile app. Reason: {reason}")
         return Response(DebtSerializer(debt).data)
+
+    @action(detail=True, methods=["post"])
+    def restore(self, request, pk=None):
+        """Undo a write-off. Same permission as writing off, deliberately."""
+        debt = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+        try:
+            restore_debt(debt=debt, user=request.user, reason=reason)
+        except (CreditError, ValidationError) as exc:
+            return _error(exc)
+        log_action(
+            AuditAction.OVERRIDE, instance=debt,
+            description=f"Restored written-off {debt.reference} via the mobile app.",
+        )
+        return Response(DebtSerializer(debt).data)
+
+    @action(detail=True, methods=["post"])
+    def reschedule(self, request, pk=None):
+        """
+        Move a debt's due date.
+
+        Its own permission because moving a date is how an overdue book is
+        made to look healthy - the money has not arrived, only the deadline
+        moved - so it belongs with somebody accountable for the total.
+        """
+        debt = self.get_object()
+        serializer = RescheduleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_date = serializer.validated_data["due_date"]
+        reason = serializer.validated_data.get("reason", "")
+
+        previous = debt.due_date
+        debt.due_date = new_date
+        if reason:
+            debt.notes = (debt.notes + "\n" if debt.notes else "") + reason
+        debt.save(update_fields=["due_date", "notes", "updated_at"])
+
+        log_action(
+            AuditAction.UPDATE, instance=debt,
+            description=(
+                f"Rescheduled {debt.reference} from {previous} to {new_date} "
+                f"via the mobile app."
+            ),
+            changes={"due_date": {"from": str(previous), "to": str(new_date)}},
+        )
+        return Response(DebtSerializer(debt).data)
+
+    @action(detail=True, methods=["post"], url_path=r"repayments/(?P<repayment_id>\d+)/reverse")
+    def reverse(self, request, pk=None, repayment_id=None):
+        """
+        Un-do a recorded payment.
+
+        The other way cash goes missing on paper, so it needs a reason and its
+        own permission, and the reversal is itself written to the audit log
+        rather than the original row being edited away.
+        """
+        debt = self.get_object()
+        repayment = debt.repayments.filter(pk=repayment_id).first()
+        if repayment is None:
+            return Response({"detail": "Not found."}, status=404)
+
+        reason = (request.data.get("reason") or "").strip()
+        try:
+            reverse_repayment(repayment=repayment, user=request.user, reason=reason)
+        except (CreditError, ValidationError) as exc:
+            return _error(exc)
+
+        debt.refresh_from_db()
+        log_action(
+            AuditAction.OVERRIDE, instance=repayment,
+            description=(
+                f"Reversed {repayment.reference} on {debt.reference} via the "
+                f"mobile app. Reason: {reason}"
+            ),
+        )
+        return Response(
+            {
+                "repayment": RepaymentSerializer(
+                    repayment, context={"request": request}
+                ).data,
+                "debt": DebtSerializer(debt).data,
+            }
+        )
 
 
 @api_view(["GET"])

@@ -307,6 +307,21 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
     image_url = serializers.SerializerMethodField()
     owner_name = serializers.SerializerMethodField()
 
+    # Writable, so the phone can attach a photo the same way the web form
+    # does. `image_url` stays the read side - a client should never have to
+    # know how the storage backend builds a path, and on Cloudinary it is not
+    # a path at all.
+    #
+    # required=False AND allow_null: a PATCH that does not mention the image
+    # must leave it alone, and an explicit null must clear it. Without
+    # allow_null the only way to remove a photo would be to delete the
+    # product.
+    image = serializers.ImageField(
+        required=False, allow_null=True, write_only=True
+    )
+    #: So a list view can show a placeholder without fetching every photo.
+    has_image = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
         fields = [
@@ -315,10 +330,14 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
             "unit", "unit_display",
             "cost_price", "selling_price", "profit_per_unit", "margin_percent",
             "stock_quantity", "low_stock_threshold", "stock_value",
-            "stock_status", "stock_status_label", "is_active", "image_url",
+            "stock_status", "stock_status_label", "is_active",
+            "image", "image_url", "has_image",
             "owner_name",
         ]
-        read_only_fields = ["id", "stock_quantity"]
+        read_only_fields = ["id", "stock_quantity", "has_image"]
+
+    def get_has_image(self, obj) -> bool:
+        return bool(obj.image)
 
     def get_image_url(self, obj):
         if not obj.image:
@@ -352,6 +371,57 @@ class RestockSerializer(serializers.Serializer):
         max_digits=12, decimal_places=2, required=False, allow_null=True
     )
     reference = serializers.CharField(max_length=60, required=False, allow_blank=True)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class StockAdjustSerializer(serializers.Serializer):
+    """
+    Damage out, or a customer return in.
+
+    `kind` is restricted to those two on purpose. RESTOCK, SALE and
+    VOID_REVERSAL are written by their own services with their own rules, and
+    letting a client name any movement type would be a way to fabricate a
+    delivery or a sale that no money ever passed through.
+    """
+
+    KINDS = (
+        ("DAMAGE", "Damage / write-off"),
+        ("RETURN_IN", "Customer return (in)"),
+    )
+
+    kind = serializers.ChoiceField(choices=KINDS)
+    quantity = serializers.IntegerField(min_value=1)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    reference = serializers.CharField(max_length=60, required=False, allow_blank=True)
+
+
+class StockRecountSerializer(serializers.Serializer):
+    """A stock-take: the number you counted on the shelf, not a difference."""
+
+    counted_quantity = serializers.IntegerField(min_value=0)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class RescheduleSerializer(serializers.Serializer):
+    """Move a debt's due date."""
+
+    due_date = serializers.DateField()
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_due_date(self, value):
+        from django.utils import timezone
+
+        if value < timezone.localdate():
+            raise serializers.ValidationError("The due date cannot be in the past.")
+        return value
+
+
+class CreditLimitSerializer(serializers.Serializer):
+    """How much this customer may owe at once."""
+
+    credit_limit = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=0
+    )
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
@@ -431,14 +501,31 @@ class TransactionItemSerializer(FinancialFieldsMixin, serializers.ModelSerialize
 class ReceiptSerializer(serializers.ModelSerializer):
     file_url = serializers.SerializerMethodField()
     kind_display = serializers.CharField(source="get_kind_display", read_only=True)
+    uploaded_by_name = serializers.CharField(
+        source="uploaded_by.display_name", default=None, read_only=True
+    )
+    is_image = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Receipt
-        fields = ["id", "file_url", "kind", "kind_display", "caption", "created_at"]
+        fields = [
+            "id", "file_url", "kind", "kind_display", "caption",
+            "is_image", "uploaded_by_name", "created_at",
+        ]
 
     def get_file_url(self, obj):
+        """
+        Absolute, because the phone is not on the same origin as the server
+        and a relative /media/... path would resolve against the app itself.
+        """
         request = self.context.get("request")
-        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+        try:
+            url = obj.file.url
+        except Exception:
+            # A row whose blob has gone - a real risk when switching storage
+            # backends. A missing photo must not break the whole sale.
+            return None
+        return request.build_absolute_uri(url) if request else url
 
 
 class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):

@@ -236,8 +236,14 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Not the plain JSONRenderer: this one translates the words the server
+    # itself chose - choice labels, refusals, service errors - into the
+    # language the client asked for. Without it the phone shows an Amharic
+    # screen with "Partially paid" and "Not enough stock" in English, because
+    # those strings are written on the server and the app has no copy of them.
+    # See api/renderers.py.
     "DEFAULT_RENDERER_CLASSES": [
-        "rest_framework.renderers.JSONRenderer",
+        "api.renderers.TranslatingJSONRenderer",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,

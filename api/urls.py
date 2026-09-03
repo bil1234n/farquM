@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from . import views
+from . import parity_views, views
 
 app_name = "api"
 
@@ -31,10 +31,41 @@ urlpatterns = [
     path("access/catalog/", views.permission_catalog, name="permission_catalog"),
     path("settings/", views.system_settings, name="system_settings"),
 
+    # Registration passcodes - the phone's half of Settings -> Security.
+    path(
+        "settings/registration/",
+        parity_views.registration_security,
+        name="registration_security",
+    ),
+
     # Aggregates
     path("dashboard/", views.dashboard, name="dashboard"),
     path("credit/overview/", views.credit_overview, name="credit_overview"),
+    path("credit/borrowers/", parity_views.borrowers, name="borrowers"),
+
+    # Reports. `index` is what the hub screen opens with: it lists only the
+    # reports this person may actually open, so the app never offers a tile
+    # that answers 403.
+    path("reports/", parity_views.report_index, name="report_index"),
+    path("reports/sales/", parity_views.sales_report, name="sales_report"),
+    path("reports/inventory/", parity_views.inventory_report, name="inventory_report"),
+    path(
+        "reports/receivables/",
+        parity_views.receivables_report,
+        name="receivables_report",
+    ),
     path("reports/profit/", views.profit_report, name="profit_report"),
+    path("reports/export/sales/", parity_views.export_sales, name="export_sales"),
+    path(
+        "reports/export/receivables/",
+        parity_views.export_receivables,
+        name="export_receivables",
+    ),
+
+    # The permanent record.
+    path("audit-log/", parity_views.audit_log, name="audit_log"),
+    path("my-activity/", parity_views.my_activity, name="my_activity"),
+
     path("health/", views.health, name="health"),
 
     path("", include(router.urls)),
