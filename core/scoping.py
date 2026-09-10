@@ -26,11 +26,26 @@ So there are two families of record, scoped differently:
              genuinely "under his obligation", and what lets the app answer
              "how much have I made" with a number that means something.
 
-    CATALOG  products and their stock movements
-             "the shelf I sell from". A user also sees their MANAGER's
-             catalogue, and a manager sees their team's. Read access to a
-             shelf; who may change it is a permission question, not a scoping
-             one, and `product.edit` is not in the Sales role.
+    SHARED   products, stock, raw materials, recipes, production runs
+             "what the business has". ONE catalogue, visible to every signed-in
+             member of staff, whoever entered it. A product added by the owner
+             is on the same shelf as one added by a manager, because there is
+             only one shelf - the business sells hollow blocks whoever typed
+             them in, and a second salesperson must not open the till to find
+             half a catalogue.
+
+             Who may CHANGE any of it stays a permission question, not a
+             scoping one: `product.edit`, `material.adjust` and
+             `production.reverse` are not in the Sales role, so a salesperson
+             sees the whole shelf and can alter none of it.
+
+WHY SHARED AND NOT "MY MANAGER'S"
+---------------------------------
+This used to be scoped to the user's own manager, which quietly split the
+business in two the moment a second manager was hired: each one stocked a
+catalogue the other could not see, the same physical product got entered
+twice, and stock figures for one cement bay lived under two owners. The shelf
+is a fact about the business, not about who happened to type it.
 
 WHY A HELPER RATHER THAN A CUSTOM MANAGER
 -----------------------------------------
@@ -68,17 +83,18 @@ OWNER_PATHS = {
     "credit.RepaymentProof": "repayment__debt__owner",
 }
 
-#: Models that follow the CATALOG rule (see the module docstring). Everything
-#: else in OWNER_PATHS is a LEDGER record.
+#: Models that follow the SHARED rule (see the module docstring). Everything
+#: else in OWNER_PATHS is a LEDGER record and stays owner-filtered.
 CATALOG_LABELS = frozenset(
     {
         "inventory.Product",
+        # Movements are shared because the product is. Showing someone a stock
+        # figure of 60 while hiding the rows that add up to 60 makes the ledger
+        # look broken to the person reading it.
         "inventory.StockMovement",
-        # The plant follows the same rule as the shelf. A yard hand looks at
-        # the cement their manager bought and the batches their manager's
-        # team made, for the same reason they look at the manager's products:
-        # it is the store they work out of, not a record of what they
-        # personally did.
+        # The plant follows the shelf. Production consumes shared materials and
+        # produces shared stock, so hiding the batch that moved them would
+        # leave a colleague watching numbers change for no visible reason.
         "production.RawMaterial",
         "production.MaterialMovement",
         "production.Recipe",
@@ -138,22 +154,18 @@ def ledger_owner_ids(user) -> set[int] | None:
 
 def catalog_owner_ids(user) -> set[int] | None:
     """
-    Whose products and stock this user may see.
+    Whose products, stock and materials this user may see: everyone's.
 
-    Adds the user's manager to the ledger set. That single line is what turns
-    an isolated account into a working sales assistant: they sell from their
-    manager's shelf while their own books stay their own.
+    Returns None - "apply no owner filter" - for any signed-in, active member
+    of staff. There is one catalogue for the business, so the answer does not
+    depend on who is asking.
+
+    Still fails closed: an anonymous or deactivated account gets the empty set
+    and therefore no rows at all. "Shared with the staff" is not "public".
     """
-    ids = ledger_owner_ids(user)
-    if ids is None:
-        return None
-    if not ids:
-        return ids
-
-    manager_id = getattr(user, "manager_id", None)
-    if manager_id:
-        ids = ids | {manager_id}
-    return ids
+    if not _usable(user):
+        return set()
+    return None
 
 
 def visible_owner_ids(user, model_or_label) -> set[int] | None:
@@ -202,6 +214,11 @@ def scoped(queryset, user, path: str | None = None):
         return queryset.none()
 
     owner_ids = visible_owner_ids(user, queryset.model)
+    # None and set() are BOTH falsy and mean opposite things: None is "no
+    # filter, show everything", set() is "show nothing". Test for None first or
+    # the shared catalogue disappears for every non-admin in the business.
+    if owner_ids is None:
+        return queryset
     if not owner_ids:
         return queryset.none()
 
@@ -242,10 +259,19 @@ def can_touch(instance, user) -> bool:
     if not _usable(user):
         return False
 
+    visible = visible_owner_ids(user, type(instance))
+    # None means "no owner filter applies to this model" - a shared catalogue
+    # row. Answer before looking at the owner at all, so that a product with
+    # owner=NULL (legacy rows, or one whose creator was deleted) is still
+    # restockable. Otherwise a user sees it in the list and is told it is "not
+    # in your product list" the moment they touch it.
+    if visible is None:
+        return True
+
     owner_id = _resolve_owner_id(instance)
     if owner_id is None:
         return False
-    return owner_id in (visible_owner_ids(user, type(instance)) or set())
+    return owner_id in visible
 
 
 def _resolve_owner_id(instance):
@@ -291,6 +317,11 @@ def owner_filter_q(user, path: str = "owner", model_label: str | None = None) ->
         if model_label
         else ledger_owner_ids(user)
     )
+    # As in scoped(): None is "no filter", set() is "nothing". An empty Q()
+    # matches every row, which is exactly right for a shared catalogue and
+    # exactly wrong for a locked-out account - so the order matters.
+    if ids is None:
+        return Q()
     if not ids:
         return Q(pk__in=[])
     return Q(**{f"{path}__in": sorted(ids)})

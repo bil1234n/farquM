@@ -129,15 +129,14 @@ class ProductForm(StyledFormMixin, forms.ModelForm):
         if not value:
             return value
         clash = Product.objects.filter(
-            owner_id=self._owner_id(), **{f"{field}__iexact": value}
+            **{f"{field}__iexact": value}
         ).exclude(pk=self.instance.pk if self.instance else None)
         if clash.exists():
             # "sku" reads badly in a sentence and the app's own message says
             # "SKU", so the two would need two translations for one situation.
             label = {"sku": "SKU", "barcode": "barcode"}.get(field, field)
             raise forms.ValidationError(
-                f"You already have a product with this {label}: "
-                f"'{clash.first().name}'."
+                f"That {label} is already used by '{clash.first().name}'."
             )
         return value
 

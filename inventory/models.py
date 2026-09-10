@@ -218,15 +218,19 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
 
     def _generate_sku(self):
         """
-        Next free SKU *within this owner's catalogue*.
+        Next free SKU across the whole catalogue.
 
-        Scoped to the owner because the uniqueness constraint is scoped to the
-        owner. Scanning globally would make two managers' sequences interleave
-        and leak the size of each other's catalogue through the numbering.
+        Scanned globally, not per owner. There is one catalogue now (see
+        core.scoping), so a per-owner sequence would put two different products
+        on the same shelf under the same SKU - and a SKU that identifies two
+        things identifies neither.
+
+        The database constraint is still (owner, sku); this generator simply
+        never hands out one that is already taken.
         """
         prefix = "".join(w[0] for w in self.name.split()[:3]).upper() or "PRD"
         last = (
-            Product.objects.filter(owner_id=self.owner_id, sku__startswith=f"{prefix}-")
+            Product.objects.filter(sku__startswith=f"{prefix}-")
             .order_by("-sku")
             .values_list("sku", flat=True)
             .first()

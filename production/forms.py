@@ -53,13 +53,13 @@ class RawMaterialForm(forms.ModelForm):
         if not code:
             return code
         clash = (
-            RawMaterial.objects.filter(owner_id=self._owner_id(), code__iexact=code)
+            RawMaterial.objects.filter(code__iexact=code)
             .exclude(pk=self.instance.pk if self.instance else None)
             .first()
         )
         if clash is not None:
             raise forms.ValidationError(
-                f"You already have a material with this code: '{clash.name}'."
+                f"That code is already used by '{clash.name}'."
             )
         return code
 

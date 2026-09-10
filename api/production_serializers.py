@@ -68,15 +68,14 @@ class RawMaterialSerializer(
             request = self.context.get("request")
             owner_id = getattr(getattr(request, "user", None), "pk", None)
 
-        clash = RawMaterial.objects.alive().filter(
-            owner_id=owner_id, code__iexact=value
-        )
+        # Global, not per owner: one store, one set of codes.
+        clash = RawMaterial.objects.alive().filter(code__iexact=value)
         if self.instance is not None:
             clash = clash.exclude(pk=self.instance.pk)
         first = clash.first()
         if first is not None:
             raise serializers.ValidationError(
-                f"You already have a material with this code: '{first.name}'."
+                f"That code is already used by '{first.name}'."
             )
         return value
 

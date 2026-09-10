@@ -14,7 +14,8 @@ WHAT THESE PROTECT
    blocks believes it is more profitable than it is.
 4. Reversal, not deletion. Both halves stay on record, and goods that have
    already been sold cannot be un-made.
-5. Isolation. One manager's cement is not another's.
+5. Scope. One shared store - cement is cement, whoever recorded the
+   delivery - while who may ADJUST or REVERSE it stays a permission.
 """
 from decimal import Decimal
 
@@ -171,12 +172,15 @@ class MaterialLedgerTests(YardTestBase):
         with self.assertRaises(PermissionError):
             movement.delete()
 
-    def test_the_code_is_generated_per_owner(self):
+    def test_the_code_is_generated_across_the_whole_store(self):
+        """
+        One yard, one sequence. Two tins of red oxide bought by two managers
+        sit on the same shelf, so they must not both be called RO-001.
+        """
         mine = RawMaterial.objects.create(name="Red Oxide", owner=self.manager)
         theirs = RawMaterial.objects.create(name="Red Oxide", owner=self.rival)
         self.assertEqual(mine.code, "RO-001")
-        # Same code, different store. The constraint is (owner, code).
-        self.assertEqual(theirs.code, "RO-001")
+        self.assertEqual(theirs.code, "RO-002")
 
     def test_low_and_empty_are_computed_from_the_reorder_level(self):
         services.recount_material(self.cement, D("50"), user=self.manager)
@@ -367,34 +371,41 @@ class ProductionTests(YardTestBase):
 
 
 class IsolationTests(YardTestBase):
-    def test_a_manager_cannot_consume_another_managers_material(self):
+    def test_any_material_in_the_store_can_be_consumed(self):
+        """
+        Cement is cement. Whoever recorded the delivery, a batch that uses it
+        takes it off the one store card - which is what makes that card mean
+        anything.
+        """
         theirs = RawMaterial.objects.create(
             name="Their Cement", code="TC", unit="KG", unit_cost=D("18"),
             owner=self.rival,
         )
         services.receive_material(theirs, D("500"), user=self.rival)
 
-        with self.assertRaises(ValidationError):
-            services.record_production(
-                product=self.block,
-                quantity_produced=10,
-                materials=[{"material": theirs, "quantity": D("10")}],
-                user=self.manager,
-            )
+        services.record_production(
+            product=self.block,
+            quantity_produced=10,
+            materials=[{"material": theirs, "quantity": D("10")}],
+            user=self.manager,
+        )
         theirs.refresh_from_db()
-        self.assertEqual(theirs.quantity_in_stock, D("500.000"))
+        self.assertEqual(theirs.quantity_in_stock, D("490.000"))
+        self.assertLedgerAgrees(theirs)
 
-    def test_a_manager_cannot_produce_into_another_managers_product(self):
+    def test_a_batch_can_be_produced_into_any_product_on_the_shelf(self):
         theirs = Product.objects.create(
             name="Their Block", sku="TB1", selling_price=D("30"), owner=self.rival
         )
-        with self.assertRaises(ValidationError):
-            services.record_production(
-                product=theirs,
-                quantity_produced=10,
-                materials=[{"material": self.cement, "quantity": D("10")}],
-                user=self.manager,
-            )
+        run = services.record_production(
+            product=theirs,
+            quantity_produced=10,
+            materials=[{"material": self.cement, "quantity": D("10")}],
+            user=self.manager,
+        )
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.stock_quantity, 10)
+        self.assertEqual(run.quantity_produced, 10)
 
     def test_a_run_belongs_to_whoever_owns_the_shelf_it_filled(self):
         """
@@ -510,10 +521,11 @@ class WebAccessTests(YardTestBase):
         run.refresh_from_db()
         self.assertEqual(run.status, ProductionStatus.COMPLETED)
 
-    def test_a_manager_sees_only_their_own_store(self):
+    def test_the_store_page_shows_the_whole_yard(self):
         RawMaterial.objects.create(name="Rival Lime", code="RL", owner=self.rival)
         page = self.as_(self.manager).get("/production/materials/")
-        self.assertNotContains(page, "Rival Lime")
+        self.assertContains(page, "Cement")
+        self.assertContains(page, "Rival Lime")
 
     def test_recording_a_run_through_the_form(self):
         client = self.as_(self.manager)
@@ -539,12 +551,17 @@ class WebAccessTests(YardTestBase):
 
 
 class ApiTests(YardTestBase):
-    def test_the_material_list_is_scoped(self):
+    def test_the_material_list_is_one_shared_store(self):
+        """
+        There is one yard. A material another manager bought is in the same
+        bay, so it appears in the same list - otherwise two managers order
+        cement twice and neither can explain the stock figure.
+        """
         RawMaterial.objects.create(name="Rival Lime", code="RL", owner=self.rival)
         rows = self.as_(self.manager).get("/api/materials/").json()["results"]
         names = {row["name"] for row in rows}
         self.assertIn("Cement", names)
-        self.assertNotIn("Rival Lime", names)
+        self.assertIn("Rival Lime", names)
 
     def test_a_sales_user_is_refused(self):
         self.assertEqual(
@@ -689,14 +706,21 @@ class ApiTests(YardTestBase):
         allowed = client.get(f"/api/materials/{self.cement.pk}/used-in/")
         self.assertEqual(allowed.status_code, 200, allowed.content)
 
-    def test_used_in_is_scoped_like_everything_else(self):
-        rival_material = RawMaterial.objects.create(
+    def test_used_in_answers_for_any_material_in_the_store(self):
+        other = RawMaterial.objects.create(
             name="Rival Lime", code="RL2", owner=self.rival
         )
-        refused = self.as_(self.manager).get(
-            f"/api/materials/{rival_material.pk}/used-in/"
+        allowed = self.as_(self.manager).get(f"/api/materials/{other.pk}/used-in/")
+        self.assertEqual(allowed.status_code, 200, allowed.content)
+
+    def test_a_sales_user_is_still_refused_the_store_entirely(self):
+        """
+        Widening the store to the whole business did not hand it to everyone
+        in the business. `material.view` is still not in the Sales role.
+        """
+        self.assertEqual(
+            self.as_(self.sales).get("/api/materials/").status_code, 403
         )
-        self.assertEqual(refused.status_code, 404)
 
 
 class YardLanguageTests(YardTestBase):

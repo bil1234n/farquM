@@ -186,18 +186,21 @@ class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
 
     def _generate_code(self) -> str:
         """
-        Next free code within this owner's store, e.g. CEM-001.
+        Next free code across the whole store, e.g. CEM-001.
 
-        Scoped to the owner because the uniqueness constraint is. Scanning
-        globally would interleave two yards' sequences and leak the size of
-        one store through the numbering of the other.
+        Scanned globally, not per owner. There is one yard now (see
+        core.scoping), so two people would otherwise both be handed "RO-001"
+        for two different tins of red oxide and both codes would sit in the
+        same list, on the same shelf, meaning different things.
+
+        The database constraint is still (owner, code); this generator simply
+        never hands out a code that is already in use by anyone, which is what
+        keeps the shared list readable.
         """
         prefix = "".join(word[0] for word in self.name.split()[:3]).upper() or "MAT"
         prefix = prefix[:6]
         last = (
-            RawMaterial.objects.filter(
-                owner_id=self.owner_id, code__startswith=f"{prefix}-"
-            )
+            RawMaterial.objects.filter(code__startswith=f"{prefix}-")
             .order_by("-code")
             .values_list("code", flat=True)
             .first()

@@ -366,13 +366,15 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
             request = self.context.get("request")
             owner_id = getattr(getattr(request, "user", None), "pk", None)
 
-        clash = Product.objects.alive().filter(owner_id=owner_id, sku__iexact=value)
+        # Global, not per owner: there is one catalogue, so a SKU that is
+        # taken anywhere is taken.
+        clash = Product.objects.alive().filter(sku__iexact=value)
         if self.instance is not None:
             clash = clash.exclude(pk=self.instance.pk)
         first = clash.first()
         if first is not None:
             raise serializers.ValidationError(
-                f"You already have a product with this SKU: '{first.name}'."
+                f"That SKU is already used by '{first.name}'."
             )
         return value
 

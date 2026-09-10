@@ -405,20 +405,20 @@ _PATTERNS_AM: list[tuple[str, str]] = [
         "አንድ ዙር ምን ያህል '{0}' ይጠቀማል?",
     ),
     (
-        r"^You already have a material with this code: '(.+?)'\.$",
-        "በዚህ ኮድ የተመዘገበ ዕቃ አስቀድሞ አለዎት፦ '{0}'።",
+        r"^That code is already used by '(.+?)'\.$",
+        "ይህ ኮድ አስቀድሞ በ'{0}' ተይዟል።",
     ),
     (
         r"^(PRD-\d{8}-\d{4}) was already reversed\.$",
         "{0} አስቀድሞ ተመልሷል።",
     ),
     (
-        r"^You already have a product with this SKU: '(.+?)'\.$",
-        "በዚህ SKU የተመዘገበ ምርት አስቀድሞ አለዎት፦ '{0}'።",
+        r"^That SKU is already used by '(.+?)'\.$",
+        "ይህ SKU አስቀድሞ በ'{0}' ተይዟል።",
     ),
     (
-        r"^You already have a product with this barcode: '(.+?)'\.$",
-        "በዚህ ባርኮድ የተመዘገበ ምርት አስቀድሞ አለዎት፦ '{0}'።",
+        r"^That barcode is already used by '(.+?)'\.$",
+        "ይህ ባርኮድ አስቀድሞ በ'{0}' ተይዟል።",
     ),
     (
         r"^Ensure this value is less than or equal to (.+?)\.$",

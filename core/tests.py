@@ -13,7 +13,8 @@ testing here are the ones that fail silently:
   1. the three shipped role matrices are what the blueprints say,
   2. a per-person grant or denial beats the role, and does not leak to a
      colleague who shares that role,
-  3. a sales user sees their MANAGER's products but only their OWN sales,
+  3. everyone shares ONE catalogue while sales, customers and debts stay
+     private to whoever made them,
   4. the sale service refuses credit and discounts without the permission,
      including when the request bypasses the form entirely,
   5. an administrator cannot strip their own way back into Access Control.
@@ -224,18 +225,78 @@ class PerPersonOverrideTests(AccessTestBase):
 
 
 class ScopingTests(AccessTestBase):
-    def test_sales_sees_the_managers_shelf(self):
-        visible = set(
-            scoped(Product.objects.all(), self.sales).values_list("sku", flat=True)
-        )
-        self.assertEqual(visible, {"C1"}, "a sales user sells their manager's stock")
+    """
+    One catalogue, many private ledgers.
 
-    def test_sales_does_not_see_another_managers_shelf(self):
-        visible = set(
-            scoped(Product.objects.all(), self.sales).values_list("sku", flat=True)
-        )
-        self.assertNotIn("R1", visible)
+    These two halves are the whole design, and they pull in opposite
+    directions, so each is asserted separately and named for the promise it
+    keeps. Loosening the first must never loosen the second.
+    """
 
+    # -- The shared half ---------------------------------------------------
+    def test_everyone_sees_the_whole_catalogue(self):
+        """
+        A product is a fact about the business, not about who typed it in.
+
+        C1 was entered by a manager and R1 by the owner. A salesperson opening
+        the till sees both, because there is one shelf.
+        """
+        for who in (self.sales, self.sales2, self.manager, self.admin):
+            with self.subTest(user=who.username):
+                visible = set(
+                    scoped(Product.objects.all(), who)
+                    .values_list("sku", flat=True)
+                )
+                self.assertEqual(
+                    visible, {"C1", "R1"},
+                    f"{who.username} should see the whole catalogue",
+                )
+
+    def test_a_second_manager_shares_the_first_manager_s_shelf(self):
+        """
+        The case that forced this change: hiring a second manager used to split
+        the catalogue in two, so the same cement got entered twice under two
+        owners.
+        """
+        other = User.objects.create_user("moses", password="pw", role="MANAGER")
+        Product.objects.create(
+            name="Sugar", sku="S1", selling_price=Decimal("15"), owner=other
+        )
+        for who in (self.manager, other, self.sales):
+            with self.subTest(user=who.username):
+                skus = set(
+                    scoped(Product.objects.all(), who)
+                    .values_list("sku", flat=True)
+                )
+                self.assertEqual(skus, {"C1", "R1", "S1"})
+
+    def test_a_signed_out_or_disabled_account_still_sees_nothing(self):
+        """Shared with the staff is not the same as public."""
+        from django.contrib.auth.models import AnonymousUser
+
+        self.assertEqual(
+            scoped(Product.objects.all(), AnonymousUser()).count(), 0
+        )
+        self.sales.is_active = False
+        self.sales.save(update_fields=["is_active"])
+        self.assertEqual(
+            scoped(Product.objects.all(), self.refresh(self.sales)).count(), 0
+        )
+
+    def test_seeing_the_shelf_is_not_permission_to_change_it(self):
+        """
+        The catalogue got wider; who may edit it did not move at all. This is
+        the line that keeps the change safe.
+        """
+        self.assertTrue(self.sales.has_access("product.view"))
+        for denied in ("product.edit", "product.create", "stock.restock",
+                       "material.adjust", "production.reverse"):
+            self.assertFalse(
+                self.sales.has_access(denied),
+                f"a sales user must still not hold {denied}",
+            )
+
+    # -- The private half --------------------------------------------------
     def test_ledger_stays_private(self):
         mine = set(
             scoped(Customer.objects.all(), self.sales).values_list("name", flat=True)

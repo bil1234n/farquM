@@ -596,14 +596,33 @@ class ProductFormTests(ApiTestBase):
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("You already have", response.content.decode())
 
-    def test_two_owners_may_use_the_same_sku(self):
-        """The constraint is per owner. An admin's C1 is not the manager's."""
+    def test_a_sku_already_in_use_is_refused_whoever_owns_it(self):
+        """
+        One catalogue, one set of SKUs. C1 belongs to the manager, but an admin
+        reusing it would put two different products on the same shelf under one
+        code - and a code that identifies two things identifies neither.
+        """
         response = self.as_(self.admin).post(
             "/api/products/",
             {"name": "Admin Cola", "selling_price": "16.00", "sku": "C1"},
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("already used", response.content.decode())
+
+    def test_a_generated_sku_never_collides_with_someone_elses(self):
+        """The generator scans the whole catalogue, not just the creator's."""
+        first = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Green Tea", "selling_price": "12.00"},
+            content_type="application/json",
+        ).json()["sku"]
+        second = self.as_(self.admin).post(
+            "/api/products/",
+            {"name": "Green Tea", "selling_price": "12.00"},
+            content_type="application/json",
+        ).json()["sku"]
+        self.assertNotEqual(first, second)
 
     def test_editing_without_a_sku_keeps_the_existing_one(self):
         response = self.as_(self.manager).patch(
