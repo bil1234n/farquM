@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Dashboard{% endblock %} &middot; {{ BUSINESS_NAME }}</title>
 
+  {% comment %}
+    The same mark the phone app uses for its launcher icon. A tab with no
+    favicon shows a blank sheet, which in a row of twenty tabs is the one
+    thing that makes a real product look unfinished.
+
+    A comment block rather than the hash form, because the hash form is
+    single-line only: spread one over three lines and it is not stripped at
+    all, it is served to the browser on every page.
+  {% endcomment %}
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon-32.png' %}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'img/favicon-16.png' %}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'img/favicon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'img/apple-touch-icon.png' %}">
+
   {# Applied before the stylesheet loads so dark mode never flashes white. #}
   <script>
     (function () {

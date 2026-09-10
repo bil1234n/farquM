@@ -310,6 +310,12 @@ class MovementType(models.TextChoices):
     DAMAGE = "DAMAGE", "Damage / write-off"
     VOID_REVERSAL = "VOID_REVERSAL", "Reversal of voided sale"
     OPENING = "OPENING", "Opening balance"
+    # Stock that was made rather than bought. Kept distinct from RESTOCK so the
+    # inventory report can answer "how much did we make" separately from "how
+    # much did we buy" - in a yard that manufactures, those are different
+    # questions with different people accountable for them.
+    PRODUCTION = "PRODUCTION", "Produced in-house"
+    PRODUCTION_REVERSAL = "PRODUCTION_REVERSAL", "Reversal of a production run"
 
 
 class StockMovementQuerySet(models.QuerySet):
@@ -333,7 +339,12 @@ class StockMovement(TimeStampedModel):
         Product, on_delete=models.PROTECT, related_name="stock_movements"
     )
     movement_type = models.CharField(
-        max_length=15, choices=MovementType.choices, db_index=True
+        # 20, not 15: PRODUCTION_REVERSAL is nineteen characters. Widening a
+        # choices column is a free migration; discovering the truncation in
+        # production is not.
+        max_length=20,
+        choices=MovementType.choices,
+        db_index=True,
     )
     quantity_delta = models.IntegerField(
         help_text="Signed change. Positive = stock in, negative = stock out."

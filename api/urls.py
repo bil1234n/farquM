@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from . import parity_views, views
+from . import parity_views, production_views, views
 
 app_name = "api"
 
@@ -10,6 +10,16 @@ router.register("products", views.ProductViewSet, basename="product")
 router.register("categories", views.CategoryViewSet, basename="category")
 router.register("suppliers", views.SupplierViewSet, basename="supplier")
 router.register("stock-movements", views.StockMovementViewSet, basename="stockmovement")
+router.register("materials", production_views.RawMaterialViewSet, basename="material")
+router.register(
+    "material-movements",
+    production_views.MaterialMovementViewSet,
+    basename="materialmovement",
+)
+router.register("recipes", production_views.RecipeViewSet, basename="recipe")
+router.register(
+    "production", production_views.ProductionRunViewSet, basename="productionrun"
+)
 router.register("customers", views.CustomerViewSet, basename="customer")
 router.register("sales", views.TransactionViewSet, basename="sale")
 router.register("debts", views.DebtViewSet, basename="debt")
@@ -37,6 +47,13 @@ urlpatterns = [
         parity_views.registration_security,
         name="registration_security",
     ),
+
+    # The yard. `plan` answers before anything is written, so a shortage is
+    # on screen while the operator can still do something about it.
+    path("production/plan/", production_views.production_plan,
+         name="production_plan"),
+    path("production/summary/", production_views.production_summary,
+         name="production_summary"),
 
     # Aggregates
     path("dashboard/", views.dashboard, name="dashboard"),

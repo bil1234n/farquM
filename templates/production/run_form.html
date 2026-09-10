@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Record production{% endblock %}
+{% block page_title %}Record production{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'production:run_list' %}">Production</a> &rsaquo; <span>New batch</span></div>{% endblock %}
+
+{% block content %}
+<form method="post" novalidate id="runForm">
+  {% csrf_token %}
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">The batch</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="notes" %}
+        </div>
+      </div>
+      <div class="card mt-3" id="planCard" hidden>
+        <div class="card-header">What the recipe expects</div>
+        <ul class="list-group list-group-flush" id="planSummary"></ul>
+      </div>
+    </div>
+
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Materials used</span>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="fromRecipe">
+              <i class="bi bi-magic me-1"></i> Fill from recipe
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="addLine">
+              <i class="bi bi-plus-lg me-1"></i> Add material
+            </button>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table align-middle mb-0" id="lines">
+            <thead>
+              <tr>
+                <th style="width:42%">Material</th>
+                <th>Used</th><th>In store</th><th style="width:44px"></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'production:run_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm">
+            <i class="bi bi-check-lg me-1"></i> Record production
+          </button>
+        </div>
+      </div>
+      <p class="text-muted small mt-3">
+        The recipe fills these in; correct them to what the shift actually used.
+        Both figures are kept, so the difference stays visible on the batch.
+      </p>
+    </div>
+  </div>
+</form>
+
+<template id="lineTemplate">
+  <tr>
+    <td>
+      <select name="material_id[]" class="form-select form-select-sm material">
+        {% for material in store %}
+          <option value="{{ material.pk }}"
+                  data-stock="{{ material.quantity_in_stock|floatformat:'-3' }}"
+                  data-unit="{{ material.get_unit_display }}">
+            {{ material.name }} ({{ material.get_unit_display }})
+          </option>
+        {% endfor %}
+      </select>
+    </td>
+    <td>
+      <input type="number" step="0.001" min="0.001" name="quantity[]" class="form-control form-control-sm">
+      <input type="hidden" name="expected[]" value="">
+    </td>
+    <td class="text-muted small stock">-</td>
+    <td class="text-end">
+      <button type="button" class="btn btn-outline-danger btn-sm drop"><i class="bi bi-x"></i></button>
+    </td>
+  </tr>
+</template>
+
+<script>
+  (function () {
+    var body = document.querySelector("#lines tbody");
+    var template = document.getElementById("lineTemplate");
+    var productField = document.getElementById("id_product");
+    var quantityField = document.getElementById("id_quantity_produced");
+    var rejectField = document.getElementById("id_quantity_rejected");
+    var planCard = document.getElementById("planCard");
+    var planSummary = document.getElementById("planSummary");
+    var planUrl = "{% url 'production:plan_api' %}";
+    var latestPlan = null;
+
+    function addLine(materialId, quantity, expected) {
+      body.appendChild(template.content.cloneNode(true));
+      var row = body.lastElementChild;
+      if (materialId) { row.querySelector(".material").value = String(materialId); }
+      if (quantity !== undefined) { row.querySelector("input[name='quantity[]']").value = quantity; }
+      if (expected !== undefined) { row.querySelector("input[name='expected[]']").value = expected; }
+      showStock(row);
+      return row;
+    }
+
+    function showStock(row) {
+      var option = row.querySelector(".material").selectedOptions[0];
+      if (!option) { return; }
+      var cell = row.querySelector(".stock");
+      cell.textContent = option.dataset.stock + " " + option.dataset.unit;
+    }
+
+    /* The whole mix, not just the good units: materials go in before anyone
+       knows which blocks will crack. */
+    function attempted() {
+      var made = parseInt(quantityField && quantityField.value, 10) || 0;
+      var lost = parseInt(rejectField && rejectField.value, 10) || 0;
+      return made + lost;
+    }
+
+    function loadPlan(then) {
+      if (!productField || !productField.value || attempted() <= 0) { return; }
+      var url = planUrl + "?product=" + encodeURIComponent(productField.value) +
+                "&quantity=" + encodeURIComponent(attempted());
+      fetch(url, {headers: {"X-Requested-With": "XMLHttpRequest"}})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (plan) {
+          if (!plan) { return; }
+          latestPlan = plan;
+          renderPlan(plan);
+          if (then) { then(plan); }
+        })
+        .catch(function () { /* the form still works by hand */ });
+    }
+
+    function renderPlan(plan) {
+      planSummary.innerHTML = "";
+      if (!plan.has_recipe) {
+        planCard.hidden = false;
+        planSummary.innerHTML =
+          '<li class="list-group-item text-muted small">' +
+          'This product has no recipe yet, so nothing can be pre-filled. ' +
+          'Add the materials by hand.</li>';
+        return;
+      }
+      plan.lines.forEach(function (line) {
+        var li = document.createElement("li");
+        li.className = "list-group-item d-flex justify-content-between small";
+        var left = document.createElement("span");
+        left.textContent = line.name;
+        var right = document.createElement("span");
+        right.textContent = line.required + " " + line.unit;
+        if (line.is_short) {
+          li.classList.add("text-danger");
+          right.textContent += " (short " + line.short_by + ")";
+        }
+        li.appendChild(left); li.appendChild(right);
+        planSummary.appendChild(li);
+      });
+      planCard.hidden = false;
+    }
+
+    function fillFromRecipe() {
+      loadPlan(function (plan) {
+        if (!plan.has_recipe || !plan.lines.length) { return; }
+        body.innerHTML = "";
+        plan.lines.forEach(function (line) {
+          addLine(line.material, line.required, line.required);
+        });
+      });
+    }
+
+    document.getElementById("addLine").addEventListener("click", function () { addLine(); });
+    document.getElementById("fromRecipe").addEventListener("click", fillFromRecipe);
+    body.addEventListener("click", function (event) {
+      var button = event.target.closest(".drop");
+      if (button) { button.closest("tr").remove(); }
+    });
+    body.addEventListener("change", function (event) {
+      if (event.target.classList.contains("material")) { showStock(event.target.closest("tr")); }
+    });
+
+    [productField, quantityField, rejectField].forEach(function (field) {
+      if (field) { field.addEventListener("change", function () { loadPlan(); }); }
+    });
+
+    addLine();
+  })();
+</script>
+{% endblock %}

@@ -40,11 +40,14 @@ a{text-decoration:none}
   padding:1.1rem 1.25rem; border-bottom:1px solid rgba(255,255,255,.09);
   display:flex; align-items:center; gap:.65rem;
 }
+/* White plate, not a brand-coloured one: the logo has white inside it - a
+   rocket and its exhaust - and those parts vanish on any dark ground. */
 .sidebar-brand .logo{
-  width:36px;height:36px;border-radius:9px;background:var(--brand);
-  display:grid;place-items:center;color:#fff;font-weight:700;font-size:.95rem;
-  flex-shrink:0;
+  width:36px;height:36px;border-radius:9px;background:#fff;
+  display:grid;place-items:center;color:var(--brand);font-weight:700;
+  font-size:.95rem;flex-shrink:0;overflow:hidden;
 }
+.sidebar-brand .logo img{width:82%;height:82%;object-fit:contain;display:block}
 .sidebar-brand .name{color:#fff;font-weight:650;font-size:.95rem;line-height:1.15}
 .sidebar-brand .sub{font-size:.68rem;color:#8fa6bd;text-transform:uppercase;letter-spacing:.06em}
 

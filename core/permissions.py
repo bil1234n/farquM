@@ -113,6 +113,39 @@ CATALOG: tuple[PermGroup, ...] = (
         ),
     ),
     PermGroup(
+        key="production",
+        label="Production",
+        icon="bi-bricks",
+        blurb="The yard: what you buy in, what you make from it, and what "
+              "each batch cost. Separate from the shelf because the people "
+              "who mix concrete are rarely the people who sell it.",
+        perms=(
+            Perm("material.view", "See raw materials and how much is left",
+                 "The store card: cement, sand, aggregate and what remains "
+                 "of each."),
+            Perm("material.create", "Add a raw material"),
+            Perm("material.edit", "Edit raw material details"),
+            Perm("material.receive", "Record a material delivery",
+                 "Adds to the store and updates what the material costs."),
+            Perm("material.adjust", "Correct or write off material",
+                 "Spillage, spoiled bags, and stock counts that overwrite "
+                 "the figure outright. The quietest way a store goes "
+                 "missing, so keep it narrow.",
+                 sensitive=True),
+            Perm("recipe.manage", "Set the recipe for a product",
+                 "How much of each material one batch takes. Changing it "
+                 "changes what every future batch is expected to consume."),
+            Perm("production.view", "See production runs"),
+            Perm("production.create", "Record a production run",
+                 "Takes materials out of the store and puts finished goods "
+                 "on the shelf, in one step."),
+            Perm("production.reverse", "Reverse a production run",
+                 "Puts the materials back and takes the goods off the "
+                 "shelf. Both halves stay on record.",
+                 sensitive=True),
+        ),
+    ),
+    PermGroup(
         key="sales",
         label="Sales",
         icon="bi-cart",
@@ -350,6 +383,14 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "inventory:stock_movements": "stock.view_movements",
     "inventory:category_list": "catalog.manage",
     "inventory:supplier_list": "catalog.manage",
+    "production:material_list": "material.view",
+    "production:material_detail": "material.view",
+    "production:material_low": "material.view",
+    "production:material_movements": "material.view",
+    "production:run_list": "production.view",
+    "production:run_detail": "production.view",
+    "production:run_create": "production.create",
+    "production:recipe_list": "recipe.manage",
     "reports:sales_report": "report.sales",
     "reports:inventory_report": "report.inventory",
     "reports:receivables_report": "report.receivables",

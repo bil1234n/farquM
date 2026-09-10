@@ -52,6 +52,12 @@ from django.db.models import Q
 OWNER_PATHS = {
     "inventory.Product": "owner",
     "inventory.StockMovement": "product__owner",
+    "production.RawMaterial": "owner",
+    "production.MaterialMovement": "material__owner",
+    "production.Recipe": "product__owner",
+    "production.RecipeItem": "recipe__product__owner",
+    "production.ProductionRun": "owner",
+    "production.ProductionMaterial": "run__owner",
     "sales.Customer": "owner",
     "sales.Transaction": "owner",
     "sales.TransactionItem": "transaction__owner",
@@ -64,7 +70,23 @@ OWNER_PATHS = {
 
 #: Models that follow the CATALOG rule (see the module docstring). Everything
 #: else in OWNER_PATHS is a LEDGER record.
-CATALOG_LABELS = frozenset({"inventory.Product", "inventory.StockMovement"})
+CATALOG_LABELS = frozenset(
+    {
+        "inventory.Product",
+        "inventory.StockMovement",
+        # The plant follows the same rule as the shelf. A yard hand looks at
+        # the cement their manager bought and the batches their manager's
+        # team made, for the same reason they look at the manager's products:
+        # it is the store they work out of, not a record of what they
+        # personally did.
+        "production.RawMaterial",
+        "production.MaterialMovement",
+        "production.Recipe",
+        "production.RecipeItem",
+        "production.ProductionRun",
+        "production.ProductionMaterial",
+    }
+)
 
 # Category and Supplier are deliberately absent from OWNER_PATHS. They are
 # shared lookup lists - a label, not a business record - and duplicating

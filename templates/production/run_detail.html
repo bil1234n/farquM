@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ run.reference }}{% endblock %}
+{% block page_title %}{{ run.reference }}{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'production:run_list' %}">Production</a> &rsaquo; {{ run.product.name }}</div>{% endblock %}
+
+{% block content %}
+{% if run.is_reversed %}
+  <div class="alert alert-secondary">
+    <strong>This run was reversed</strong> by {{ run.reversed_by.display_name|default:"an administrator" }}
+    on {{ run.reversed_at|date:"d M Y, H:i" }}.
+    {% if run.reversal_reason %}<div class="small mt-1">{{ run.reversal_reason }}</div>{% endif %}
+    <div class="small mt-1 text-muted">
+      The materials went back to the store and the finished goods came off the
+      shelf. Both halves are on the store card.
+    </div>
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="text-muted small text-uppercase">Produced</div>
+        <div class="display-6 fw-bold">{{ run.quantity_produced }}</div>
+        <div class="text-muted">{{ run.product.name }}</div>
+      </div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Rejected</span>
+          <span class="{% if run.quantity_rejected %}text-danger fw-semibold{% endif %}">{{ run.quantity_rejected }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Yield</span><span>{{ run.yield_percent }}%</span>
+        </li>
+        {% if user.can_view_financials %}
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Material cost</span><span class="money">{{ run.material_cost|money }}</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Cost per good unit</span>
+            <span class="money fw-semibold">{{ run.unit_cost|money }}</span>
+          </li>
+          {% if run.quantity_rejected %}
+            <li class="list-group-item d-flex justify-content-between">
+              <span class="text-muted">Spent on rejects</span>
+              <span class="money text-danger">{{ run.rejected_cost|money }}</span>
+            </li>
+          {% endif %}
+        {% endif %}
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Date produced</span><span>{{ run.produced_on|date:"d M Y" }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Recorded by</span>
+          <span>{{ run.created_by.display_name|default:"-" }}</span>
+        </li>
+      </ul>
+    </div>
+
+    {% if run.notes %}
+      <div class="card mb-3">
+        <div class="card-header">Notes</div>
+        <div class="card-body small text-muted">{{ run.notes|linebreaksbr }}</div>
+      </div>
+    {% endif %}
+
+    {% if can_reverse and not run.is_reversed %}
+      <div class="card border-danger">
+        <div class="card-header text-danger">Reverse this run</div>
+        <form method="post" action="{% url 'production:run_reverse' run.pk %}">
+          {% csrf_token %}
+          <div class="card-body">
+            <p class="small text-muted">
+              Puts the materials back and takes the finished units off the
+              shelf. It fails if they have already been sold.
+            </p>
+            {% include "partials/form_fields.html" with form=reversal_form %}
+          </div>
+          <div class="card-footer bg-light text-end">
+            <button class="btn btn-danger btn-sm">
+              <i class="bi bi-arrow-counterclockwise me-1"></i> Reverse run
+            </button>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header">Materials used</div>
+      <div class="table-responsive">
+        <table class="table align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Material</th><th class="text-end">Used</th>
+              <th class="text-end">Expected</th><th class="text-end">Difference</th>
+              {% if user.can_view_financials %}<th class="text-end">Cost</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+          {% for line in run.materials.all %}
+            <tr>
+              <td>
+                <a href="{% url 'production:material_detail' line.material.pk %}" class="text-decoration-none">
+                  {{ line.material.name }}
+                </a>
+                <div class="small text-muted">{{ line.material.code }}</div>
+              </td>
+              <td class="text-end fw-semibold">
+                {{ line.quantity|floatformat:"-3" }}
+                <span class="text-muted small">{{ line.material.get_unit_display }}</span>
+              </td>
+              <td class="text-end text-muted">
+                {% if line.expected_quantity is not None %}{{ line.expected_quantity|floatformat:"-3" }}{% else %}-{% endif %}
+              </td>
+              <td class="text-end">
+                {% if line.variance is not None %}
+                  <span class="{% if line.variance > 0 %}text-danger{% elif line.variance < 0 %}text-success{% else %}text-muted{% endif %}">
+                    {% if line.variance > 0 %}+{% endif %}{{ line.variance|floatformat:"-3" }}
+                  </span>
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+              {% if user.can_view_financials %}
+                <td class="text-end money">{{ line.line_cost|money }}</td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+          </tbody>
+          {% if user.can_view_financials %}
+            <tfoot>
+              <tr class="fw-semibold">
+                <td colspan="4" class="text-end">Total</td>
+                <td class="text-end money">{{ run.material_cost|money }}</td>
+              </tr>
+            </tfoot>
+          {% endif %}
+        </table>
+      </div>
+    </div>
+    <p class="text-muted small mt-3">
+      "Expected" is what the recipe said this batch should have taken. A positive
+      difference means the batch over-ran.
+    </p>
+  </div>
+</div>
+{% endblock %}

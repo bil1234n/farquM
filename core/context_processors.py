@@ -54,6 +54,7 @@ def sidebar_badges(request):
 
     from credit.models import DebtRecord
     from inventory.models import Product
+    from production.models import RawMaterial
 
     from core.scoping import scoped
 
@@ -61,6 +62,10 @@ def sidebar_badges(request):
     if user.has_access("product.view"):
         badges["badge_low_stock"] = (
             scoped(Product.objects.all(), user).low_stock().count()
+        )
+    if user.has_access("material.view"):
+        badges["badge_low_material"] = (
+            scoped(RawMaterial.objects.all(), user).needs_ordering().count()
         )
     if user.has_access("credit.view"):
         badges["badge_overdue_debts"] = (

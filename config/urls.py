@@ -10,6 +10,7 @@ urlpatterns = [
     path("system/", include("core.urls")),
     path("accounts/", include("accounts.urls")),
     path("inventory/", include("inventory.urls")),
+    path("production/", include("production.urls")),
     path("sales/", include("sales.urls")),
     path("credit/", include("credit.urls")),
     path("reports/", include("reports.urls")),

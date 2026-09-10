@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in &middot; {{ BUSINESS_NAME }}</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon-32.png' %}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'img/favicon-16.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'img/apple-touch-icon.png' %}">
   <script>
     (function () {
       try {
@@ -43,9 +46,13 @@
 
   <div class="login-card">
     <div class="text-center mb-4">
-      <div class="mx-auto mb-3 d-grid" style="width:52px;height:52px;border-radius:13px;
-           background:var(--brand);color:#fff;place-items:center;font-weight:700;font-size:1.15rem;">
-        {{ BUSINESS_NAME|slice:":2"|upper }}
+      {% comment %}A white plate under the mark: the logo's rocket is white and
+      would disappear on the brand colour.{% endcomment %}
+      <div class="mx-auto mb-3 d-grid" style="width:60px;height:60px;border-radius:15px;
+           background:#fff;place-items:center;overflow:hidden;
+           box-shadow:0 6px 18px rgba(15,23,42,.12);">
+        <img src="{% static 'img/logo.png' %}" alt="{{ BUSINESS_NAME }}"
+             style="width:82%;height:82%;object-fit:contain;display:block;">
       </div>
       <h1 class="h5 fw-semibold mb-1">{{ BUSINESS_NAME }}</h1>
       <p class="text-muted small mb-0">Inventory, Sales &amp; Credit Management</p>

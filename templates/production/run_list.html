@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Production{% endblock %}
+{% block page_title %}Production{% endblock %}
+{% block breadcrumb %}<div class="crumb">Every batch, newest first</div>{% endblock %}
+
+{% block page_actions %}
+  {% if user|can:"production.create" %}
+    <a href="{% url 'production:run_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i> Record production
+    </a>
+  {% endif %}
+  {% if user|can:"recipe.manage" %}
+    <a href="{% url 'production:recipe_list' %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-list-check me-1"></i> Recipes
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label">Units produced</div><div class="value">{{ total_produced }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-danger">
+      <div class="label">Rejected</div><div class="value">{{ total_rejected }}</div>
+    </div>
+  </div>
+  {% if user.can_view_financials %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-success">
+        <div class="label">Material cost <span class="badge text-bg-secondary">Admin</span></div>
+        <div class="value money">{{ total_cost|money }}</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5">
+      <label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ query }}" class="form-control form-control-sm"
+             placeholder="Reference or product">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All</option>
+        <option value="COMPLETED" {% if status == "COMPLETED" %}selected{% endif %}>Completed</option>
+        <option value="REVERSED" {% if status == "REVERSED" %}selected{% endif %}>Reversed</option>
+      </select>
+    </div>
+    <div class="col-md-4 d-flex gap-2">
+      <button class="btn btn-primary btn-sm">Filter</button>
+      <a href="{% url 'production:run_list' %}" class="btn btn-outline-secondary btn-sm">Clear</a>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Reference</th><th>Product</th>
+          <th class="text-end">Produced</th><th class="text-end">Rejected</th>
+          <th class="text-end">Yield</th>
+          {% if user.can_view_financials %}<th class="text-end">Cost / unit</th>{% endif %}
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for run in runs %}
+        <tr {% if run.is_reversed %}class="text-muted"{% endif %}>
+          <td>
+            <a href="{% url 'production:run_detail' run.pk %}" class="fw-semibold text-decoration-none">
+              {{ run.reference }}
+            </a>
+            {% if run.is_reversed %}<span class="badge text-bg-secondary ms-1">Reversed</span>{% endif %}
+          </td>
+          <td>{{ run.product.name }}</td>
+          <td class="text-end fw-semibold">{{ run.quantity_produced }}</td>
+          <td class="text-end {% if run.quantity_rejected %}text-danger{% endif %}">{{ run.quantity_rejected }}</td>
+          <td class="text-end">{{ run.yield_percent }}%</td>
+          {% if user.can_view_financials %}
+            <td class="text-end money">{{ run.unit_cost|money }}</td>
+          {% endif %}
+          <td class="small text-muted">{{ run.produced_on|date:"d M Y" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7" class="text-center text-muted py-4">
+          No batches recorded yet. A run takes materials out of the store and puts
+          finished goods on the shelf, in one step.
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% include "partials/pagination.html" %}
+{% endblock %}

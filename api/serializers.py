@@ -322,6 +322,14 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
     #: So a list view can show a placeholder without fetching every photo.
     has_image = serializers.SerializerMethodField()
 
+    # SKU is optional here exactly as it is on the web form: left blank, the
+    # model builds one from the product name (see Product.save). It has to be
+    # declared explicitly because the column is NOT NULL, and DRF turns that
+    # into required=True - which is why the phone's new-product form was
+    # answered with "This field is required." for a field the form says is
+    # optional.
+    sku = serializers.CharField(max_length=60, required=False, allow_blank=True)
+
     class Meta:
         model = Product
         fields = [
@@ -338,6 +346,44 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
 
     def get_has_image(self, obj) -> bool:
         return bool(obj.image)
+
+    def validate_sku(self, value):
+        """
+        Readable message for the per-owner uniqueness rule.
+
+        DRF's own unique validator cannot cover this: the constraint is on
+        (owner, sku) and `owner` never appears in the payload - the view sets
+        it. Without this check the database raises IntegrityError and the
+        phone gets a 500 where it should get a sentence.
+        """
+        value = (value or "").strip()
+        if not value:
+            return value
+
+        if self.instance is not None:
+            owner_id = self.instance.owner_id
+        else:
+            request = self.context.get("request")
+            owner_id = getattr(getattr(request, "user", None), "pk", None)
+
+        clash = Product.objects.alive().filter(owner_id=owner_id, sku__iexact=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        first = clash.first()
+        if first is not None:
+            raise serializers.ValidationError(
+                f"You already have a product with this SKU: '{first.name}'."
+            )
+        return value
+
+    def validate(self, attrs):
+        # A blank SKU on an EDIT means "leave it alone", not "throw the
+        # existing code away and generate a new one" - that code may already
+        # be printed on a shelf label. On a CREATE the blank is kept, because
+        # that is what tells Product.save() to generate one.
+        if self.instance is not None and not (attrs.get("sku") or "").strip():
+            attrs.pop("sku", None)
+        return super().validate(attrs)
 
     def get_image_url(self, obj):
         if not obj.image:

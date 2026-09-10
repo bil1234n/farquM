@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Correct material{% endblock %}
+{% block page_title %}Correct the store{% endblock %}
+{% block breadcrumb %}<div class="crumb">
+  <a href="{% url 'production:material_list' %}">Raw materials</a> &rsaquo;
+  <a href="{% url 'production:material_detail' material.pk %}">{{ material.name }}</a>
+</div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header d-flex justify-content-between">
+          <span>{{ material.name }}</span>
+          <span class="text-muted">
+            {{ material.quantity_in_stock|floatformat:"-3" }} {{ material.get_unit_display }} on the card
+          </span>
+        </div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form %}
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'production:material_detail' material.pk %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save correction</button>
+        </div>
+      </div>
+    </form>
+    <div class="alert alert-warning small mt-3">
+      A correction is written to the store card with your name against it. It
+      never edits an earlier movement, so the original figure and the reason it
+      changed both stay readable.
+    </div>
+  </div>
+</div>
+{% endblock %}

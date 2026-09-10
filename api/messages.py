@@ -58,6 +58,13 @@ EXACT_AM: dict[str, str] = {
     "Litre": "ሊትር",
     "Meter": "ሜትር",
     "Pack": "ጥቅል",
+    # The yard buys in these. A separate list from the product units on
+    # purpose: nobody sells a cubic metre of hollow blocks.
+    "Tonne": "ቶን",
+    "Bag": "ከረጢት",
+    "Cubic metre": "ኪዩቢክ ሜትር",
+    "Metre": "ሜትር",
+    "Roll": "ጥቅል",
 
     # -- Stock movement types ----------------------------------------------
     "Restock / Purchase in": "ዳግም ሙሌት / ግዢ ገቢ",
@@ -68,6 +75,46 @@ EXACT_AM: dict[str, str] = {
     "Damage / write-off": "ብልሽት / ስረዛ",
     "Reversal of voided sale": "የተሰረዘ ሽያጭ መመለሻ",
     "Opening balance": "የመክፈቻ ቀሪ",
+    "Produced in-house": "በራስ የተመረተ",
+    "Reversal of a production run": "የምርት ዙር መመለስ",
+
+    # -- Material movement types --------------------------------------------
+    "Delivery received": "የገባ ዕቃ",
+    "Used in production": "በምርት ላይ የዋለ",
+    "Spoiled / written off": "የተበላሸ / የተሰረዘ",
+    "Returned to supplier": "ወደ አቅራቢው የተመለሰ",
+    "Stock count correction": "የቆጠራ እርማት",
+    "Returned by a reversed run": "በተመለሰ ዙር የተመለሰ",
+
+    # -- Production run status ----------------------------------------------
+    "Completed": "የተጠናቀቀ",
+    "Reversed": "የተመለሰ",
+
+    # -- Production service messages ----------------------------------------
+    "A run must produce at least one unit.": "አንድ ዙር ቢያንስ አንድ ምርት ማምረት አለበት።",
+    "Rejected units cannot be negative.": "የተጣሉ ብዛት አሉታዊ መሆን አይችልም።",
+    "Record at least one material used in this run.":
+        "በዚህ ዙር ውስጥ የዋለ ቢያንስ አንድ ዕቃ ይመዝግቡ።",
+    "A material movement cannot be zero.": "የዕቃ እንቅስቃሴ ዜሮ መሆን አይችልም።",
+    "A delivery quantity must be greater than zero.":
+        "የግዢ መጠን ከዜሮ በላይ መሆን አለበት።",
+    "A write-off quantity must be greater than zero.":
+        "የስረዛ መጠን ከዜሮ በላይ መሆን አለበት።",
+    "A return quantity must be greater than zero.":
+        "የመመለሻ መጠን ከዜሮ በላይ መሆን አለበት።",
+    "A counted quantity cannot be negative.": "የተቆጠረ መጠን አሉታዊ መሆን አይችልም።",
+    "Enter how many units this run will make.":
+        "ይህ ዙር ስንት ምርት እንደሚሠራ ያስገቡ።",
+    "One of the materials no longer exists.": "ከዕቃዎቹ አንዱ ከእንግዲህ የለም።",
+    "Give a reason for reversing this run.": "ይህን ዙር ለመመለስ ምክንያት ይስጡ።",
+    "This production run is not yours to reverse.":
+        "ይህን የምርት ዙር የመመለስ መብት የለዎትም።",
+    "Enter a quantity greater than zero.": "ከዜሮ በላይ የሆነ መጠን ያስገቡ።",
+    "That product is not in your list.": "ያ ምርት በዝርዝርዎ ውስጥ የለም።",
+    "Give a product and a quantity.": "ምርትና መጠን ይስጡ።",
+    "A batch must make at least one unit.": "አንድ ዙር ቢያንስ አንድ ምርት መሥራት አለበት።",
+    "The count already matches. Nothing changed.":
+        "ቆጠራው አስቀድሞ ይመሳሰላል። ምንም አልተቀየረም።",
 
     # -- Customer types -----------------------------------------------------
     "Walk-in": "አላፊ ደንበኛ",
@@ -336,6 +383,42 @@ _PATTERNS_AM: list[tuple[str, str]] = [
     (
         r"^(.+?) is already fully settled\.$",
         "{0} አስቀድሞ ሙሉ በሙሉ ተከፍሏል።",
+    ),
+    (
+        r"^Not enough '(.+?)'\. Available: (.+?), needed: (.+?)\.$",
+        "'{0}' በቂ የለም። ያለው፦ {1}፣ የሚያስፈልገው፦ {2}።",
+    ),
+    (
+        r"^'(.+?)' is not in your material store\.$",
+        "'{0}' በእርስዎ የዕቃ መጋዘን ውስጥ የለም።",
+    ),
+    (
+        r"^Enter how much '(.+?)' this run used\.$",
+        "ይህ ዙር ምን ያህል '{0}' እንደተጠቀመ ያስገቡ።",
+    ),
+    (
+        r"^'(.+?)' is listed twice\. Combine it into one line\.$",
+        "'{0}' ሁለት ጊዜ ተዘርዝሯል። ወደ አንድ መስመር ያዋህዱት።",
+    ),
+    (
+        r"^How much '(.+?)' does one batch use\?$",
+        "አንድ ዙር ምን ያህል '{0}' ይጠቀማል?",
+    ),
+    (
+        r"^You already have a material with this code: '(.+?)'\.$",
+        "በዚህ ኮድ የተመዘገበ ዕቃ አስቀድሞ አለዎት፦ '{0}'።",
+    ),
+    (
+        r"^(PRD-\d{8}-\d{4}) was already reversed\.$",
+        "{0} አስቀድሞ ተመልሷል።",
+    ),
+    (
+        r"^You already have a product with this SKU: '(.+?)'\.$",
+        "በዚህ SKU የተመዘገበ ምርት አስቀድሞ አለዎት፦ '{0}'።",
+    ),
+    (
+        r"^You already have a product with this barcode: '(.+?)'\.$",
+        "በዚህ ባርኮድ የተመዘገበ ምርት አስቀድሞ አለዎት፦ '{0}'።",
     ),
     (
         r"^Ensure this value is less than or equal to (.+?)\.$",

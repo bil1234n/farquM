@@ -37,6 +37,10 @@ AMHARIC: dict[str, str] = {
     "group.overview.blurb": "ሁሉም ሰው ከገባ በኋላ የሚያየው መነሻ ገጽ።",
     "group.catalog.label": "ምርቶች እና ክምችት",
     "group.catalog.blurb": "መደርደሪያው፦ ምን እንዳለ፣ ስንት እንደተገዛ እና ስንት እንደቀረ።",
+    "group.production.label": "ምርት",
+    "group.production.blurb":
+        "ማምረቻው፦ የሚገዙት፣ ከእሱ የሚሠሩት፣ እና እያንዳንዱ ዙር ያስከፈለው። ኮንክሪት የሚደባልቁት "
+        "ሰዎች ብዙ ጊዜ የሚሸጡት ሰዎች ስላልሆኑ ከመደርደሪያው ተለይቷል።",
     "group.sales.label": "ሽያጭ",
     "group.sales.blurb": "ካዝናው፣ እና በእሱ በኩል ያለፈው ሁሉ።",
     "group.customers.label": "ደንበኞች",
@@ -77,6 +81,29 @@ AMHARIC: dict[str, str] = {
         "ለጥቂት ሰዎች ብቻ ይስጡ።"
     ),
     "perm.catalog.manage.label": "ምድቦችንና አቅራቢዎችን ማስተዳደር",
+
+    # -- Production ----------------------------------------------------------
+    "perm.material.view.label": "ጥሬ ዕቃዎችንና የቀረውን መጠን ማየት",
+    "perm.material.view.help": "የመጋዘን ካርዱ፦ ሲሚንቶ፣ አሸዋ፣ ጠጠር እና ከእያንዳንዱ የቀረው።",
+    "perm.material.create.label": "አዲስ ጥሬ ዕቃ መጨመር",
+    "perm.material.edit.label": "የጥሬ ዕቃ መረጃን ማረም",
+    "perm.material.receive.label": "የጥሬ ዕቃ ግዢ መመዝገብ",
+    "perm.material.receive.help": "ወደ መጋዘኑ ይጨምራል፤ የዕቃውንም ዋጋ ያድሳል።",
+    "perm.material.adjust.label": "ጥሬ ዕቃን ማረም ወይም መሰረዝ",
+    "perm.material.adjust.help":
+        "የፈሰሰ፣ የተበላሸ፣ እና ቁጥሩን በቀጥታ የሚተካ ቆጠራ። መጋዘን በጸጥታ የሚጎድልበት መንገድ "
+        "ስለሆነ ለጥቂት ሰዎች ብቻ ይስጡ።",
+    "perm.recipe.manage.label": "የምርቱን የቅመማ መጠን ማስቀመጥ",
+    "perm.recipe.manage.help":
+        "አንድ ዙር ምርት ከእያንዳንዱ ዕቃ ምን ያህል እንደሚወስድ። ይህን መቀየር ወደፊት የሚሠሩትን "
+        "ሁሉንም ዙሮች ይለውጣል።",
+    "perm.production.view.label": "የምርት ዙሮችን ማየት",
+    "perm.production.create.label": "የምርት ዙር መመዝገብ",
+    "perm.production.create.help":
+        "ጥሬ ዕቃውን ከመጋዘኑ አውጥቶ የተጠናቀቀውን ምርት በአንድ ጊዜ ወደ መደርደሪያው ያስገባል።",
+    "perm.production.reverse.label": "የምርት ዙርን መመለስ",
+    "perm.production.reverse.help":
+        "ጥሬ ዕቃውን ይመልሳል፤ የተመረተውንም ከመደርደሪያው ያወርዳል። ሁለቱም እርምጃዎች በመዝገብ ላይ ይቀራሉ።",
 
     # -- Sales --------------------------------------------------------------
     "perm.sale.view.label": "ሽያጮችንና የግብይት ታሪክ ማየት",

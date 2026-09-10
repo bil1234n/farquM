@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Materials to order{% endblock %}
+{% block page_title %}Materials to order{% endblock %}
+{% block breadcrumb %}<div class="crumb">At or below the reorder level</div>{% endblock %}
+{% block page_actions %}
+  <a href="{% url 'production:material_list' %}" class="btn btn-outline-secondary btn-sm">All materials</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Material</th><th class="text-end">In store</th>
+          <th class="text-end">Reorder at</th><th class="text-end">Short by</th>
+          <th>Supplier</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for material in materials %}
+        <tr>
+          <td>
+            <a href="{% url 'production:material_detail' material.pk %}" class="fw-semibold text-decoration-none">{{ material.name }}</a>
+            <div class="small text-muted">{{ material.code }}</div>
+          </td>
+          <td class="text-end fw-semibold {% if material.is_empty %}text-danger{% endif %}">
+            {{ material.quantity_in_stock|floatformat:"-3" }} {{ material.get_unit_display }}
+          </td>
+          <td class="text-end text-muted">{{ material.reorder_level|floatformat:"-3" }}</td>
+          <td class="text-end text-danger">
+            {{ material.reorder_level|subtract:material.quantity_in_stock|floatformat:"-3" }}
+          </td>
+          <td class="small text-muted">{{ material.supplier.name|default:"-" }}</td>
+          <td class="text-end">
+            {% if user|can:"material.receive" %}
+              <a href="{% url 'production:material_receive' material.pk %}" class="btn btn-success btn-sm">Record delivery</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="text-center text-muted py-4">
+          Every material is above its reorder level.
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

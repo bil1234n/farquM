@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{{ material.name }}{% endblock %}
+{% block page_title %}{{ material.name }}{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'production:material_list' %}">Raw materials</a> &rsaquo; {{ material.code }}</div>{% endblock %}
+
+{% block page_actions %}
+  {% if user|can:"material.receive" %}
+    <a href="{% url 'production:material_receive' material.pk %}" class="btn btn-success btn-sm">
+      <i class="bi bi-box-arrow-in-down me-1"></i> Record delivery
+    </a>
+  {% endif %}
+  {% if user|can:"material.adjust" %}
+    <a href="{% url 'production:material_adjust' material.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-sliders me-1"></i> Correct
+    </a>
+  {% endif %}
+  {% if user|can:"material.edit" %}
+    <a href="{% url 'production:material_update' material.pk %}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-pencil me-1"></i> Edit
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small text-uppercase">In store</div>
+            <div class="display-6 fw-bold">{{ material.quantity_in_stock|floatformat:"-3" }}</div>
+            <div class="text-muted">{{ material.get_unit_display }}</div>
+          </div>
+          <div>
+            {% if material.is_empty %}
+              <span class="badge text-bg-danger">Out of stock</span>
+            {% elif material.is_low %}
+              <span class="badge text-bg-warning">Low stock</span>
+            {% else %}
+              <span class="badge text-bg-success">In stock</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Code</span><span>{{ material.code }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Reorder at</span>
+          <span><span>{{ material.reorder_level|floatformat:"-3" }}</span>
+                <span>{{ material.get_unit_display }}</span></span>
+        </li>
+        {% if user.can_view_financials %}
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Unit cost</span><span class="money">{{ material.unit_cost|money }}</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Store value</span><span class="money fw-semibold">{{ material.stock_value|money }}</span>
+          </li>
+        {% endif %}
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Supplier</span><span>{{ material.supplier.name|default:"Not set" }}</span>
+        </li>
+        {% if material.owner_id %}
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Belongs to</span><span>{{ material.owner_name }}</span>
+          </li>
+        {% endif %}
+      </ul>
+    </div>
+
+    {% if material.description %}
+      <div class="card mb-3">
+        <div class="card-header">Notes</div>
+        <div class="card-body small text-muted">{{ material.description|linebreaksbr }}</div>
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header">Used in</div>
+      {% if used_in %}
+        <ul class="list-group list-group-flush">
+          {% for item in used_in %}
+            <li class="list-group-item d-flex justify-content-between">
+              <span>{{ item.recipe.product.name }}</span>
+              <span class="text-muted small">
+                <span>{{ item.quantity|floatformat:"-3" }}</span>
+                <span>{{ material.get_unit_display }}</span>
+                <span>per</span>
+                <span>{{ item.recipe.output_quantity }}</span>
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="card-body text-muted small">
+          No recipe uses this material yet.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Store card</span>
+        <span class="text-muted small">Every movement, oldest at the bottom</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>When</th><th>What</th>
+              <th class="text-end">Change</th><th class="text-end">Left</th>
+              <th>Reference</th><th>By</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for movement in movements %}
+            <tr>
+              <td class="text-muted small text-nowrap">{{ movement.created_at|date:"d M Y, H:i" }}</td>
+              <td>
+                {{ movement.get_movement_type_display }}
+                {% if movement.reason %}<div class="small text-muted">{{ movement.reason }}</div>{% endif %}
+              </td>
+              <td class="text-end fw-semibold {% if movement.is_inbound %}text-success{% else %}text-danger{% endif %}">
+                {% if movement.is_inbound %}+{% endif %}{{ movement.quantity_delta|floatformat:"-3" }}
+              </td>
+              <td class="text-end text-muted">{{ movement.quantity_after|floatformat:"-3" }}</td>
+              <td class="small text-muted">{{ movement.reference|default:"-" }}</td>
+              <td class="small text-muted">{{ movement.performed_by.display_name|default:"System" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-4">
+              Nothing has moved yet. Record a delivery to open the card.
+            </td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Recipes{% endblock %}
+{% block page_title %}Recipes{% endblock %}
+{% block breadcrumb %}<div class="crumb">What each product is made of</div>{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Product</th><th>One batch makes</th><th>Materials</th>
+          {% if user.can_view_financials %}<th class="text-end">Cost per unit</th>{% endif %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for product in products %}
+        <tr>
+          <td>
+            <span class="fw-semibold">{{ product.name }}</span>
+            <div class="small text-muted">{{ product.sku }}</div>
+          </td>
+          <td>
+            {% if product.recipe %}
+              <span class="fw-semibold">{{ product.recipe.output_quantity }}</span>
+              <span class="text-muted">{{ product.get_unit_display }}</span>
+            {% else %}
+              <span class="text-muted">-</span>
+            {% endif %}
+          </td>
+          <td class="small">
+            {% if product.recipe %}
+              {% for item in product.recipe.items.all %}
+                <span class="badge text-bg-light border me-1">
+                  <span>{{ item.material.name }}</span>
+                  <span class="fw-semibold">{{ item.quantity|floatformat:"-3" }}</span>
+                  <span>{{ item.material.get_unit_display }}</span>
+                </span>
+              {% empty %}
+                <span class="text-muted">No materials listed</span>
+              {% endfor %}
+            {% else %}
+              <span class="text-muted">No recipe yet</span>
+            {% endif %}
+          </td>
+          {% if user.can_view_financials %}
+            <td class="text-end money">
+              {% if product.recipe %}{{ product.recipe.cost_per_unit|money }}{% else %}-{% endif %}
+            </td>
+          {% endif %}
+          <td class="text-end">
+            <a href="{% url 'production:recipe_edit' product.pk %}" class="btn btn-outline-primary btn-sm">
+              {% if product.recipe %}Edit recipe{% else %}Set recipe{% endif %}
+            </a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="text-center text-muted py-4">No products yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="text-muted small mt-3">
+  A recipe is what a batch is <em>expected</em> to use. The operator can correct
+  the figures when they record the run, and the two are stored side by side -
+  that difference is how a yard finds out where its cement goes.
+</p>
+
+{% include "partials/pagination.html" %}
+{% endblock %}

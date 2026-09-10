@@ -60,6 +60,15 @@ DATA_KEYS = frozenset(
         "category_name",
         "supplier_name",
         "role_name",
+        # The yard. A material called "Bag" or a product called "Reversed"
+        # would otherwise come back translated into a word the shopkeeper
+        # never typed.
+        "material_name",
+        "material_code",
+        "product_sku",
+        "created_by_name",
+        "reversed_by_name",
+        "reversal_reason",
     }
 )
 

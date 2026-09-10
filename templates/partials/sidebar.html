@@ -1,4 +1,4 @@
-{% load core_extras %}
+{% load static core_extras %}
 {% comment %}
   Navigation, gated by permission.
 
@@ -16,7 +16,7 @@
 <aside class="sidebar no-print">
 
   <div class="sidebar-brand">
-    <div class="logo">{{ BUSINESS_NAME|slice:":2"|upper }}</div>
+    <div class="logo"><img src="{% static 'img/logo.png' %}" alt="{{ BUSINESS_NAME }}"></div>
     <div>
       <div class="name">{{ BUSINESS_NAME }}</div>
       <div class="sub">{{ user.get_role_display }}</div>
@@ -103,6 +103,29 @@
         <a class="nav-link {% if 'supplier' in request.resolver_match.view_name %}active{% endif %}"
            href="{% url 'inventory:supplier_list' %}">
           <i class="bi bi-truck"></i> Suppliers
+        </a>
+      {% endif %}
+    {% endif %}
+
+    {% if user|can:"material.view,production.view,recipe.manage" %}
+      <div class="nav-section">Production</div>
+      {% if user|can:"material.view" %}
+        <a class="nav-link {% if 'material' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'production:material_list' %}">
+          <i class="bi bi-boxes"></i> Raw Materials
+          {% if badge_low_material %}<span class="badge text-bg-warning">{{ badge_low_material }}</span>{% endif %}
+        </a>
+      {% endif %}
+      {% if user|can:"production.view" %}
+        <a class="nav-link {% if 'run' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'production:run_list' %}">
+          <i class="bi bi-bricks"></i> Production Runs
+        </a>
+      {% endif %}
+      {% if user|can:"recipe.manage" %}
+        <a class="nav-link {% if 'recipe' in request.resolver_match.view_name %}active{% endif %}"
+           href="{% url 'production:recipe_list' %}">
+          <i class="bi bi-list-check"></i> Recipes
         </a>
       {% endif %}
     {% endif %}

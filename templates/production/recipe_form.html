@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Recipe for {{ product.name }}{% endblock %}
+{% block page_title %}Recipe for {{ product.name }}{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'production:recipe_list' %}">Recipes</a> &rsaquo; {{ product.sku }}</div>{% endblock %}
+
+{% block content %}
+<form method="post" novalidate>
+  {% csrf_token %}
+  <div class="row g-3">
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">The batch</div>
+        <div class="card-body">
+          {% include "partials/form_fields.html" with form=form wide_fields="notes" %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Materials one batch uses</span>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="addLine">
+            <i class="bi bi-plus-lg me-1"></i> Add material
+          </button>
+        </div>
+        <div class="table-responsive">
+          <table class="table align-middle mb-0" id="lines">
+            <thead>
+              <tr><th style="width:55%">Material</th><th>Quantity</th><th style="width:44px"></th></tr>
+            </thead>
+            <tbody>
+            {% for item in items %}
+              <tr>
+                <td>
+                  <select name="material_id[]" class="form-select form-select-sm">
+                    {% for material in store %}
+                      <option value="{{ material.pk }}" {% if material.pk == item.material_id %}selected{% endif %}>
+                        {{ material.name }} ({{ material.get_unit_display }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>
+                  <input type="number" step="0.001" min="0.001" name="quantity[]"
+                         value="{{ item.quantity|floatformat:'-3' }}" class="form-control form-control-sm">
+                  <input type="hidden" name="expected[]" value="">
+                </td>
+                <td class="text-end">
+                  <button type="button" class="btn btn-outline-danger btn-sm drop"><i class="bi bi-x"></i></button>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'production:recipe_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save recipe</button>
+        </div>
+      </div>
+      {% if not store %}
+        <div class="alert alert-warning small mt-3">
+          There are no raw materials in your store yet. Add them first, then come
+          back and write the recipe.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</form>
+
+<template id="lineTemplate">
+  <tr>
+    <td>
+      <select name="material_id[]" class="form-select form-select-sm">
+        {% for material in store %}
+          <option value="{{ material.pk }}">{{ material.name }} ({{ material.get_unit_display }})</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td>
+      <input type="number" step="0.001" min="0.001" name="quantity[]" class="form-control form-control-sm">
+      <input type="hidden" name="expected[]" value="">
+    </td>
+    <td class="text-end">
+      <button type="button" class="btn btn-outline-danger btn-sm drop"><i class="bi bi-x"></i></button>
+    </td>
+  </tr>
+</template>
+
+<script>
+  (function () {
+    var body = document.querySelector("#lines tbody");
+    var template = document.getElementById("lineTemplate");
+
+    function addLine() {
+      body.appendChild(template.content.cloneNode(true));
+    }
+    document.getElementById("addLine").addEventListener("click", addLine);
+    body.addEventListener("click", function (event) {
+      var button = event.target.closest(".drop");
+      if (button) { button.closest("tr").remove(); }
+    });
+    // An empty recipe form with no rows looks broken, so open with one.
+    if (!body.children.length) { addLine(); }
+  })();
+</script>
+{% endblock %}

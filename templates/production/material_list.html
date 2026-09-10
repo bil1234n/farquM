@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Raw materials{% endblock %}
+{% block page_title %}Raw materials{% endblock %}
+{% block breadcrumb %}<div class="crumb">{{ total_count }} material{{ total_count|pluralize }} in the store</div>{% endblock %}
+
+{% block page_actions %}
+  {% if user|can:"material.create" %}
+    <a href="{% url 'production:material_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i> Add material
+    </a>
+  {% endif %}
+  <a href="{% url 'production:material_movements' %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left-right me-1"></i> Store card
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label">Materials</div><div class="value">{{ total_count }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-warning">
+      <div class="label">Need ordering</div><div class="value">{{ low_count }}</div>
+    </div>
+  </div>
+  {% if user.can_view_financials %}
+    <div class="col-6 col-lg-3">
+      <div class="stat-card accent-success">
+        <div class="label">Store value <span class="badge text-bg-secondary">Admin</span></div>
+        <div class="value money">{{ store_value|money }}</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-5">
+      <label class="form-label">Search</label>
+      <input type="text" name="q" value="{{ query }}" class="form-control form-control-sm"
+             placeholder="Name or code">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Level</label>
+      <select name="level" class="form-select form-select-sm">
+        <option value="">All</option>
+        <option value="order" {% if level == "order" %}selected{% endif %}>Needs ordering</option>
+        <option value="low" {% if level == "low" %}selected{% endif %}>Low</option>
+        <option value="out" {% if level == "out" %}selected{% endif %}>Out of stock</option>
+      </select>
+    </div>
+    <div class="col-md-4 d-flex gap-2">
+      <button class="btn btn-primary btn-sm">Filter</button>
+      <a href="{% url 'production:material_list' %}" class="btn btn-outline-secondary btn-sm">Clear</a>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Material</th>
+          <th class="text-end">In store</th>
+          <th class="text-end">Reorder at</th>
+          {% if user.can_view_financials %}<th class="text-end">Unit cost</th><th class="text-end">Value</th>{% endif %}
+          <th>Supplier</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for material in materials %}
+        <tr>
+          <td>
+            <a href="{% url 'production:material_detail' material.pk %}" class="fw-semibold text-decoration-none">
+              {{ material.name }}
+            </a>
+            <div class="small text-muted">{{ material.code }}</div>
+          </td>
+          <td class="text-end">
+            <span class="fw-semibold">{{ material.quantity_in_stock|floatformat:"-3" }}</span>
+            <span class="text-muted small">{{ material.get_unit_display }}</span>
+            {% if material.is_empty %}
+              <span class="badge text-bg-danger ms-1">Out of stock</span>
+            {% elif material.is_low %}
+              <span class="badge text-bg-warning ms-1">Low stock</span>
+            {% endif %}
+          </td>
+          <td class="text-end text-muted">{{ material.reorder_level|floatformat:"-3" }}</td>
+          {% if user.can_view_financials %}
+            <td class="text-end money">{{ material.unit_cost|money }}</td>
+            <td class="text-end money">{{ material.stock_value|money }}</td>
+          {% endif %}
+          <td class="text-muted small">{{ material.supplier.name|default:"-" }}</td>
+          <td class="text-end">
+            {% if user|can:"material.receive" %}
+              <a href="{% url 'production:material_receive' material.pk %}" class="btn btn-outline-success btn-sm">
+                <i class="bi bi-box-arrow-in-down"></i>
+              </a>
+            {% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="8" class="text-center text-muted py-4">
+          Nothing in the store yet. Add the materials you buy in, and their quantities
+          will follow every delivery and every batch.
+        </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% include "partials/pagination.html" %}
+{% endblock %}

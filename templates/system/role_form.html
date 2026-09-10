@@ -4,7 +4,11 @@
 {% block page_title %}{% if is_new %}New role{% else %}Edit role &mdash; {{ role.name }}{% endif %}{% endblock %}
 {% block breadcrumb %}
   <div class="crumb"><a href="{% url 'core:role_list' %}">Roles</a>
-    &rsaquo; {% if is_new %}New{% else %}{{ role.code }}{% endif %}</div>
+    {% comment %}
+      The word and the code must be separate text nodes: welded together the
+      sweep sees "> New" and matches nothing.
+    {% endcomment %}
+    &rsaquo; {% if is_new %}<span>New</span>{% else %}{{ role.code }}{% endif %}</div>
 {% endblock %}
 
 {% block content %}

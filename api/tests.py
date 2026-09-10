@@ -532,3 +532,228 @@ class CatalogueApiTests(ApiTestBase):
                         content_type="application/json").status_code,
             201,
         )
+
+
+class ProductFormTests(ApiTestBase):
+    """
+    The new-product form on the phone, in the shape the phone actually sends
+    it: no SKU, a photo as a separate multipart request afterwards.
+    """
+
+    def test_a_product_can_be_created_without_a_sku(self):
+        response = self.as_(self.manager).post(
+            "/api/products/",
+            {
+                "name": "Wooden Bench Seat",
+                "selling_price": "250.00",
+                "cost_price": "180.00",
+                "low_stock_threshold": 3,
+                "unit": "PIECE",
+                "is_active": True,
+                "barcode": None,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        # Initials of the first three words, then a per-owner sequence.
+        self.assertEqual(response.json()["sku"], "WBS-00001")
+
+    def test_a_blank_sku_string_is_also_generated(self):
+        """The phone sends '' when the box was touched and then cleared."""
+        response = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Iron Gate", "selling_price": "900.00", "sku": ""},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertTrue(response.json()["sku"].startswith("IG-"))
+
+    def test_a_typed_sku_is_kept(self):
+        response = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Cement", "selling_price": "800.00", "sku": "CEM-1"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["sku"], "CEM-1")
+
+    def test_a_duplicate_sku_is_a_sentence_not_a_500(self):
+        response = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Another Cola", "selling_price": "16.00", "sku": "c1"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("sku", response.json())
+
+    def test_the_duplicate_message_is_translated(self):
+        response = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Another Cola", "selling_price": "16.00", "sku": "C1"},
+            content_type="application/json",
+            HTTP_ACCEPT_LANGUAGE="am",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("You already have", response.content.decode())
+
+    def test_two_owners_may_use_the_same_sku(self):
+        """The constraint is per owner. An admin's C1 is not the manager's."""
+        response = self.as_(self.admin).post(
+            "/api/products/",
+            {"name": "Admin Cola", "selling_price": "16.00", "sku": "C1"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_editing_without_a_sku_keeps_the_existing_one(self):
+        response = self.as_(self.manager).patch(
+            f"/api/products/{self.product.pk}/",
+            {"name": "Cola 500ml", "sku": ""},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.sku, "C1")
+        self.assertEqual(self.product.name, "Cola 500ml")
+
+    def test_the_unit_can_be_set_from_the_app(self):
+        response = self.as_(self.manager).patch(
+            f"/api/products/{self.product.pk}/",
+            {"unit": "CARTON"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["unit"], "CARTON")
+
+    def test_the_create_then_photo_sequence_the_app_uses(self):
+        created = self.as_(self.manager).post(
+            "/api/products/",
+            {"name": "Steel Door", "selling_price": "3200.00"},
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        pk = created.json()["id"]
+        self.assertFalse(created.json()["has_image"])
+
+        photo = self.as_(self.manager).post(
+            f"/api/products/{pk}/photo/", {"image": upload()}
+        )
+        self.assertEqual(photo.status_code, 200, photo.content)
+        self.assertTrue(photo.json()["has_image"])
+        self.assertTrue(photo.json()["image_url"])
+
+    def test_the_detail_endpoint_answers_with_everything_the_screen_reads(self):
+        """
+        The product page renders straight from this payload. A key going
+        missing here is the difference between a full record and a blank one.
+        """
+        response = self.as_(self.manager).get(f"/api/products/{self.product.pk}/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        for key in (
+            "id", "name", "sku", "barcode", "description",
+            "unit", "unit_display", "selling_price",
+            "stock_quantity", "low_stock_threshold",
+            "stock_status", "stock_status_label", "is_active",
+            "image_url", "has_image", "category_name",
+        ):
+            self.assertIn(key, body, f"the app reads '{key}' off this payload")
+
+    def test_the_movement_list_answers_for_a_product_with_no_history(self):
+        fresh = Product.objects.create(
+            name="Quiet Item", sku="Q1", selling_price=Decimal("5.00"),
+            cost_price=Decimal("2.00"), owner=self.manager,
+        )
+        response = self.as_(self.manager).get(
+            f"/api/products/{fresh.pk}/movements/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+
+class AttachmentFlowTests(ApiTestBase):
+    """
+    The two sequences the app performs when someone photographs a slip.
+
+    Both post multipart to endpoints whose other fields are JSON, which is
+    exactly the combination that breaks silently when a parser list is
+    tightened somewhere else.
+    """
+
+    def _open_debt(self):
+        credit_sale = create_sale(
+            user=self.sales,
+            customer=self.customer,
+            cart=[{"product": self.product, "quantity": 1,
+                   "unit_price": Decimal("15.00")}],
+            amount_paid=Decimal("0.00"),
+            payment_method="CREDIT",
+        )
+        return DebtRecord.objects.get(transaction=credit_sale)
+
+    def test_a_sale_can_be_photographed_immediately_after_it_is_rung_up(self):
+        """The new-sale form: create, then attach, as two requests."""
+        client = self.as_(self.sales)
+        created = client.post(
+            "/api/sales/",
+            {
+                "items": [{"product": self.product.pk, "quantity": 1,
+                           "unit_price": "15.00"}],
+                "amount_paid": "15.00",
+                "payment_method": "CASH",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        sale_id = created.json()["id"]
+
+        attached = client.post(
+            f"/api/sales/{sale_id}/receipt/",
+            {"file": upload("slip.png"), "kind": "SALE"},
+        )
+        self.assertEqual(attached.status_code, 201, attached.content)
+
+        detail = client.get(f"/api/sales/{sale_id}/").json()
+        self.assertEqual(len(detail["receipts"]), 1)
+        self.assertTrue(detail["receipts"][0]["file_url"])
+
+    def test_a_repayment_carries_its_proof_photo(self):
+        debt = self._open_debt()
+        response = self.as_(self.sales).post(
+            f"/api/debts/{debt.pk}/pay/",
+            {"amount": "5.00", "method": "CASH", "proof": upload("proof.png")},
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        debt.refresh_from_db()
+        self.assertEqual(debt.amount_repaid, Decimal("5.00"))
+
+        # The slip is filed against the repayment, and the URL comes back in
+        # the same response - which is what the debt page in the app reads to
+        # show the thumbnail.
+        proofs = response.json()["repayment"]["proofs"]
+        self.assertEqual(len(proofs), 1, response.content)
+        self.assertTrue(proofs[0]["file_url"])
+
+        listed = self.as_(self.sales).get(f"/api/debts/{debt.pk}/repayments/")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.json()[0]["proofs"]), 1, listed.content)
+
+    def test_a_repayment_without_a_photo_still_works(self):
+        """The field is optional, and staying optional is the point."""
+        debt = self._open_debt()
+        response = self.as_(self.sales).post(
+            f"/api/debts/{debt.pk}/pay/",
+            {"amount": "5.00", "method": "CASH"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+
+    def test_a_sales_user_without_collect_cannot_record_a_payment(self):
+        debt = self._open_debt()
+        self.sales.denied_permissions = ["credit.collect"]
+        self.sales.save(update_fields=["denied_permissions"])
+        response = self.as_(self.sales).post(
+            f"/api/debts/{debt.pk}/pay/",
+            {"amount": "5.00", "proof": upload("proof.png")},
+        )
+        self.assertEqual(response.status_code, 403, response.content)

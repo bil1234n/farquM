@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "core.apps.CoreConfig",
     "accounts.apps.AccountsConfig",
     "inventory.apps.InventoryConfig",
+    "production.apps.ProductionConfig",
     "sales.apps.SalesConfig",
     "credit.apps.CreditConfig",
     "reports.apps.ReportsConfig",
@@ -281,7 +282,7 @@ MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 # ---------------------------------------------------------------------------
 # Business configuration
 # ---------------------------------------------------------------------------
-BUSINESS_NAME = config("BUSINESS_NAME", default="Faruq Trading")
+BUSINESS_NAME = config("BUSINESS_NAME", default="Faruq ERP")
 BUSINESS_PHONE = config("BUSINESS_PHONE", default="")
 BUSINESS_ADDRESS = config("BUSINESS_ADDRESS", default="")
 CURRENCY_SYMBOL = config("CURRENCY_SYMBOL", default="ETB")
