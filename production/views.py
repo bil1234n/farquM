@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError
 from django.db.models import Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
@@ -18,6 +19,7 @@ from core.mixins import (
     get_owned_or_404,
     require,
 )
+from core.errors import describe
 from core.scoping import scoped
 from inventory.models import Product
 
@@ -47,6 +49,19 @@ from .services import (
     waste_material,
 )
 
+
+
+def _messages_of(exc):
+    """
+    The lines to show for an exception, whoever it came from.
+
+    A ValidationError carries wording aimed at the person who triggered it, so
+    each message is shown as-is. Anything else gets one summarised line and the
+    traceback goes to the log.
+    """
+    if isinstance(exc, ValidationError):
+        return list(exc.messages)
+    return [describe(exc)]
 
 # ---------------------------------------------------------------------------
 # Materials
@@ -221,8 +236,8 @@ def material_receive(request, pk):
                 reference=form.cleaned_data.get("reference", ""),
                 reason=form.cleaned_data.get("reason", ""),
             )
-        except ValidationError as exc:
-            messages.error(request, "; ".join(exc.messages))
+        except (ValidationError, DatabaseError) as exc:
+            messages.error(request, describe(exc, context="material movement"))
         else:
             log_action(
                 AuditAction.STOCK, instance=material,
@@ -270,8 +285,8 @@ def material_adjust(request, pk):
                 )
             else:
                 waste_material(material, quantity, user=request.user, reason=reason)
-        except ValidationError as exc:
-            messages.error(request, "; ".join(exc.messages))
+        except (ValidationError, DatabaseError) as exc:
+            messages.error(request, describe(exc, context="material movement"))
         else:
             log_action(
                 AuditAction.STOCK, instance=material,
@@ -457,8 +472,8 @@ def run_create(request):
                     materials=lines,
                     user=request.user,
                 )
-            except ValidationError as exc:
-                for message in exc.messages:
+            except (ValidationError, DatabaseError) as exc:
+                for message in _messages_of(exc):
                     messages.error(request, message)
             else:
                 log_action(
@@ -497,8 +512,8 @@ def run_reverse(request, pk):
         try:
             reverse_production(run, user=request.user,
                                reason=form.cleaned_data["reason"])
-        except ValidationError as exc:
-            for message in exc.messages:
+        except (ValidationError, DatabaseError) as exc:
+            for message in _messages_of(exc):
                 messages.error(request, message)
         else:
             log_action(
@@ -540,8 +555,11 @@ def plan_api(request):
 
     try:
         plan = plan_for(product, quantity, user=request.user)
-    except ValidationError as exc:
-        return JsonResponse({"detail": "; ".join(exc.messages)}, status=400)
+    except (ValidationError, DatabaseError) as exc:
+        return JsonResponse(
+            {"detail": describe(exc, context="production plan")},
+            status=400 if isinstance(exc, ValidationError) else 500,
+        )
 
     return JsonResponse(
         {

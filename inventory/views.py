@@ -1,4 +1,6 @@
 from django.contrib import messages
+from django.core.exceptions import ValidationError
+from django.db import DatabaseError
 from django.db.models import Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
@@ -14,6 +16,7 @@ from core.mixins import (
     get_owned_or_404,
     require,
 )
+from core.errors import describe
 from core.scoping import scoped
 
 from .forms import (
@@ -230,14 +233,22 @@ def product_restock(request, pk):
     form = RestockForm(request.POST or None, user=request.user)
 
     if request.method == "POST" and form.is_valid():
-        movement = restock(
-            product,
-            form.cleaned_data["quantity"],
-            user=request.user,
-            unit_cost=form.cleaned_data.get("unit_cost"),
-            reference=form.cleaned_data.get("reference", ""),
-            reason=form.cleaned_data.get("reason", ""),
-        )
+        try:
+            movement = restock(
+                product,
+                form.cleaned_data["quantity"],
+                user=request.user,
+                unit_cost=form.cleaned_data.get("unit_cost"),
+                reference=form.cleaned_data.get("reference", ""),
+                reason=form.cleaned_data.get("reason", ""),
+            )
+        except (ValidationError, DatabaseError) as exc:
+            messages.error(request, describe(exc, context="restock"))
+            return render(
+                request,
+                "inventory/product_restock.html",
+                {"form": form, "product": product},
+            )
         log_action(
             AuditAction.STOCK,
             instance=product,
@@ -284,12 +295,28 @@ def product_adjust(request, pk):
             )
             return redirect("inventory:product_detail", pk=product.pk)
 
-        if mode == "SET":
-            movement = adjust_to(product, qty, user=request.user, reason=reason)
-        elif mode == "DAMAGE":
-            movement = write_off(product, qty, user=request.user, reason=reason)
-        else:
-            movement = return_from_customer(product, qty, user=request.user, reason=reason)
+        # A refusal from the service belongs on this form, next to the field
+        # that caused it - not on a crash page that loses what was typed.
+        try:
+            if mode == "SET":
+                movement = adjust_to(product, qty, user=request.user, reason=reason)
+            elif mode == "DAMAGE":
+                movement = write_off(product, qty, user=request.user, reason=reason)
+            else:
+                movement = return_from_customer(
+                    product, qty, user=request.user, reason=reason
+                )
+        except (ValidationError, DatabaseError) as exc:
+            messages.error(request, describe(exc, context="stock adjustment"))
+            return render(
+                request,
+                "inventory/product_adjust.html",
+                {
+                    "form": form,
+                    "product": product,
+                    "can_recount": request.user.has_access("stock.recount"),
+                },
+            )
 
         if movement is None:
             messages.info(request, "No change - the counted quantity already matches.")

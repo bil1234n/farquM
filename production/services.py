@@ -177,12 +177,20 @@ def return_material_to_supplier(material, quantity, *, user=None, reason="",
     )
 
 
+@transaction.atomic
 def recount_material(material, counted_quantity, *, user=None, reason=""):
     """
     Set a material to a counted figure, writing the difference as a correction.
 
     Returns None when the count already matches, which is not an error and not
     worth a ledger row.
+
+    `atomic` is not decoration. The read below takes a row lock, and a lock
+    outside a transaction is two separate things wrong at once: Django refuses
+    it outright on a real connection, and even where it did not, the lock would
+    be released the instant the SELECT returned - so two people counting the
+    same bay would both read the same "before" figure and the second write
+    would silently erase the first.
     """
     counted = _quantise(counted_quantity)
     if counted < 0:

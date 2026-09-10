@@ -166,8 +166,15 @@ def record_repayment(
     return repayment
 
 
+@db_transaction.atomic
 def settle_debt(*, debt: DebtRecord, user, **kwargs) -> Repayment:
-    """Convenience wrapper: pay off the entire remaining balance in one go."""
+    """
+    Convenience wrapper: pay off the entire remaining balance in one go.
+
+    Atomic because of the lock below, and because reading the balance and
+    paying it off must be one act - otherwise a repayment landing in between
+    turns "settle the balance" into an overpayment.
+    """
     locked = DebtRecord.objects.select_for_update().get(pk=debt.pk)
     if locked.balance <= ZERO:
         raise CreditError("There is nothing left to settle on this debt.")

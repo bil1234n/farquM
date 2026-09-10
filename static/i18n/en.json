@@ -89,7 +89,8 @@
     "materials_in_store": "{0} material(s) in the store",
     "quantity_in_store": "{$0} in store",
     "quantity_on_card": "{$0} on the card",
-    "recipe_for": "Recipe for {$0}"
+    "recipe_for": "Recipe for {$0}",
+    "save_failed_ref": "That could not be saved just now, so nothing was changed. Please try again — if it keeps happening, quote reference {$0}."
   },
   "nav.overview": "Overview",
   "nav.dashboard": "Dashboard",

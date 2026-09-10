@@ -27,7 +27,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.template.loader import get_template
-from django.test import Client, TestCase
+from django.test import Client, SimpleTestCase, TestCase
 
 from accounts.models import (
     DataScope,
@@ -807,3 +807,250 @@ class DashboardProfileTests(AccessTestBase):
         client = Client()
         client.force_login(watcher)
         self.assertEqual(client.get("/reports/").status_code, 200)
+
+
+class TransactionSafetyTests(SimpleTestCase):
+    """
+    Every `select_for_update()` must sit inside a transaction.
+
+    This is a STATIC check, read off the source, and that is deliberate.
+    Django only raises `TransactionManagementError` for a lock taken outside a
+    transaction when the backend reports `has_select_for_update`. SQLite
+    reports False, so it quietly drops the lock and never complains; PostgreSQL
+    reports True and refuses the very first request.
+
+    So this class of mistake is invisible on a developer's SQLite database and
+    fatal on the deployed one - and a `TestCase` makes it worse still, because
+    it wraps every test in a transaction of its own, which means even the
+    Postgres suite would go green. A run-time test cannot catch this. The
+    source can.
+
+    It also happens to be the check that matters for correctness rather than
+    just for not crashing: a lock has to span the read AND the write, or two
+    people counting the same shelf both read the same "before" figure and the
+    second one silently erases the first.
+    """
+
+    #: Apps whose service layer touches the ledgers.
+    ROOT = Path(settings.BASE_DIR)
+
+    def _locking_functions(self):
+        """Yield (path, function node, decorator names, body) for each lock."""
+        import ast
+
+        for path in sorted(self.ROOT.rglob("*.py")):
+            parts = path.parts
+            if "__pycache__" in parts or "migrations" in parts:
+                continue
+            # A test that talks ABOUT locking is not itself taking a lock -
+            # including this file, which would otherwise report itself.
+            if path.name == "tests.py" or path.name.startswith("test_"):
+                continue
+            source = path.read_text(encoding="utf-8")
+            if "select_for_update" not in source:
+                continue
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                body = ast.get_source_segment(source, node) or ""
+                if "select_for_update" not in body:
+                    continue
+                decorators = [
+                    ast.unparse(d) for d in node.decorator_list
+                ]
+                yield path.relative_to(self.ROOT), node, decorators, body
+
+    def test_no_row_lock_is_taken_outside_a_transaction(self):
+        offenders = []
+        for path, node, decorators, body in self._locking_functions():
+            wrapped = any("atomic" in d for d in decorators)
+            # `with transaction.atomic():` inside the body counts too.
+            inline = "atomic()" in body
+            if not (wrapped or inline):
+                offenders.append(f"{path}::{node.name} (line {node.lineno})")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "These functions call select_for_update() without a surrounding "
+            "transaction. They will work on SQLite and raise "
+            "TransactionManagementError on PostgreSQL the first time a real "
+            "request reaches them:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_the_check_is_actually_looking_at_something(self):
+        """
+        A guard that silently stops finding files is worse than no guard.
+
+        If someone moves the service layer, renames it, or the walk above
+        starts matching nothing, the test above passes for the wrong reason.
+        """
+        found = list(self._locking_functions())
+        self.assertGreaterEqual(
+            len(found), 10,
+            "Expected to find the ledger services that take row locks; found "
+            f"{len(found)}. The source walk is probably looking in the wrong "
+            "place.",
+        )
+
+
+class NavigationTests(SimpleTestCase):
+    """
+    Exactly one sidebar link is highlighted at a time.
+
+    The old sidebar decided this inline, with substring tests against the full
+    view name. It read well and was quietly wrong: "production:material_list"
+    contains "product", so every page in the yard lit up Products as well as
+    its own link, and "core:user_access" contains "user_" so it lit up both
+    Users and Access Control.
+
+    Substring matching on names that nest inside one another cannot be made
+    safe by adding more special cases, so the rules moved into
+    core.context_processors.NAV_RULES where they can be checked - by this.
+    """
+
+    def _view_names(self):
+        from django.urls import get_resolver
+
+        def walk(resolver, namespace=None):
+            for pattern in resolver.url_patterns:
+                if hasattr(pattern, "url_patterns"):
+                    yield from walk(pattern, pattern.namespace or namespace)
+                elif pattern.name:
+                    yield (namespace or ""), pattern.name
+
+        return sorted(set(walk(get_resolver())))
+
+    def test_no_page_highlights_two_links(self):
+        """
+        The rule table is matched longest-prefix-first, so a page can only ever
+        resolve to one key. This asserts the table has no rule whose prefix is
+        ambiguous *within its own namespace* for a real url name.
+        """
+        from core.context_processors import NAV_RULES
+
+        clashes = []
+        for namespace, url_name in self._view_names():
+            winners = {
+                key for ns, prefix, key in NAV_RULES
+                if ns == namespace and url_name.startswith(prefix)
+            }
+            if len(winners) > 1:
+                # More than one KEY can only happen when two rules of equal
+                # specificity disagree, which the longest-prefix rule cannot
+                # break. That is a table bug.
+                lengths = {
+                    len(prefix) for ns, prefix, key in NAV_RULES
+                    if ns == namespace and url_name.startswith(prefix)
+                }
+                if len(lengths) != len(winners):
+                    continue  # a longer prefix wins cleanly
+                clashes.append(f"{namespace}:{url_name} -> {sorted(winners)}")
+
+        self.assertEqual(
+            clashes, [],
+            "These pages match two nav rules of equal specificity:\n  "
+            + "\n  ".join(clashes),
+        )
+
+    def test_every_production_page_lights_its_own_section(self):
+        """The bug that started this: the yard lighting up Products."""
+        from core.context_processors import nav_active
+
+        class FakeMatch:
+            def __init__(self, namespace, url_name):
+                self.namespace = namespace
+                self.url_name = url_name
+
+        class FakeRequest:
+            def __init__(self, match):
+                self.resolver_match = match
+
+        expected = {
+            ("production", "material_list"): "materials",
+            ("production", "material_detail"): "materials",
+            ("production", "material_adjust"): "materials",
+            ("production", "run_list"): "runs",
+            ("production", "run_detail"): "runs",
+            ("production", "recipe_list"): "recipes",
+            ("inventory", "product_list"): "products",
+            ("inventory", "low_stock"): "low_stock",
+            ("core", "user_access"): "access",
+            ("accounts", "user_list"): "users",
+        }
+        for (namespace, url_name), key in expected.items():
+            with self.subTest(view=f"{namespace}:{url_name}"):
+                got = nav_active(FakeRequest(FakeMatch(namespace, url_name)))
+                self.assertEqual(got["NAV"], key)
+
+    def test_the_sidebar_no_longer_decides_this_itself(self):
+        """
+        A regression guard with teeth: if someone puts an inline view-name test
+        back into the sidebar, this fails and points at why.
+        """
+        sidebar = (
+            Path(settings.BASE_DIR) / "templates" / "partials" / "sidebar.html"
+        ).read_text(encoding="utf-8")
+        body = sidebar.split("{% endcomment %}", 1)[-1]
+        self.assertNotIn(
+            "resolver_match", body,
+            "The sidebar is testing the view name inline again. Highlighting "
+            "is decided once, in core.context_processors.nav_active - see the "
+            "comment at the top of the file.",
+        )
+
+
+class FriendlyErrorTests(TestCase):
+    """
+    A failure never shows a stack trace to whoever is standing at the counter.
+    """
+
+    def test_an_unexpected_error_renders_the_branded_page(self):
+        from django.test import RequestFactory
+
+        from core.middleware import FriendlyErrorMiddleware
+
+        middleware = FriendlyErrorMiddleware(lambda r: None)
+        request = RequestFactory().post("/inventory/products/1/adjust/")
+
+        with self.assertLogs("core.middleware", level="ERROR"):
+            response = middleware.process_exception(request, RuntimeError("boom"))
+
+        self.assertEqual(response.status_code, 500)
+        body = response.content.decode()
+        self.assertIn("Something went wrong", body)
+        # The two things that must never reach the screen.
+        self.assertNotIn("boom", body)
+        self.assertNotIn("Traceback", body)
+
+    def test_the_api_is_left_to_return_json(self):
+        """An HTML error page would break the phone's parser, not inform it."""
+        from django.test import RequestFactory
+
+        from core.middleware import FriendlyErrorMiddleware
+
+        middleware = FriendlyErrorMiddleware(lambda r: None)
+        request = RequestFactory().get("/api/materials/")
+        self.assertIsNone(
+            middleware.process_exception(request, RuntimeError("boom"))
+        )
+
+    def test_a_validation_error_keeps_its_own_wording(self):
+        from django.core.exceptions import ValidationError
+
+        from core.errors import describe
+
+        self.assertEqual(
+            describe(ValidationError("Enter a quantity greater than zero.")),
+            "Enter a quantity greater than zero.",
+        )
+
+    def test_a_database_error_is_summarised_not_exposed(self):
+        from django.db import DatabaseError
+
+        from core.errors import describe
+
+        with self.assertLogs("core.errors", level="ERROR"):
+            text = describe(DatabaseError("relation does not exist"))
+        self.assertNotIn("relation does not exist", text)
+        self.assertIn("nothing was changed", text)

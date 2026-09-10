@@ -90,7 +90,8 @@
     "materials_in_store": "{0} ዕቃ(ዎች) በመጋዘኑ ውስጥ",
     "quantity_in_store": "{$0} በመጋዘን",
     "quantity_on_card": "{$0} በካርዱ ላይ",
-    "recipe_for": "የ{$0} የቅመማ መጠን"
+    "recipe_for": "የ{$0} የቅመማ መጠን",
+    "save_failed_ref": "አሁን ማስቀመጥ አልተቻለም፤ ምንም አልተለወጠም። እባክዎ እንደገና ይሞክሩ — ችግሩ ከቀጠለ የማመሳከሪያ ቁጥር {$0} ይጥቀሱ።"
   },
   "nav.overview": "አጠቃላይ እይታ",
   "nav.dashboard": "ዳሽቦርድ",

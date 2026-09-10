@@ -63,7 +63,17 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.CurrentUserMiddleware",
+    # Last, so it sees exceptions raised by everything above it.
+    "core.middleware.FriendlyErrorMiddleware",
 ]
+
+# Show Django's yellow debug page instead of the branded error page. Off even
+# in DEBUG, because the debug page prints file paths, the Python version and
+# local variables onto whatever screen is in front of a customer. The full
+# traceback still goes to the console either way.
+SHOW_TECHNICAL_ERRORS = config(
+    "SHOW_TECHNICAL_ERRORS", default=False, cast=bool
+)
 
 ROOT_URLCONF = "config.urls"
 
@@ -79,6 +89,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.business_settings",
+                "core.context_processors.nav_active",
                 "core.context_processors.sidebar_badges",
             ],
         },

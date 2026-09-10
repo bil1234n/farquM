@@ -154,10 +154,16 @@ def reverse_sale(product, quantity, *, user=None, reference="", reason=""):
     )
 
 
+@transaction.atomic
 def adjust_to(product, new_quantity: int, *, user=None, reason=""):
     """
     Set stock to an absolute counted figure (stock-take).
     Writes the *difference* as an ADJUSTMENT row.
+
+    `atomic` is load-bearing: the read below takes a row lock, and a row lock
+    outside a transaction is refused by the database driver. It also has to
+    span the read and the write, or two people counting the same shelf would
+    both read the same "before" figure.
     """
     locked = Product.objects.select_for_update().get(pk=product.pk)
     delta = new_quantity - locked.stock_quantity

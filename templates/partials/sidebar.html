@@ -7,6 +7,12 @@
   The point of hiding is that a sales assistant should not have to learn what
   they cannot do by walking into locked doors all day.
 
+  Which link is lit is decided ONCE, by core.context_processors.nav_active,
+  and arrives here as NAV. Do not go back to testing the view name inline:
+  "production:material_list" contains the substring "product", so the tidy
+  looking `{% templatetag openblock %} if 'product' in ... {% templatetag closeblock %}` lit up Products on every
+  page in the yard. One rule table, in Python, where it can be tested.
+
   NOTE for anyone editing this file: use the comment TAG, as here, for
   anything longer than one line. Django's hash-style comment is single-line
   only - spread one over several lines and it stops being a comment at all.
@@ -27,7 +33,7 @@
 
     {% if user|can:"dashboard.view" %}
       <div class="nav-section">Overview</div>
-      <a class="nav-link {% if request.resolver_match.view_name == 'reports:dashboard' %}active{% endif %}"
+      <a class="nav-link {% if NAV == 'dashboard' %}active{% endif %}"
          href="{% url 'reports:dashboard' %}">
         <i class="bi bi-grid-1x2"></i> Dashboard
       </a>
@@ -36,19 +42,19 @@
     {% if user|can:"sale.view,sale.create,customer.view" %}
       <div class="nav-section">Sales</div>
       {% if user|can:"sale.create" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'sales:sale_create' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'new_sale' %}active{% endif %}"
            href="{% url 'sales:sale_create' %}">
           <i class="bi bi-cart-plus"></i> New Sale
         </a>
       {% endif %}
       {% if user|can:"sale.view" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'sales:transaction_list' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'transactions' %}active{% endif %}"
            href="{% url 'sales:transaction_list' %}">
           <i class="bi bi-receipt"></i> Transactions
         </a>
       {% endif %}
       {% if user|can:"customer.view" %}
-        <a class="nav-link {% if 'customer' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'customers' %}active{% endif %}"
            href="{% url 'sales:customer_list' %}">
           <i class="bi bi-people"></i> Customers
         </a>
@@ -57,20 +63,20 @@
 
     {% if user|can:"credit.view" %}
       <div class="nav-section">Credit &amp; Borrowers</div>
-      <a class="nav-link {% if request.resolver_match.view_name == 'credit:dashboard' %}active{% endif %}"
+      <a class="nav-link {% if NAV == 'credit_dashboard' %}active{% endif %}"
          href="{% url 'credit:dashboard' %}">
         <i class="bi bi-cash-stack"></i> Credit Dashboard
       </a>
-      <a class="nav-link {% if 'borrower' in request.resolver_match.view_name %}active{% endif %}"
+      <a class="nav-link {% if NAV == 'borrowers' %}active{% endif %}"
          href="{% url 'credit:borrower_list' %}">
         <i class="bi bi-person-lines-fill"></i> Borrowers
       </a>
-      <a class="nav-link {% if 'debt' in request.resolver_match.view_name %}active{% endif %}"
+      <a class="nav-link {% if NAV == 'debts' %}active{% endif %}"
          href="{% url 'credit:debt_list' %}">
         <i class="bi bi-journal-text"></i> Debts
         {% if badge_overdue_debts %}<span class="badge text-bg-danger">{{ badge_overdue_debts }}</span>{% endif %}
       </a>
-      <a class="nav-link {% if request.resolver_match.view_name == 'credit:aging_report' %}active{% endif %}"
+      <a class="nav-link {% if NAV == 'aging' %}active{% endif %}"
          href="{% url 'credit:aging_report' %}">
         <i class="bi bi-hourglass-split"></i> Aging Report
       </a>
@@ -79,28 +85,28 @@
     {% if user|can:"product.view,stock.view_movements,catalog.manage" %}
       <div class="nav-section">Inventory</div>
       {% if user|can:"product.view" %}
-        <a class="nav-link {% if 'product' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'products' %}active{% endif %}"
            href="{% url 'inventory:product_list' %}">
           <i class="bi bi-box-seam"></i> Products
         </a>
-        <a class="nav-link {% if request.resolver_match.view_name == 'inventory:low_stock' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'low_stock' %}active{% endif %}"
            href="{% url 'inventory:low_stock' %}">
           <i class="bi bi-exclamation-triangle"></i> Low Stock
           {% if badge_low_stock %}<span class="badge text-bg-warning">{{ badge_low_stock }}</span>{% endif %}
         </a>
       {% endif %}
       {% if user|can:"stock.view_movements" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'inventory:stock_movements' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'stock_movements' %}active{% endif %}"
            href="{% url 'inventory:stock_movements' %}">
           <i class="bi bi-arrow-left-right"></i> Stock Movements
         </a>
       {% endif %}
       {% if user|can:"catalog.manage" %}
-        <a class="nav-link {% if 'category' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'categories' %}active{% endif %}"
            href="{% url 'inventory:category_list' %}">
           <i class="bi bi-tags"></i> Categories
         </a>
-        <a class="nav-link {% if 'supplier' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'suppliers' %}active{% endif %}"
            href="{% url 'inventory:supplier_list' %}">
           <i class="bi bi-truck"></i> Suppliers
         </a>
@@ -110,20 +116,20 @@
     {% if user|can:"material.view,production.view,recipe.manage" %}
       <div class="nav-section">Production</div>
       {% if user|can:"material.view" %}
-        <a class="nav-link {% if 'material' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'materials' %}active{% endif %}"
            href="{% url 'production:material_list' %}">
           <i class="bi bi-boxes"></i> Raw Materials
           {% if badge_low_material %}<span class="badge text-bg-warning">{{ badge_low_material }}</span>{% endif %}
         </a>
       {% endif %}
       {% if user|can:"production.view" %}
-        <a class="nav-link {% if 'run' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'runs' %}active{% endif %}"
            href="{% url 'production:run_list' %}">
           <i class="bi bi-bricks"></i> Production Runs
         </a>
       {% endif %}
       {% if user|can:"recipe.manage" %}
-        <a class="nav-link {% if 'recipe' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'recipes' %}active{% endif %}"
            href="{% url 'production:recipe_list' %}">
           <i class="bi bi-list-check"></i> Recipes
         </a>
@@ -133,25 +139,25 @@
     {% if user|can:"report.sales,report.inventory,report.receivables,report.profit" %}
       <div class="nav-section">Reports</div>
       {% if user|can:"report.sales" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'reports:sales_report' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'sales_report' %}active{% endif %}"
            href="{% url 'reports:sales_report' %}">
           <i class="bi bi-graph-up"></i> Sales Report
         </a>
       {% endif %}
       {% if user|can:"report.inventory" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'reports:inventory_report' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'inventory_report' %}active{% endif %}"
            href="{% url 'reports:inventory_report' %}">
           <i class="bi bi-clipboard-data"></i> Inventory Report
         </a>
       {% endif %}
       {% if user|can:"report.receivables" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'reports:receivables_report' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'receivables_report' %}active{% endif %}"
            href="{% url 'reports:receivables_report' %}">
           <i class="bi bi-wallet2"></i> Receivables
         </a>
       {% endif %}
       {% if user|can:"report.profit" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'reports:profit_report' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'profit_report' %}active{% endif %}"
            href="{% url 'reports:profit_report' %}">
           <i class="bi bi-currency-dollar"></i> Profit &amp; Margins
           <span class="badge text-bg-secondary">Restricted</span>
@@ -162,25 +168,25 @@
     {% if user|can:"user.view,audit.view,settings.view,user.permissions,role.manage" %}
       <div class="nav-section">Administration</div>
       {% if user|can:"user.view" %}
-        <a class="nav-link {% if 'user_' in request.resolver_match.view_name %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'users' %}active{% endif %}"
            href="{% url 'accounts:user_list' %}">
           <i class="bi bi-person-gear"></i> Users &amp; Roles
         </a>
       {% endif %}
       {% if user|can:"user.permissions" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'core:access_list' or request.resolver_match.view_name == 'core:user_access' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'access' %}active{% endif %}"
            href="{% url 'core:access_list' %}">
           <i class="bi bi-person-badge"></i> Access Control
         </a>
       {% endif %}
       {% if user|can:"audit.view" %}
-        <a class="nav-link {% if request.resolver_match.view_name == 'accounts:audit_log' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'audit' %}active{% endif %}"
            href="{% url 'accounts:audit_log' %}">
           <i class="bi bi-shield-check"></i> Audit Log
         </a>
       {% endif %}
       {% if user|can:"settings.view,role.manage" %}
-        <a class="nav-link {% if request.resolver_match.namespace == 'core' and request.resolver_match.view_name != 'core:access_list' and request.resolver_match.view_name != 'core:user_access' %}active{% endif %}"
+        <a class="nav-link {% if NAV == 'settings' %}active{% endif %}"
            href="{% url 'core:settings' %}">
           <i class="bi bi-sliders"></i> System Settings
         </a>
