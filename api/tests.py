@@ -776,3 +776,171 @@ class AttachmentFlowTests(ApiTestBase):
             {"amount": "5.00", "proof": upload("proof.png")},
         )
         self.assertEqual(response.status_code, 403, response.content)
+
+
+class DashboardShapeTests(ApiTestBase):
+    """
+    The home screen is built from what the viewer may actually see.
+
+    The web dashboard has always filtered its cards by permission. The phone
+    took the same payload and drew a fixed layout, so a manager who never
+    touches the till opened the app to "Month revenue: 0", "Owed to you: 0"
+    and an empty best-sellers table - figures that were not zero, but not
+    theirs to see at all.
+
+    Gating the PAYLOAD rather than the screen is what makes that durable: a
+    key that is absent cannot be rendered by a later edit, and the phone has
+    nothing to hide.
+    """
+
+    def _dash(self, user):
+        response = self.as_(user).get("/api/dashboard/")
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.json()
+
+    def test_a_manager_is_sent_the_shelf_and_the_plant_only(self):
+        body = self._dash(self.manager)
+
+        for key in ("inventory", "low_stock", "production"):
+            self.assertIn(key, body, f"a manager should be sent {key}")
+
+        for key in ("today", "week", "month", "trend", "recent_sales",
+                    "top_products", "by_manager", "receivables",
+                    "overdue_debts", "due_soon", "customers", "my_customers"):
+            self.assertNotIn(
+                key, body,
+                f"'{key}' is somebody else's business and should not be sent "
+                f"to a manager who holds no sale.view or credit.view",
+            )
+
+    def test_an_administrator_is_sent_everything(self):
+        body = self._dash(self.admin)
+        for key in ("today", "month", "trend", "recent_sales", "top_products",
+                    "receivables", "overdue_debts", "inventory", "low_stock",
+                    "customers", "my_customers", "production"):
+            self.assertIn(key, body, f"an administrator should be sent {key}")
+
+    def test_a_sales_user_is_sent_takings_but_not_the_plant(self):
+        body = self._dash(self.sales)
+        self.assertIn("today", body)
+        self.assertIn("recent_sales", body)
+        # No material.view or production.view in the Sales role.
+        self.assertNotIn("production", body)
+
+    def test_the_manager_still_gets_the_stock_layout(self):
+        """
+        Narrowing the role must not drop them into the fallback layout, which
+        is the generic one for a role nobody anticipated.
+        """
+        self.assertEqual(self._dash(self.manager)["profile"], "stock")
+
+    def test_rows_carry_the_id_needed_to_open_them(self):
+        """
+        A row naming a product or a person is a dead end without its id. The
+        dashboard links every row it draws, so the payload has to say what
+        each one points at.
+        """
+        body = self._dash(self.admin)
+        self.assertTrue(body["top_products"], "expected the seeded sale here")
+        for row in body["top_products"]:
+            self.assertIsNotNone(row.get("id"), "top product row needs an id")
+        for row in body.get("by_manager", []):
+            self.assertIn("id", row, "staff row needs an id")
+        for row in body["recent_sales"]:
+            self.assertIn("id", row)
+        for row in body["my_customers"]:
+            self.assertIn("id", row)
+
+    def test_the_plant_block_reports_the_month(self):
+        from decimal import Decimal as D
+
+        from production import services
+        from production.models import RawMaterial
+
+        cement = RawMaterial.objects.create(
+            name="Cement", code="CEM", unit="KG", unit_cost=D("18"),
+            reorder_level=D("100"), owner=self.manager,
+        )
+        services.receive_material(cement, D("500"), user=self.manager)
+        services.record_production(
+            product=self.product, quantity_produced=40, quantity_rejected=2,
+            materials=[{"material": cement, "quantity": D("50")}],
+            user=self.manager,
+        )
+
+        plant = self._dash(self.manager)["production"]
+        self.assertEqual(plant["material_count"], 1)
+        self.assertEqual(plant["runs_this_month"], 1)
+        self.assertEqual(plant["produced_this_month"], 40)
+        self.assertEqual(plant["rejected_this_month"], 2)
+
+
+class ManagerRoleTests(ApiTestBase):
+    """
+    What a Manager is, now: the shelf and the plant, and nothing at the till.
+    """
+
+    STOCK_AND_PLANT = (
+        "product.view", "product.create", "product.edit", "product.view_cost",
+        "stock.restock", "stock.adjust", "stock.recount",
+        "stock.view_movements", "catalog.manage",
+        "material.view", "material.create", "material.edit",
+        "material.receive", "material.adjust",
+        "recipe.manage", "production.view", "production.create",
+        "report.inventory",
+    )
+
+    NOT_THEIRS = (
+        "sale.view", "sale.create", "sale.credit", "sale.discount",
+        "customer.view", "customer.create", "customer.edit",
+        "credit.view", "credit.collect", "credit.reschedule",
+        "report.sales", "report.receivables", "report.profit",
+        "user.view", "settings.view",
+    )
+
+    def test_a_manager_runs_the_shelf_and_the_plant(self):
+        for code in self.STOCK_AND_PLANT:
+            with self.subTest(permission=code):
+                self.assertTrue(
+                    self.manager.has_access(code),
+                    f"a manager should hold {code}",
+                )
+
+    def test_a_manager_does_not_work_the_till(self):
+        for code in self.NOT_THEIRS:
+            with self.subTest(permission=code):
+                self.assertFalse(
+                    self.manager.has_access(code),
+                    f"a manager should NOT hold {code} by default",
+                )
+
+    def test_the_sales_pages_refuse_them(self):
+        """Hiding the link is a courtesy; the refusal is the control."""
+        client = self.as_(self.manager)
+        for url in ("/api/sales/", "/api/customers/", "/api/credit/overview/"):
+            with self.subTest(url=url):
+                self.assertEqual(client.get(url).status_code, 403)
+
+    def test_the_stock_and_yard_pages_still_let_them_in(self):
+        client = self.as_(self.manager)
+        for url in ("/api/products/", "/api/materials/", "/api/production/"):
+            with self.subTest(url=url):
+                self.assertEqual(client.get(url).status_code, 200)
+
+    def test_one_manager_can_still_be_given_the_till(self):
+        """
+        The narrowing is a DEFAULT, not a wall. A shop where the manager also
+        serves customers grants it per person, and the role stays clean.
+        """
+        self.manager.extra_permissions = ["sale.view", "sale.create"]
+        self.manager.save(update_fields=["extra_permissions"])
+        self.manager.refresh_from_db()
+        self.manager.refresh_access()
+
+        self.assertTrue(self.manager.has_access("sale.create"))
+        self.assertEqual(
+            self.as_(self.manager).get("/api/sales/").status_code, 200
+        )
+        # And the payload follows the permission, not the role name.
+        self.assertIn("today", self.as_(self.manager).get(
+            "/api/dashboard/").json())

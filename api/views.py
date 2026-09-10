@@ -1101,6 +1101,12 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(created_at__date=timezone.localdate())
         if params.get("mine") == "true":
             qs = qs.filter(sold_by=self.request.user)
+        # One person's sales, for the dashboard's per-staff breakdown to link
+        # into. Filtered on top of the scoped queryset, never instead of it -
+        # asking for a colleague's id you may not see still returns nothing.
+        seller = params.get("seller")
+        if seller:
+            qs = qs.filter(owner_id=seller)
         return qs.order_by("-created_at")
 
     def create(self, request):
@@ -1492,94 +1498,26 @@ def dashboard(request):
     week_start = today - dt.timedelta(days=6)
     user = request.user
 
-    today_stats = sales_summary(today, today, user=user)
-    week_stats = sales_summary(week_start, today, user=user)
-    month_stats = sales_summary(month_start, today, user=user)
-    receivables = receivables_summary(user=user)
-    today_collections = collections_summary(today, today, user=user)
-    month_collections = collections_summary(month_start, today, user=user)
+    # Each block of this payload is gated on the permission it reports on, for
+    # the same reason the web dashboard filters its cards: a manager who runs
+    # the yard and never touches the till should not be sent the shop's
+    # takings, and a screen that hides a figure it was given is one edit away
+    # from showing it again. Not sending it is the durable version.
+    #
+    # It is also the difference between a home screen that fits somebody's job
+    # and one full of zeroes: with no sale.view there is no "Month revenue: 0"
+    # to explain, because the key is simply absent.
+    can_sales = user.has_access("sale.view")
+    can_credit = user.has_access("credit.view")
+    can_products = user.has_access("product.view")
+    can_customers = user.has_access("customer.view")
 
     products = scoped(Product.objects.alive(), user)
     customers = scoped(Customer.objects.all(), user)
     debts = scoped(DebtRecord.objects.all(), user)
     sales = scoped(Transaction.objects.active(), user)
 
-    # 7-day trend, oldest first, so the chart reads left to right.
-    trend = [
-        {
-            "date": row["date"].isoformat(),
-            "label": row["label"],
-            "weekday": row["date"].strftime("%a"),
-            "revenue": str(row["revenue"]),
-            "count": row["count"],
-        }
-        for row in daily_series(week_start, today, user=user)
-    ]
-
     payload = {
-        "today": {
-            "revenue": str(today_stats["revenue"]),
-            "collected": str(today_stats["collected"]),
-            "outstanding": str(today_stats["outstanding"]),
-            "count": today_stats["count"],
-            # Cash taken today against OLD debts. A credit-heavy shop can have
-            # a quiet sales day and a very good cash day; without this the
-            # dashboard only ever shows half the till.
-            "debt_collected": str(today_collections["collected"]),
-        },
-        "week": {
-            "revenue": str(week_stats["revenue"]),
-            "count": week_stats["count"],
-        },
-        "month": {
-            "revenue": str(month_stats["revenue"]),
-            "collected": str(month_stats["collected"]),
-            "count": month_stats["count"],
-            "average_sale": str(month_stats["average_sale"]),
-            "debt_collected": str(month_collections["collected"]),
-        },
-        "receivables": {
-            "outstanding": str(receivables["outstanding"]),
-            "overdue_amount": str(receivables["overdue_amount"]),
-            "open_count": receivables["debt_count"],
-            "overdue_count": receivables["overdue_count"],
-        },
-        "inventory": {
-            "product_count": products.filter(is_active=True).count(),
-            "low_stock_count": products.needs_attention().count(),
-            "out_of_stock_count": products.out_of_stock().count(),
-        },
-        "customers": {
-            "total": customers.active().count(),
-            "debtors": customers.with_debt().count(),
-            "credit_approved": customers.credit_approved().count(),
-        },
-        "trend": trend,
-        "top_products": [
-            {
-                "name": row["name"],
-                "sku": row["sku"],
-                "units": row["units"],
-                "revenue": str(row["revenue"]),
-            }
-            for row in top_products(month_start, today, limit=5, user=user)
-        ],
-        "recent_sales": TransactionSerializer(
-            sales.select_related("customer", "sold_by").order_by("-created_at")[:5],
-            many=True, context={"request": request},
-        ).data,
-        "overdue_debts": DebtSerializer(
-            debts.overdue().select_related("customer").order_by("due_date")[:5],
-            many=True,
-        ).data,
-        "due_soon": DebtSerializer(
-            debts.due_within(7).select_related("customer").order_by("due_date")[:5],
-            many=True,
-        ).data,
-        "low_stock": ProductSerializer(
-            products.needs_attention().order_by("stock_quantity")[:5],
-            many=True, context={"request": request},
-        ).data,
         # Kept for older builds of the app; `permissions` below is the
         # authoritative list and new screens should read that instead.
         "can_view_financials": user.can_view_costs,
@@ -1596,6 +1534,156 @@ def dashboard(request):
         # in English would put English in the middle of an Amharic screen.
         "profile": dashboard_profile(user),
     }
+
+    # -- Takings ------------------------------------------------------------
+    if can_sales:
+        today_stats = sales_summary(today, today, user=user)
+        week_stats = sales_summary(week_start, today, user=user)
+        month_stats = sales_summary(month_start, today, user=user)
+        today_collections = collections_summary(today, today, user=user)
+        month_collections = collections_summary(month_start, today, user=user)
+
+        payload.update({
+            "today": {
+                "revenue": str(today_stats["revenue"]),
+                "collected": str(today_stats["collected"]),
+                "outstanding": str(today_stats["outstanding"]),
+                "count": today_stats["count"],
+                # Cash taken today against OLD debts. A credit-heavy shop can
+                # have a quiet sales day and a very good cash day; without
+                # this the dashboard only ever shows half the till.
+                "debt_collected": str(today_collections["collected"]),
+            },
+            "week": {
+                "revenue": str(week_stats["revenue"]),
+                "count": week_stats["count"],
+            },
+            "month": {
+                "revenue": str(month_stats["revenue"]),
+                "collected": str(month_stats["collected"]),
+                "count": month_stats["count"],
+                "average_sale": str(month_stats["average_sale"]),
+                "debt_collected": str(month_collections["collected"]),
+            },
+            # 7-day trend, oldest first, so the chart reads left to right.
+            "trend": [
+                {
+                    "date": row["date"].isoformat(),
+                    "label": row["label"],
+                    "weekday": row["date"].strftime("%a"),
+                    "revenue": str(row["revenue"]),
+                    "count": row["count"],
+                }
+                for row in daily_series(week_start, today, user=user)
+            ],
+            # `id` so the phone can open the product itself. A row naming a
+            # thing you cannot reach from it is a dead end.
+            "top_products": [
+                {
+                    "id": row.get("product_id"),
+                    "name": row["name"],
+                    "sku": row["sku"],
+                    "units": row["units"],
+                    "revenue": str(row["revenue"]),
+                }
+                for row in top_products(month_start, today, limit=5, user=user)
+            ],
+            "recent_sales": TransactionSerializer(
+                sales.select_related("customer", "sold_by")
+                .order_by("-created_at")[:5],
+                many=True, context={"request": request},
+            ).data,
+        })
+
+        # Per-person breakdown. Only somebody who can see more than their own
+        # records has more than one row to compare.
+        if user.data_scope in ("ALL", "TEAM"):
+            payload["by_manager"] = [
+                {
+                    "id": row.get("owner_id"),
+                    "name": row["name"],
+                    "count": row["count"],
+                    "revenue": str(row["revenue"]),
+                    "collected": str(row["collected"]),
+                    "outstanding": str(row["outstanding"]),
+                }
+                for row in sales_by_staff(month_start, today, user=user)
+            ]
+
+    # -- Money owed ---------------------------------------------------------
+    if can_credit:
+        receivables = receivables_summary(user=user)
+        payload.update({
+            "receivables": {
+                "outstanding": str(receivables["outstanding"]),
+                "overdue_amount": str(receivables["overdue_amount"]),
+                "open_count": receivables["debt_count"],
+                "overdue_count": receivables["overdue_count"],
+            },
+            "overdue_debts": DebtSerializer(
+                debts.overdue().select_related("customer")
+                .order_by("due_date")[:5],
+                many=True,
+            ).data,
+            "due_soon": DebtSerializer(
+                debts.due_within(7).select_related("customer")
+                .order_by("due_date")[:5],
+                many=True,
+            ).data,
+        })
+
+    # -- The shelf ----------------------------------------------------------
+    if can_products:
+        payload.update({
+            "inventory": {
+                "product_count": products.filter(is_active=True).count(),
+                "low_stock_count": products.needs_attention().count(),
+                "out_of_stock_count": products.out_of_stock().count(),
+            },
+            "low_stock": ProductSerializer(
+                products.needs_attention().order_by("stock_quantity")[:5],
+                many=True, context={"request": request},
+            ).data,
+        })
+
+    # -- The plant ----------------------------------------------------------
+    # A manager whose job is the shelf and the yard should open the app to the
+    # yard, not to a blank space where somebody else's takings would be.
+    if user.has_access("material.view") or user.has_access("production.view"):
+        from django.db.models import Sum as _Sum
+
+        from production.models import ProductionRun, ProductionStatus, RawMaterial
+
+        block = {}
+        if user.has_access("material.view"):
+            materials = scoped(RawMaterial.objects.alive(), user)
+            block["material_count"] = materials.filter(is_active=True).count()
+            block["materials_to_order"] = materials.needs_ordering().count()
+        if user.has_access("production.view"):
+            runs = scoped(
+                ProductionRun.objects.filter(
+                    status=ProductionStatus.COMPLETED,
+                    produced_on__gte=month_start,
+                    produced_on__lte=today,
+                ),
+                user,
+            )
+            totals = runs.aggregate(
+                produced=_Sum("quantity_produced"),
+                rejected=_Sum("quantity_rejected"),
+            )
+            block["runs_this_month"] = runs.count()
+            block["produced_this_month"] = totals["produced"] or 0
+            block["rejected_this_month"] = totals["rejected"] or 0
+        payload["production"] = block
+
+    # -- The counter's own book --------------------------------------------
+    if can_customers:
+        payload["customers"] = {
+            "total": customers.active().count(),
+            "debtors": customers.with_debt().count(),
+            "credit_approved": customers.credit_approved().count(),
+        }
 
     # Cost and profit figures never reach a device that may not show them.
     if user.can_view_costs or user.can_view_profit:
@@ -1617,24 +1705,10 @@ def dashboard(request):
             financials["potential_profit"] = str(valuation["potential_profit"])
         payload["financials"] = financials
 
-    # Per-person breakdown. Only somebody who can see more than their own
-    # records has more than one row to compare.
-    if user.data_scope in ("ALL", "TEAM"):
-        payload["by_manager"] = [
-            {
-                "name": row["name"],
-                "count": row["count"],
-                "revenue": str(row["revenue"]),
-                "collected": str(row["collected"]),
-                "outstanding": str(row["outstanding"]),
-            }
-            for row in sales_by_staff(month_start, today, user=user)
-        ]
-
     # The sales assistant's own book: the customers they registered, the ones
     # owing the most first. Sent to every layout that can see customers,
     # because a manager wants the same list for their own counter work.
-    if user.has_access("customer.view"):
+    if can_customers:
         payload["my_customers"] = [
             {
                 "id": c.pk,

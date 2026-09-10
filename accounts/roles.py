@@ -54,10 +54,11 @@ BLUEPRINTS: dict[str, dict] = {
         "rank": 20,
         "data_scope": "TEAM",
         "description": (
-            "Controls the products and the stock. Buys in, prices, counts and "
-            "sells. Sees their own records plus those of the sales staff "
-            "assigned to them - but not profit margins, staff accounts or "
-            "system settings."
+            "Runs the stock and the plant. Buys in, prices and counts "
+            "products, keeps the raw material store, writes recipes and "
+            "records production batches. Does not sell, does not keep "
+            "customers, and does not touch credit - those belong to the "
+            "counter. No profit margins, staff accounts or system settings."
         ),
         "permissions": [
             "dashboard.view",
@@ -79,20 +80,12 @@ BLUEPRINTS: dict[str, dict] = {
             "recipe.manage",
             "production.view",
             "production.create",
-            "sale.view",
-            "sale.create",
-            "sale.credit",
-            "sale.discount",
-            "sale.receipt.add",
-            "customer.view",
-            "customer.create",
-            "customer.edit",
-            "credit.view",
-            "credit.collect",
-            "credit.reschedule",
-            "report.sales",
+            # Deliberately NO sale.*, customer.* or credit.*. A manager here
+            # runs the shelf and the plant; selling, keeping customers and
+            # collecting debt are the counter's job and somebody else's
+            # figures. Grant any of them per person in Access Control when a
+            # particular manager also works the till.
             "report.inventory",
-            "report.receivables",
             "report.export",
         ],
     },

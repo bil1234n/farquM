@@ -1055,7 +1055,7 @@
   "word.no_outstanding_debt": "No outstanding debt.",
   "word.nothing_below_reorder": "Nothing is at or below its reorder threshold.",
   "roledesc.admin": "The owner. Full control of products, sales, credit, staff and settings, and the only role that sees every record in the business.",
-  "roledesc.manager": "Controls the products and the stock. Buys in, prices, counts and sells. Sees their own records plus those of the sales staff assigned to them - but not profit margins, staff accounts or system settings.",
+  "roledesc.manager": "Runs the stock and the plant. Buys in, prices and counts products, keeps the raw material store, writes recipes and records production batches. Does not sell, does not keep customers, and does not touch credit - those belong to the counter. No profit margins, staff accounts or system settings.",
   "roledesc.sales": "Sells the stock their manager holds. Registers their own customers, can sell on credit under their own name, and collects repayments. Sees only their own sales, customers and debts, and never a cost price.",
   "bizf.phone": "Business phone",
   "bizf.email": "Business email",
