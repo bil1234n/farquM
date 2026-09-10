@@ -36,6 +36,36 @@ class FinancialFieldsMixin:
     financial_fields: tuple = ()
     profit_fields: tuple = ()
 
+    def _hidden_from(self, user) -> tuple:
+        """Which of these fields this user may not see."""
+        hidden = ()
+        if user is None or not getattr(user, "can_view_costs", False):
+            hidden += tuple(self.financial_fields)
+        if user is None or not getattr(user, "can_view_profit", False):
+            hidden += tuple(self.profit_fields)
+        return hidden
+
+    def get_fields(self):
+        """
+        Remove hidden fields BEFORE anything is serialized.
+
+        `to_representation` below pops them afterwards, which is correct but
+        too late to be cheap: DRF has already evaluated every field to build
+        the dict, and on Transaction `total_cost`, `gross_profit` and
+        `profit_margin` are properties that each walk the sale's items. That
+        cost three queries per row on a list nobody was even allowed to see
+        the answers in - twenty-five queries to render seven sales for a
+        salesperson, all of them thrown away.
+
+        Dropping the field means the property is never called. The pop stays
+        as the guarantee; this is the optimisation.
+        """
+        fields = super().get_fields()
+        request = self.context.get("request")
+        for name in self._hidden_from(getattr(request, "user", None)):
+            fields.pop(name, None)
+        return fields
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
@@ -592,6 +622,7 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
     is_overdue = serializers.BooleanField(read_only=True)
     item_count = serializers.IntegerField(read_only=True)
     owner_name = serializers.SerializerMethodField()
+    debt_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Transaction
@@ -604,8 +635,20 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
             "due_date", "notes", "sold_by_name", "created_at",
             "is_voided", "void_reason", "is_overdue", "item_count",
             "total_cost", "gross_profit", "profit_margin",
-            "items", "receipts", "owner_name",
+            "items", "receipts", "owner_name", "debt_id",
         ]
+
+    def get_debt_id(self, obj):
+        """
+        The debt this sale opened, if it opened one.
+
+        Sent so the app can offer "View debt" as an actual link rather than a
+        button that says the debt exists and then leaves you to find it. Null
+        for a sale paid in full, and null for a credit sale whose debt has
+        since been settled and removed.
+        """
+        debt = getattr(obj, "debt_record", None)
+        return debt.pk if debt is not None else None
 
 
 class SaleItemInputSerializer(serializers.Serializer):

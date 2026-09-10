@@ -1085,7 +1085,9 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = scoped(
-            Transaction.objects.select_related("customer", "sold_by", "owner")
+            Transaction.objects.select_related(
+                "customer", "sold_by", "owner", "debt_record"
+            )
             .prefetch_related("items", "receipts")
             .annotate(line_count=Count("items")),
             self.request.user,
@@ -1304,6 +1306,13 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
         if q:
             qs = qs.filter(Q(reference__icontains=q) | Q(customer__name__icontains=q)
                            | Q(customer__phone__icontains=q))
+        # The debt a particular sale opened, so "View debt" on a sale is one
+        # request rather than a scan of everything the user can see. Applied
+        # on top of the scoped queryset, so a sale id belonging to somebody
+        # else still matches nothing.
+        transaction = params.get("transaction")
+        if transaction:
+            qs = qs.filter(transaction_id=transaction)
         state = params.get("status", "")
         if state == "OVERDUE":
             qs = qs.overdue()
@@ -1589,7 +1598,7 @@ def dashboard(request):
                 for row in top_products(month_start, today, limit=5, user=user)
             ],
             "recent_sales": TransactionSerializer(
-                sales.select_related("customer", "sold_by")
+                sales.select_related("customer", "sold_by", "debt_record")
                 .order_by("-created_at")[:5],
                 many=True, context={"request": request},
             ).data,

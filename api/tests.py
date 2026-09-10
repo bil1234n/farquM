@@ -944,3 +944,171 @@ class ManagerRoleTests(ApiTestBase):
         # And the payload follows the permission, not the role name.
         self.assertIn("today", self.as_(self.manager).get(
             "/api/dashboard/").json())
+
+
+class SaleDebtLinkTests(ApiTestBase):
+    """
+    A credit sale says it opened a debt, so it has to be able to open it.
+
+    The app showed "This sale opened a debt · View debt" and the button popped
+    back to the home screen, because the sale payload never carried the debt's
+    id - there was nothing to navigate to, so the button did the only thing it
+    could. Sending the id is what turns that from a label into a link.
+    """
+
+    def _credit_sale(self):
+        from decimal import Decimal as D
+        return create_sale(
+            user=self.sales,
+            customer=self.customer,
+            cart=[{"product": self.product, "quantity": 2,
+                   "unit_price": D("15.00")}],
+            amount_paid=D("10.00"),          # leaves 20.00 outstanding
+            payment_method="CASH",
+        )
+
+    def test_a_credit_sale_carries_the_id_of_the_debt_it_opened(self):
+        from credit.models import DebtRecord
+
+        sale = self._credit_sale()
+        body = self.as_(self.sales).get(f"/api/sales/{sale.pk}/").json()
+
+        debt = DebtRecord.objects.get(transaction=sale)
+        self.assertEqual(body["debt_id"], debt.pk)
+
+        # And that id opens the debt, which is the whole point.
+        detail = self.as_(self.sales).get(f"/api/debts/{debt.pk}/")
+        self.assertEqual(detail.status_code, 200, detail.content)
+
+    def test_a_sale_paid_in_full_carries_no_debt(self):
+        # self.sale from the base class was paid in full.
+        body = self.as_(self.sales).get(f"/api/sales/{self.sale.pk}/").json()
+        self.assertIsNone(body["debt_id"])
+
+    def test_the_list_view_carries_it_too(self):
+        """The sales list links straight to a debt without opening the sale."""
+        self._credit_sale()
+        rows = self.as_(self.sales).get("/api/sales/").json()["results"]
+        self.assertTrue(any(r["debt_id"] is not None for r in rows))
+
+    def test_listing_sales_does_not_cost_a_query_per_row(self):
+        """
+        debt_record is a reverse one-to-one, so serializing it WITHOUT
+        select_related fires an extra SELECT for every sale on the page.
+
+        Asserted as "the count does not grow with the rows" rather than against
+        a fixed number: the absolute figure depends on auth, permissions and
+        pagination and would need editing every time any of those changed,
+        which is how a query-count test ends up deleted. The shape of the bug
+        is growth, so growth is what this measures.
+        """
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        client = self.as_(self.sales)
+
+        self._credit_sale()
+        with CaptureQueriesContext(connection) as few:
+            client.get("/api/sales/")
+
+        for _ in range(5):
+            self._credit_sale()
+        with CaptureQueriesContext(connection) as many:
+            client.get("/api/sales/")
+
+        self.assertEqual(
+            len(many), len(few),
+            f"{len(few)} queries for 2 sales but {len(many)} for 7 - the debt "
+            f"link is being fetched one row at a time. Add 'debt_record' to "
+            f"select_related on the transaction queryset.",
+        )
+
+
+class DebtLookupFromSaleTests(ApiTestBase):
+    """
+    Finding a sale's debt without relying on the sale payload.
+
+    The app is not always talking to a server built from the same commit -
+    this one runs against a deployed backend while the source sits on a
+    laptop. So "View debt" resolves in two steps: use `debt_id` when the sale
+    carries it, and otherwise ask the debts endpoint. Both paths are tested
+    because the app will meet both servers.
+    """
+
+    def _credit_sale(self):
+        from decimal import Decimal as D
+        return create_sale(
+            user=self.sales,
+            customer=self.customer,
+            cart=[{"product": self.product, "quantity": 2,
+                   "unit_price": D("15.00")}],
+            amount_paid=D("10.00"),
+            payment_method="CASH",
+        )
+
+    def test_the_debts_endpoint_can_be_filtered_to_one_sale(self):
+        from credit.models import DebtRecord
+
+        first = self._credit_sale()
+        self._credit_sale()          # a second, so a filter has work to do
+
+        rows = self.as_(self.sales).get(
+            f"/api/debts/?transaction={first.pk}"
+        ).json()["results"]
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["transaction"], first.pk)
+        self.assertEqual(
+            rows[0]["id"], DebtRecord.objects.get(transaction=first).pk
+        )
+
+    def test_every_debt_row_names_the_sale_that_opened_it(self):
+        """
+        The fallback path matches on this field, so it has to be present on
+        the unfiltered list too - that is what an older server returns.
+        """
+        sale = self._credit_sale()
+        rows = self.as_(self.sales).get("/api/debts/").json()["results"]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertIn("transaction", row)
+        self.assertTrue(any(r["transaction"] == sale.pk for r in rows))
+
+    def test_an_unknown_filter_value_returns_nothing_not_everything(self):
+        """
+        A filter that silently fails open would hand the app somebody else's
+        debt as "the debt for this sale".
+        """
+        self._credit_sale()
+        rows = self.as_(self.sales).get(
+            "/api/debts/?transaction=999999"
+        ).json()["results"]
+        self.assertEqual(rows, [])
+
+    def test_the_filter_cannot_reach_another_persons_debt(self):
+        """Filtering narrows the scoped queryset; it never widens it."""
+        from decimal import Decimal as D
+
+        other_seller = User.objects.create_user(
+            "sara", password="pw", role="SALES", manager=self.manager
+        )
+        other_customer = Customer.objects.create(
+            name="Bekele", phone="0922", owner=other_seller,
+            is_credit_approved=True,
+        )
+        theirs = create_sale(
+            user=other_seller,
+            customer=other_customer,
+            cart=[{"product": self.product, "quantity": 1,
+                   "unit_price": D("15.00")}],
+            amount_paid=D("0.00"),
+            payment_method="CASH",
+        )
+
+        rows = self.as_(self.sales).get(
+            f"/api/debts/?transaction={theirs.pk}"
+        ).json()["results"]
+        self.assertEqual(
+            rows, [],
+            "a seller must not reach a colleague's debt by guessing a sale id",
+        )
