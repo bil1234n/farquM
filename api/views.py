@@ -1158,6 +1158,13 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
                 discount_amount=data["discount_amount"],
                 tax_amount=data["tax_amount"],
                 payment_method=data["payment_method"],
+                # Which bank or wallet. Sent as an id when the seller picked
+                # one from the list and as a name when they typed a new one;
+                # the service resolves either, and creates the entry so the
+                # next seller finds it already there.
+                payment_channel_id=data.get("payment_channel"),
+                payment_channel_name=data.get("payment_channel_name", ""),
+                payment_reference=data.get("payment_reference", ""),
                 due_date=data.get("due_date"),
                 notes=data.get("notes", ""),
             )

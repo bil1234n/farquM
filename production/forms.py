@@ -3,10 +3,11 @@ from decimal import Decimal, InvalidOperation
 
 from django import forms
 
+from core.models import Option
 from core.scoping import scoped
 from inventory.models import Product, Supplier
 
-from .models import ProductionRun, RawMaterial, Recipe
+from .models import ProductionRequest, ProductionRun, RawMaterial, Recipe
 
 
 class RawMaterialForm(forms.ModelForm):
@@ -153,9 +154,9 @@ class ProductionRunForm(forms.ModelForm):
             "produced_on": "Date produced",
         }
         help_texts = {
-            "quantity_rejected": "Units that failed. The materials for them "
-                                 "were still used, so they carry their share "
-                                 "of the cost.",
+            "quantity_rejected": "Filled in from the damage lines below. "
+                                 "Type a figure only if you are not "
+                                 "itemising what went wrong.",
         }
 
     def __init__(self, *args, **kwargs):
@@ -186,6 +187,119 @@ class ReversalForm(forms.Form):
         if not reason:
             raise forms.ValidationError("Give a reason for reversing this run.")
         return reason
+
+
+class ProductionRequestForm(forms.ModelForm):
+    """
+    The counter's half: how many, from whom, and why.
+
+    `reason` is a managed pick-list rather than a text box - the answers are
+    the same five every week, and typed free-hand they cannot be counted.
+    `reason_name` carries a new one typed into the add row; the service
+    creates it so the next person finds it waiting.
+    """
+
+    reason_option = forms.IntegerField(required=False, widget=forms.HiddenInput)
+    reason_name = forms.CharField(
+        required=False, max_length=120, widget=forms.HiddenInput
+    )
+
+    class Meta:
+        model = ProductionRequest
+        fields = ["product", "quantity", "assigned_to", "note", "needed_by"]
+        widgets = {"needed_by": forms.DateInput(attrs={"type": "date"})}
+        labels = {
+            "quantity": "How many do you need",
+            "assigned_to": "Ask",
+            "needed_by": "Needed by",
+            "note": "Anything else they should know",
+        }
+        help_texts = {
+            "assigned_to": "Only people who can record production are listed.",
+            "needed_by": "Optional. Leave blank if there is no deadline.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+
+        from .services import assignable_deciders
+
+        self.fields["product"].queryset = scoped(
+            Product.objects.active(), self.user
+        ).order_by("name")
+        self.fields["product"].empty_label = "Select a product"
+
+        # A ModelChoiceField needs a queryset, and "who can record production"
+        # is a permission question that no queryset can answer - so the list
+        # is worked out in Python and the field is narrowed to those ids.
+        people = assignable_deciders(self.user)
+        from accounts.models import User
+
+        self.fields["assigned_to"].queryset = User.objects.filter(
+            pk__in=[p.pk for p in people]
+        )
+        self.fields["assigned_to"].empty_label = "Select who should make them"
+        self.fields["assigned_to"].label_from_instance = (
+            lambda u: f"{u.display_name} ({u.get_role_display()})"
+        )
+        self.deciders = people
+
+        self.reason_options = list(
+            Option.objects.active()
+            .in_group("PRODUCTION_REQUEST_REASON")
+            .order_by("sort_order", "-use_count", "label")
+        )
+
+    def clean_quantity(self):
+        value = self.cleaned_data.get("quantity") or 0
+        if value < 1:
+            raise forms.ValidationError("Say how many units you need.")
+        return value
+
+
+class RequestResponseForm(forms.Form):
+    note = forms.CharField(
+        max_length=255,
+        required=False,
+        label="Message back",
+        help_text="Optional. 'Pouring tomorrow morning', 'no cement until Friday'.",
+        widget=forms.Textarea(attrs={"rows": 2}),
+    )
+
+
+def parse_damage_lines(request):
+    """
+    Turn the POSTed damage rows into what `record_production` wants.
+
+    Sent as parallel arrays, the same shape as the material lines above, so
+    the two halves of the run form work the same way. Each row carries either
+    the id of an existing damage type or a name typed into the add row; the
+    service resolves whichever arrived and creates the entry when it is new.
+    """
+    type_ids = request.POST.getlist("damage_type[]")
+    names = request.POST.getlist("damage_name[]")
+    amounts = request.POST.getlist("damage_quantity[]")
+    notes = request.POST.getlist("damage_note[]")
+
+    lines = []
+    for index, raw_id in enumerate(type_ids):
+        def at(values, default=""):
+            return values[index] if index < len(values) else default
+
+        name = at(names).strip()
+        amount = at(amounts).strip()
+        if not raw_id and not name and not amount:
+            continue  # an empty row the "add more" button left behind
+        lines.append(
+            {
+                "damage_type": int(raw_id) if str(raw_id).isdigit() else None,
+                "type_name": name,
+                "quantity": int(amount) if amount.isdigit() else 0,
+                "note": at(notes).strip(),
+            }
+        )
+    return lines
 
 
 def parse_material_lines(request, user):

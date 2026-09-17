@@ -82,6 +82,7 @@ NAV_RULES: tuple[tuple[str, str, str], ...] = (
     ("production", "run_", "runs"),
     ("production", "plan_api", "runs"),
     ("production", "recipe_", "recipes"),
+    ("production", "request_", "requests"),
 
     ("accounts", "user_", "users"),
     ("accounts", "audit_log", "audit"),
@@ -145,4 +146,13 @@ def sidebar_badges(request):
         badges["badge_overdue_debts"] = (
             scoped(DebtRecord.objects.all(), user).overdue().count()
         )
+    # Requests waiting on THIS person for an answer. Not scoped by ownership
+    # like the others - a request is addressed to somebody by name, and the
+    # only count worth a badge is the one they personally owe an answer to.
+    if user.has_access("production.approve"):
+        from production.models import ProductionRequest
+
+        badges["badge_open_requests"] = ProductionRequest.objects.pending().filter(
+            assigned_to=user
+        ).count()
     return badges

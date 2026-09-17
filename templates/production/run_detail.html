@@ -43,8 +43,14 @@
           </li>
           {% if run.quantity_rejected %}
             <li class="list-group-item d-flex justify-content-between">
-              <span class="text-muted">Spent on rejects</span>
-              <span class="money text-danger">{{ run.rejected_cost|money }}</span>
+              <span class="text-muted">
+                Damage cost
+                <i class="bi bi-info-circle small"
+                   title="Priced at what a good unit cost. The whole batch is
+paid for by the units that can actually be sold, so a broken one costs a
+whole sellable one - not a share of the mix."></i>
+              </span>
+              <span class="money text-danger fw-semibold">{{ run.rejected_cost|money }}</span>
             </li>
           {% endif %}
         {% endif %}
@@ -141,6 +147,55 @@
         </table>
       </div>
     </div>
+    {% if run.damages.all %}
+      <div class="card mt-3">
+        <div class="card-header">What broke</div>
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th class="text-end">Amount</th>
+                <th>Note</th>
+                {% if user.can_view_financials %}<th class="text-end">Cost</th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in run.damages.all %}
+                <tr>
+                  <td>{{ line.type_name|default:"Damaged" }}</td>
+                  <td class="text-end fw-semibold">{{ line.quantity }}</td>
+                  <td class="small text-muted">{{ line.note|default:"-" }}</td>
+                  {% if user.can_view_financials %}
+                    <td class="text-end money text-danger">{{ line.line_cost|money }}</td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+            {% if user.can_view_financials %}
+              <tfoot>
+                <tr class="fw-semibold">
+                  <td colspan="3" class="text-end">Total damage</td>
+                  <td class="text-end money text-danger">{{ run.rejected_cost|money }}</td>
+                </tr>
+              </tfoot>
+            {% endif %}
+          </table>
+        </div>
+        {% if user.can_view_financials and run.damage_loss_gap %}
+          <div class="card-footer bg-light small text-muted">
+            Each broken unit is valued at {{ run.unit_cost|money }} - what one
+            <em>sellable</em> unit of this batch cost, which is the material
+            cost divided by the {{ run.quantity_produced }} good units. Spread
+            across all {{ run.total_attempted }} attempted instead, the same
+            breakage would read {{ run.naive_rejected_cost|money }} and
+            under-report this batch's loss by
+            <strong class="text-danger">{{ run.damage_loss_gap|money }}</strong>.
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
     <p class="text-muted small mt-3">
       "Expected" is what the recipe said this batch should have taken. A positive
       difference means the batch over-ran.

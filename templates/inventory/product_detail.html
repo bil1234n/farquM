@@ -8,6 +8,16 @@
 {% endblock %}
 
 {% block page_actions %}
+  {% comment %}
+    The moment somebody notices the shelf is nearly empty is the moment they
+    should be able to do something about it - not go and find a manager.
+  {% endcomment %}
+  {% if user|can:"production.request" %}
+    <a href="{% url 'production:request_create' %}?product={{ product.pk }}"
+       class="btn btn-sm {% if product.stock_status == 'OK' %}btn-outline-primary{% else %}btn-warning{% endif %}">
+      <i class="bi bi-megaphone me-1"></i> Request production
+    </a>
+  {% endif %}
   {% if user|can:"stock.restock" %}
     <a href="{% url 'inventory:product_restock' product.pk %}" class="btn btn-success btn-sm">
       <i class="bi bi-plus-circle me-1"></i> Restock</a>

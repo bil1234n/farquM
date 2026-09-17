@@ -6,8 +6,9 @@ from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 from django.db.models import Q, Sum
 from django.http import JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.views.decorators.http import require_POST
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from accounts.models import AuditAction
@@ -20,30 +21,39 @@ from core.mixins import (
     require,
 )
 from core.errors import describe
+from core.models import Option
 from core.scoping import scoped
 from inventory.models import Product
 
 from .forms import (
     MaterialAdjustForm,
     MaterialReceiveForm,
+    ProductionRequestForm,
     ProductionRunForm,
     RawMaterialForm,
     RecipeForm,
+    RequestResponseForm,
     ReversalForm,
+    parse_damage_lines,
     parse_material_lines,
 )
 from .models import (
     MaterialMovement,
+    ProductionRequest,
     ProductionRun,
     RawMaterial,
     Recipe,
     RecipeItem,
+    RequestStatus,
 )
 from .services import (
+    cancel_request,
     plan_for,
     receive_material,
     recount_material,
     record_production,
+    request_production,
+    respond_to_request,
     return_material_to_supplier,
     reverse_production,
     waste_material,
@@ -458,6 +468,7 @@ def run_create(request):
 
     if request.method == "POST" and form.is_valid():
         lines, errors = parse_material_lines(request, request.user)
+        damages = parse_damage_lines(request)
         if errors:
             for error in errors:
                 messages.error(request, error)
@@ -467,6 +478,11 @@ def run_create(request):
                     product=form.cleaned_data["product"],
                     quantity_produced=form.cleaned_data["quantity_produced"],
                     quantity_rejected=form.cleaned_data.get("quantity_rejected") or 0,
+                    # When damage lines were filled in they ARE the rejected
+                    # total - the service adds them up and overwrites the box,
+                    # so the two can never disagree on the same run.
+                    damages=damages,
+                    fulfils=request.POST.getlist("fulfils[]"),
                     produced_on=form.cleaned_data.get("produced_on"),
                     notes=form.cleaned_data.get("notes", ""),
                     materials=lines,
@@ -493,7 +509,19 @@ def run_create(request):
     return render(
         request,
         "production/run_form.html",
-        {"form": form, "store": store},
+        {
+            "form": form,
+            "store": store,
+            "damage_types": Option.objects.active()
+            .in_group("DAMAGE_TYPE")
+            .order_by("sort_order", "-use_count", "label"),
+            # Open asks for anything this person can make, so a batch can
+            # close the request that prompted it in the same action.
+            "open_requests": ProductionRequest.objects.open()
+            .filter(assigned_to=request.user)
+            .select_related("product", "requested_by")
+            .order_by("-created_at"),
+        },
     )
 
 
@@ -524,6 +552,156 @@ def run_reverse(request, pk):
         return redirect("production:run_detail", pk=run.pk)
 
     return redirect("production:run_detail", pk=run.pk)
+
+
+# ---------------------------------------------------------------------------
+# "We are running out - please make more"
+# ---------------------------------------------------------------------------
+def request_list(request):
+    """
+    Two boxes: what I have been asked for, and what I have asked others for.
+
+    Not scoped by ownership. A request is a conversation between two named
+    people, so the useful filter is which end of it you are on. An
+    administrator sees every one, because chasing the ones nobody answered is
+    their job.
+    """
+    blocked = require(
+        request, "production.request", "production.approve", require_all=False,
+        message="You do not have permission to see production requests.",
+    )
+    if blocked:
+        return blocked
+
+    user = request.user
+    rows = ProductionRequest.objects.select_related(
+        "product", "requested_by", "assigned_to", "fulfilled_run"
+    )
+    if not user.is_admin:
+        rows = rows.filter(Q(requested_by=user) | Q(assigned_to=user))
+
+    status = request.GET.get("status", "")
+    if status == "OPEN":
+        rows = rows.open()
+    elif status:
+        rows = rows.filter(status=status)
+
+    return render(
+        request,
+        "production/request_list.html",
+        {
+            "incoming": rows.filter(assigned_to=user),
+            "sent": rows.filter(requested_by=user),
+            "everything": rows if user.is_admin else None,
+            "status": status,
+            "statuses": RequestStatus.choices,
+            "can_ask": user.has_access("production.request"),
+            "response_form": RequestResponseForm(),
+        },
+    )
+
+
+def request_create(request):
+    blocked = require(
+        request, "production.request",
+        message="You do not have permission to ask for production.",
+    )
+    if blocked:
+        return blocked
+
+    form = ProductionRequestForm(request.POST or None, user=request.user)
+
+    # Pre-select the product when arriving from a product page, which is where
+    # somebody actually notices the shelf is nearly empty.
+    if request.method == "GET" and request.GET.get("product"):
+        form.initial["product"] = request.GET["product"]
+
+    if request.method == "POST" and form.is_valid():
+        try:
+            obj = request_production(
+                product=form.cleaned_data["product"],
+                quantity=form.cleaned_data["quantity"],
+                requested_by=request.user,
+                assigned_to=form.cleaned_data["assigned_to"],
+                reason_id=form.cleaned_data.get("reason_option"),
+                reason_name=form.cleaned_data.get("reason_name", ""),
+                note=form.cleaned_data.get("note", ""),
+                needed_by=form.cleaned_data.get("needed_by"),
+            )
+        except (ValidationError, DatabaseError) as exc:
+            for message in _messages_of(exc):
+                messages.error(request, message)
+        else:
+            log_action(
+                AuditAction.CREATE, instance=obj,
+                description=(
+                    f"Asked {obj.assigned_to.display_name} for {obj.quantity} "
+                    f"x {obj.product.name}."
+                ),
+            )
+            messages.success(
+                request,
+                f"{obj.assigned_to.display_name} has been asked for "
+                f"{obj.quantity} {obj.product.name}.",
+            )
+            return redirect("production:request_list")
+
+    return render(request, "production/request_form.html", {"form": form})
+
+
+@require_POST
+def request_respond(request, pk):
+    blocked = require(
+        request, "production.approve",
+        message="You do not have permission to answer production requests.",
+    )
+    if blocked:
+        return blocked
+
+    obj = get_object_or_404(ProductionRequest, pk=pk)
+    accept = request.POST.get("decision") == "accept"
+    try:
+        respond_to_request(
+            obj, user=request.user, accept=accept,
+            note=request.POST.get("note", ""),
+        )
+    except (ValidationError, DatabaseError) as exc:
+        for message in _messages_of(exc):
+            messages.error(request, message)
+    else:
+        log_action(
+            AuditAction.UPDATE, instance=obj,
+            description=(
+                f"{'Accepted' if accept else 'Declined'} the request for "
+                f"{obj.quantity} x {obj.product.name}."
+            ),
+        )
+        messages.success(
+            request,
+            f"{obj.requested_by.display_name} has been told you "
+            + ("will make them." if accept else "cannot make them."),
+        )
+    return redirect("production:request_list")
+
+
+@require_POST
+def request_cancel(request, pk):
+    blocked = require(
+        request, "production.request",
+        message="You do not have permission to cancel a request.",
+    )
+    if blocked:
+        return blocked
+
+    obj = get_object_or_404(ProductionRequest, pk=pk)
+    try:
+        cancel_request(obj, user=request.user, note=request.POST.get("note", ""))
+    except (ValidationError, DatabaseError) as exc:
+        for message in _messages_of(exc):
+            messages.error(request, message)
+    else:
+        messages.success(request, "Request cancelled.")
+    return redirect("production:request_list")
 
 
 # ---------------------------------------------------------------------------

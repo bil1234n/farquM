@@ -56,6 +56,64 @@
         The recipe fills these in; correct them to what the shift actually used.
         Both figures are kept, so the difference stays visible on the batch.
       </p>
+
+      {# What broke, and how. #}
+      <div class="card mt-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Damage</span>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="addDamage">
+            <i class="bi bi-plus-lg me-1"></i> Add more damage
+          </button>
+        </div>
+        <div class="table-responsive">
+          <table class="table align-middle mb-0" id="damages">
+            <thead>
+              <tr>
+                <th style="width:42%">Type</th>
+                <th style="width:22%">Amount</th>
+                <th>Note</th>
+                <th style="width:44px"></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card-footer bg-light small d-flex justify-content-between">
+          <span class="text-muted">
+            Leave this empty if nothing failed. Anything listed here replaces
+            the &ldquo;rejected&rdquo; figure on the left.
+          </span>
+          <strong>Total damaged: <span id="damageTotal">0</span></strong>
+        </div>
+      </div>
+
+      {% if open_requests %}
+        {% comment %}
+          Somebody asked for this. Closing the request here is the only moment
+          the person waiting reliably finds out it was made.
+        {% endcomment %}
+        <div class="card mt-3">
+          <div class="card-header">Requests this batch answers</div>
+          <ul class="list-group list-group-flush">
+            {% for req in open_requests %}
+              <li class="list-group-item">
+                <label class="d-flex align-items-center gap-2 mb-0">
+                  <input type="checkbox" class="form-check-input mt-0 fulfils"
+                         name="fulfils[]" value="{{ req.pk }}"
+                         data-product="{{ req.product_id }}">
+                  <span>
+                    <strong>{{ req.quantity }} &times; {{ req.product.name }}</strong>
+                    <span class="text-muted small">
+                      &middot; asked by {{ req.requested_by.display_name }}
+                      {% if req.needed_by %}&middot; needed by {{ req.needed_by|date:"d M" }}{% endif %}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </div>
   </div>
 </form>
@@ -80,6 +138,36 @@
     <td class="text-muted small stock">-</td>
     <td class="text-end">
       <button type="button" class="btn btn-outline-danger btn-sm drop"><i class="bi bi-x"></i></button>
+    </td>
+  </tr>
+</template>
+
+<template id="damageTemplate">
+  <tr>
+    <td>
+      {% comment %}
+        The select carries its own "+ Add a new one" row and a delete button,
+        so a type nobody thought of is one tap away and a typo is undoable.
+        See static/js/option-select.js.
+      {% endcomment %}
+      <div class="option-select"
+           data-group="DAMAGE_TYPE"
+           data-id-field="damage_type[]"
+           data-name-field="damage_name[]"
+           data-placeholder="What went wrong"></div>
+    </td>
+    <td>
+      <input type="number" min="1" step="1" name="damage_quantity[]"
+             class="form-control form-control-sm damage-qty" placeholder="0">
+    </td>
+    <td>
+      <input type="text" name="damage_note[]" maxlength="255"
+             class="form-control form-control-sm" placeholder="Optional">
+    </td>
+    <td class="text-end">
+      <button type="button" class="btn btn-outline-danger btn-sm drop-damage">
+        <i class="bi bi-x"></i>
+      </button>
     </td>
   </tr>
 </template>
@@ -188,6 +276,68 @@
     });
 
     addLine();
+
+    /* ---- Damage -----------------------------------------------------
+       The itemised lines are the truth; the "rejected" box mirrors their
+       total and goes read-only, because two boxes holding the same number
+       is one box too many and they always end up disagreeing. */
+    var damageBody = document.querySelector("#damages tbody");
+    var damageTemplate = document.getElementById("damageTemplate");
+    var damageTotal = document.getElementById("damageTotal");
+
+    function addDamage() {
+      damageBody.appendChild(damageTemplate.content.cloneNode(true));
+      var row = damageBody.lastElementChild;
+      if (window.OptionSelect) { window.OptionSelect.scan(row); }
+      row.querySelector(".damage-qty").focus();
+      return row;
+    }
+
+    function retotalDamage() {
+      var total = 0;
+      damageBody.querySelectorAll(".damage-qty").forEach(function (input) {
+        total += parseInt(input.value, 10) || 0;
+      });
+      damageTotal.textContent = total;
+
+      if (rejectField) {
+        var itemised = damageBody.querySelectorAll("tr").length > 0;
+        if (itemised) {
+          rejectField.value = total;
+          rejectField.readOnly = true;
+          rejectField.classList.add("bg-body-secondary");
+        } else {
+          rejectField.readOnly = false;
+          rejectField.classList.remove("bg-body-secondary");
+        }
+        // The mix is good units plus failures, so the recipe plan has to be
+        // recalculated whenever the damage total moves.
+        loadPlan();
+      }
+    }
+
+    document.getElementById("addDamage").addEventListener("click", function () {
+      addDamage();
+      retotalDamage();
+    });
+    damageBody.addEventListener("click", function (event) {
+      var button = event.target.closest(".drop-damage");
+      if (button) { button.closest("tr").remove(); retotalDamage(); }
+    });
+    damageBody.addEventListener("input", function (event) {
+      if (event.target.classList.contains("damage-qty")) { retotalDamage(); }
+    });
+
+    /* Tick a request and the batch is for that product - saves the operator
+       selecting it again and getting it wrong. */
+    document.querySelectorAll(".fulfils").forEach(function (box) {
+      box.addEventListener("change", function () {
+        if (box.checked && productField && box.dataset.product) {
+          productField.value = box.dataset.product;
+          loadPlan();
+        }
+      });
+    });
   })();
 </script>
 {% endblock %}

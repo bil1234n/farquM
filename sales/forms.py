@@ -75,6 +75,20 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
     payment_method = forms.ChoiceField(
         choices=PaymentMethod.choices, initial=PaymentMethod.CASH
     )
+    # Which bank / which wallet. Rendered as a managed select that can grow -
+    # see templates/partials/option_select.html. Both halves are sent: the id
+    # when an existing entry was picked, the name when a new one was typed,
+    # and sales.services.create_sale sorts out which.
+    payment_channel = forms.IntegerField(required=False, widget=forms.HiddenInput)
+    payment_channel_name = forms.CharField(
+        required=False, max_length=120, widget=forms.HiddenInput
+    )
+    payment_reference = forms.CharField(
+        required=False,
+        max_length=80,
+        label="Transfer / cheque number",
+        help_text="Optional, but it is what makes a bank line reconcilable.",
+    )
     amount_paid = forms.DecimalField(
         max_digits=14, decimal_places=2, min_value=Decimal("0"),
         initial=Decimal("0.00"), label="Amount paid now",
@@ -157,6 +171,24 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
             cleaned["discount_amount"] = ZERO
         method = cleaned.get("payment_method")
         paid = cleaned.get("amount_paid") or 0
+
+        # A bank transfer that names no bank is a line nobody can reconcile.
+        # Required rather than warned about, because unlike the slip photo
+        # this costs the clerk one tap and they already know the answer.
+        from core.options import channel_group_for_method
+
+        if channel_group_for_method(method) and paid > 0:
+            if not (cleaned.get("payment_channel")
+                    or (cleaned.get("payment_channel_name") or "").strip()):
+                self.add_error(
+                    "payment_channel_name",
+                    "Choose which bank or wallet the money came through.",
+                )
+        else:
+            # Cash leaves no channel behind, even if a stale value was posted.
+            cleaned["payment_channel"] = None
+            cleaned["payment_channel_name"] = ""
+            cleaned["payment_reference"] = ""
         # Read the cleaned value, not self.files - cleaned_data is now a list
         # of validated uploads, so a file that failed the size check does not
         # count as proof.

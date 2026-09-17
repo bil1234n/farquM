@@ -80,6 +80,11 @@ BLUEPRINTS: dict[str, dict] = {
             "recipe.manage",
             "production.view",
             "production.create",
+            # The yard's half of the request conversation: the counter asks,
+            # the manager answers. `production.request` is here as well so a
+            # manager short of one product can ask another manager for it.
+            "production.request",
+            "production.approve",
             # Deliberately NO sale.*, customer.* or credit.*. A manager here
             # runs the shelf and the plant; selling, keeping customers and
             # collecting debt are the counter's job and somebody else's
@@ -111,6 +116,10 @@ BLUEPRINTS: dict[str, dict] = {
             "customer.edit",
             "credit.view",
             "credit.collect",
+            # Seeing the shelf is nearly empty and being able to do something
+            # about it are different things. Without this the seller can only
+            # hope somebody reads the automatic low-stock alert.
+            "production.request",
             "report.sales",
         ],
     },

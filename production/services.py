@@ -20,6 +20,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
+from core.models import resolve_option
 from core.scoping import can_touch
 from inventory.models import MovementType, Product
 from inventory.services import apply_stock_movement
@@ -27,12 +28,20 @@ from inventory.services import apply_stock_movement
 from .models import (
     MaterialMovement,
     MaterialMovementType,
+    ProductionDamage,
     ProductionMaterial,
+    ProductionRequest,
     ProductionRun,
     ProductionStatus,
     RawMaterial,
     Recipe,
+    RequestStatus,
 )
+
+#: The pick-list a damage line chooses from. Named once so the service, the
+#: forms and both clients cannot drift onto different lists.
+DAMAGE_GROUP = "DAMAGE_TYPE"
+REQUEST_REASON_GROUP = "PRODUCTION_REQUEST_REASON"
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +294,62 @@ ZERO_QUANTITY = Decimal("0.000")
 # Production
 # ---------------------------------------------------------------------------
 @transaction.atomic
+def normalise_damages(damages, *, user=None) -> list[dict]:
+    """
+    Clean the damage lines a client sent into rows this module can write.
+
+    Each line may name an existing type by id, or type a new one - the new
+    name is added to the shared list on the spot, which is the whole point of
+    being able to add from inside the select. Lines naming the same type are
+    combined rather than rejected: somebody tapping 'add more damage' twice
+    and picking 'Cracked' both times means twenty cracked, not an error
+    message about their own form.
+
+    Raises ValidationError on a line with no quantity, because a damage line
+    that records nothing is a line somebody meant to fill in.
+    """
+    if not damages:
+        return []
+
+    merged: dict[str, dict] = {}
+    for raw in damages:
+        quantity = int(raw.get("quantity") or 0)
+        type_id = raw.get("damage_type") or raw.get("damage_type_id")
+        name = (raw.get("type_name") or raw.get("label") or "").strip()
+
+        if quantity <= 0:
+            if not type_id and not name:
+                # A blank row left behind by the "add more" button. Ignored,
+                # not complained about.
+                continue
+            raise ValidationError(
+                f"Enter how many units were {name or 'damaged'}."
+            )
+        if not type_id and not name:
+            raise ValidationError("Choose what kind of damage this was.")
+
+        option, label = resolve_option(
+            DAMAGE_GROUP, label=name, option_id=type_id, user=user
+        )
+        key = str(option.pk) if option is not None else label.lower()
+        line = merged.get(key)
+        if line is None:
+            merged[key] = {
+                "option": option,
+                "type_name": label or (option.label if option else ""),
+                "quantity": quantity,
+                "note": (raw.get("note") or "").strip()[:255],
+            }
+        else:
+            line["quantity"] += quantity
+            note = (raw.get("note") or "").strip()
+            if note and note not in line["note"]:
+                line["note"] = f"{line['note']}; {note}".strip("; ")[:255]
+
+    return list(merged.values())
+
+
+@transaction.atomic
 def record_production(
     *,
     product,
@@ -292,9 +357,11 @@ def record_production(
     materials,
     user,
     quantity_rejected: int = 0,
+    damages=None,
     produced_on=None,
     notes: str = "",
     update_product_cost: bool = True,
+    fulfils=None,
 ) -> ProductionRun:
     """
     Record one finished batch.
@@ -314,6 +381,14 @@ def record_production(
         raise ValidationError("Rejected units cannot be negative.")
     if not materials:
         raise ValidationError("Record at least one material used in this run.")
+
+    # Damage lines, when the form sent any, ARE the rejected figure. Keeping a
+    # separate box that could disagree with the lines beneath it is how a run
+    # ends up saying 20 broke while listing 23, and no report can then be
+    # trusted. The lines win because they are the ones somebody itemised.
+    damage_lines = normalise_damages(damages, user=user)
+    if damage_lines:
+        quantity_rejected = sum(line["quantity"] for line in damage_lines)
 
     if not can_touch(product, user):
         raise ValidationError(f"'{product.name}' is not in your product list.")
@@ -396,12 +471,34 @@ def record_production(
         )
         total_cost += (quantity * unit_cost).quantize(MONEY)
 
+    # Divided by the GOOD units, not by everything attempted. The whole batch
+    # was paid for out of the units that can actually be sold, so 8,000 of
+    # cement across 80 survivors is 100 each - and the 20 that broke therefore
+    # cost 2,000 of sellable product, which is what `rejected_cost` reports.
+    # See ProductionRun.rejected_cost for why the other sum loses money.
     unit_cost = (total_cost / quantity_produced).quantize(MONEY)
     ProductionRun.objects.filter(pk=run.pk).update(
         material_cost=total_cost.quantize(MONEY), unit_cost=unit_cost
     )
     run.material_cost = total_cost.quantize(MONEY)
     run.unit_cost = unit_cost
+
+    # What broke, and how. Written after the costing so the lines can be read
+    # back at the good-unit price straight away.
+    if damage_lines:
+        ProductionDamage.objects.bulk_create([
+            ProductionDamage(
+                run=run,
+                damage_type=line["option"],
+                type_name=line["type_name"],
+                quantity=line["quantity"],
+                note=line["note"],
+            )
+            for line in damage_lines
+        ])
+        for line in damage_lines:
+            if line["option"] is not None:
+                line["option"].touch_use()
 
     # The finished goods. Routed through the inventory service so the product
     # ledger stays the single account of how stock got there.
@@ -421,6 +518,12 @@ def record_production(
     if update_product_cost and unit_cost > 0:
         Product.objects.filter(pk=product.pk).update(cost_price=unit_cost)
         product.cost_price = unit_cost
+
+    # Close the loop on whoever asked for this. Done here rather than left to
+    # the caller so a batch recorded from the phone closes the request the
+    # same way one recorded from the browser does.
+    if fulfils:
+        _close_requests(fulfils, run=run, user=user)
 
     logger.info(
         "Production %s: %s x%d (rejected %d) cost=%s unit=%s by %s",
@@ -499,6 +602,239 @@ def reverse_production(run, *, user, reason: str = "") -> ProductionRun:
         reason,
     )
     return locked
+
+
+# ---------------------------------------------------------------------------
+# Maintenance
+# ---------------------------------------------------------------------------
+def assignable_deciders(user=None):
+    """
+    Who a request may be addressed to.
+
+    Anybody who can actually record a batch - that is the only useful test.
+    Addressing a request to somebody without `production.create` produces a
+    notification they cannot act on, which is worse than no notification at
+    all: they assume it is handled and so does the sender.
+
+    Sorted with administrators first, then by name, so the list opens on the
+    people most likely to be the right answer.
+    """
+    from accounts.models import User
+
+    candidates = User.objects.active_staff().select_related()
+    people = [
+        person
+        for person in candidates
+        if person.has_access("production.create")
+        and person.pk != getattr(user, "pk", None)
+    ]
+    people.sort(key=lambda p: (0 if p.is_admin else 1, p.display_name.lower()))
+    return people
+
+
+@transaction.atomic
+def request_production(
+    *,
+    product,
+    quantity: int,
+    requested_by,
+    assigned_to,
+    reason_id=None,
+    reason_name: str = "",
+    note: str = "",
+    needed_by=None,
+) -> ProductionRequest:
+    """
+    Ask a named person for more of a product, and tell them.
+
+    The notification is sent inside the transaction on purpose - not because
+    it must be atomic (push.notify_users swallows its own failures), but so
+    that the row and the message are written in one place and cannot drift
+    apart as callers multiply.
+    """
+    if quantity <= 0:
+        raise ValidationError("Say how many units you need.")
+    if assigned_to is None:
+        raise ValidationError("Choose who should make them.")
+    if not assigned_to.is_active:
+        raise ValidationError(f"{assigned_to.display_name} is no longer active.")
+    if not assigned_to.has_access("production.create"):
+        raise ValidationError(
+            f"{assigned_to.display_name} cannot record production, so they "
+            "cannot act on this request."
+        )
+    if needed_by is not None and needed_by < timezone.localdate():
+        raise ValidationError("The date needed cannot be in the past.")
+
+    # A duplicate helps nobody: the manager gets the same ask twice and has to
+    # work out whether it is two orders or one impatient seller.
+    existing = (
+        ProductionRequest.objects.open()
+        .filter(product=product, requested_by=requested_by, assigned_to=assigned_to)
+        .first()
+    )
+    if existing is not None:
+        raise ValidationError(
+            f"You already have an open request with "
+            f"{assigned_to.display_name} for {product.name} "
+            f"({existing.quantity} units). Cancel it first if it has changed."
+        )
+
+    option, label = resolve_option(
+        REQUEST_REASON_GROUP,
+        label=reason_name,
+        option_id=reason_id,
+        user=requested_by,
+    )
+
+    request = ProductionRequest.objects.create(
+        product=product,
+        quantity=quantity,
+        requested_by=requested_by,
+        assigned_to=assigned_to,
+        reason=option,
+        reason_name=label,
+        note=(note or "").strip()[:255],
+        needed_by=needed_by,
+        stock_at_request=product.stock_quantity,
+    )
+    if option is not None:
+        option.touch_use()
+
+    _notify_request(
+        request,
+        recipients=[assigned_to],
+        title="Production needed",
+        body=(
+            f"{requested_by.display_name} needs {quantity} x {product.name}. "
+            f"Only {product.stock_quantity} left"
+            + (f". {label}" if label else "")
+        ),
+    )
+
+    logger.info(
+        "Production request #%s: %s asked %s for %d x %s",
+        request.pk,
+        getattr(requested_by, "username", "?"),
+        getattr(assigned_to, "username", "?"),
+        quantity,
+        product.sku,
+    )
+    return request
+
+
+@transaction.atomic
+def respond_to_request(request, *, user, accept: bool, note: str = ""):
+    """Accept or decline. Only the person asked - or an admin - may answer."""
+    locked = ProductionRequest.objects.select_for_update().get(pk=request.pk)
+
+    if locked.assigned_to_id != user.pk and not user.is_admin:
+        raise ValidationError("This request was not addressed to you.")
+    if locked.status != RequestStatus.PENDING:
+        raise ValidationError(
+            f"This request has already been answered "
+            f"({locked.get_status_display().lower()})."
+        )
+
+    locked.status = RequestStatus.ACCEPTED if accept else RequestStatus.DECLINED
+    locked.responded_at = timezone.now()
+    locked.response_note = (note or "").strip()[:255]
+    locked.save(update_fields=["status", "responded_at", "response_note", "updated_at"])
+
+    _notify_request(
+        locked,
+        recipients=[locked.requested_by],
+        title="Request accepted" if accept else "Request declined",
+        body=(
+            f"{user.display_name} "
+            + ("will produce " if accept else "declined ")
+            + f"{locked.quantity} x {locked.product.name}."
+            + (f" {locked.response_note}" if locked.response_note else "")
+        ),
+    )
+    return locked
+
+
+@transaction.atomic
+def cancel_request(request, *, user, note: str = ""):
+    """Withdraw a request. Only the person who raised it, or an admin."""
+    locked = ProductionRequest.objects.select_for_update().get(pk=request.pk)
+
+    if locked.requested_by_id != user.pk and not user.is_admin:
+        raise ValidationError("Only the person who asked can cancel this.")
+    if not locked.is_open:
+        raise ValidationError("This request is already closed.")
+
+    locked.status = RequestStatus.CANCELLED
+    locked.responded_at = timezone.now()
+    locked.response_note = (note or "").strip()[:255]
+    locked.save(update_fields=["status", "responded_at", "response_note", "updated_at"])
+
+    _notify_request(
+        locked,
+        recipients=[locked.assigned_to],
+        title="Request cancelled",
+        body=(
+            f"{user.display_name} no longer needs "
+            f"{locked.quantity} x {locked.product.name}."
+        ),
+    )
+    return locked
+
+
+def _close_requests(request_ids, *, run, user):
+    """Mark the named requests produced, and tell whoever was waiting."""
+    ids = [int(i) for i in request_ids if str(i).isdigit()]
+    if not ids:
+        return
+
+    rows = ProductionRequest.objects.open().filter(
+        pk__in=ids, product=run.product
+    ).select_related("requested_by", "product")
+
+    for row in rows:
+        row.status = RequestStatus.FULFILLED
+        row.fulfilled_run = run
+        row.responded_at = timezone.now()
+        row.save(update_fields=[
+            "status", "fulfilled_run", "responded_at", "updated_at",
+        ])
+        _notify_request(
+            row,
+            recipients=[row.requested_by],
+            title="Your stock is ready",
+            body=(
+                f"{run.quantity_produced} x {run.product.name} were produced "
+                f"in {run.reference} and are on the shelf."
+            ),
+        )
+
+
+def _notify_request(request, *, recipients, title, body):
+    """
+    Push, and never at the cost of the record.
+
+    Wrapped because api.push is an optional dependency of this module - the
+    yard must keep working if Firebase is misconfigured, and a request that
+    rolled back because a notification failed would be a worse outcome than a
+    request nobody was buzzed about.
+    """
+    try:
+        from api import push
+
+        push.notify_users(
+            [r for r in recipients if r is not None],
+            title=title,
+            body=body,
+            channel="stock",
+            data={
+                "screen": "ProductionRequests",
+                "requestId": request.pk,
+                "productId": request.product_id,
+            },
+        )
+    except Exception:  # pragma: no cover - never break the write
+        logger.exception("Could not notify about production request %s", request.pk)
 
 
 # ---------------------------------------------------------------------------

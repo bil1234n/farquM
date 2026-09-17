@@ -143,6 +143,13 @@ CATALOG: tuple[PermGroup, ...] = (
                  "Puts the materials back and takes the goods off the "
                  "shelf. Both halves stay on record.",
                  sensitive=True),
+            Perm("production.request", "Ask for more of a product to be made",
+                 "For the counter: when stock is running out, send a named "
+                 "manager a request for a stated quantity instead of hoping "
+                 "somebody notices the low-stock alert."),
+            Perm("production.approve", "Answer a production request",
+                 "Accept or decline what the counter has asked for. The "
+                 "person who asked is told either way."),
         ),
     ),
     PermGroup(
@@ -390,6 +397,8 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "production:run_list": "production.view",
     "production:run_detail": "production.view",
     "production:run_create": "production.create",
+    "production:request_list": "production.request",
+    "production:request_create": "production.request",
     "production:recipe_list": "recipe.manage",
     "reports:sales_report": "report.sales",
     "reports:inventory_report": "report.inventory",

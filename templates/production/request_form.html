@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Ask for production{% endblock %}
+{% block page_title %}Ask for production{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    <a href="{% url 'production:request_list' %}">Requests</a> &rsaquo; <span>New</span>
+  </div>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card">
+        <div class="card-header">What you need</div>
+        <div class="card-body">
+
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.product.id_for_label }}">Product</label>
+            {{ form.product }}
+            {% for e in form.product.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.quantity.id_for_label }}">
+              How many do you need
+            </label>
+            {{ form.quantity }}
+            {% for e in form.quantity.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.assigned_to.id_for_label }}">Ask</label>
+            {{ form.assigned_to }}
+            <div class="form-text">{{ form.assigned_to.help_text }}</div>
+            {% for e in form.assigned_to.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+
+          {% comment %}
+            The same five answers come up every week, so this is a list that can
+            be added to rather than a text box nobody can count.
+          {% endcomment %}
+          <div class="mb-3">
+            <label class="form-label">Why</label>
+            <div class="option-select"
+                 data-group="PRODUCTION_REQUEST_REASON"
+                 data-id-field="reason_option"
+                 data-name-field="reason_name"
+                 data-placeholder="Pick a reason"></div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.needed_by.id_for_label }}">Needed by</label>
+            {{ form.needed_by }}
+            <div class="form-text">{{ form.needed_by.help_text }}</div>
+          </div>
+
+          <div class="mb-0">
+            <label class="form-label" for="{{ form.note.id_for_label }}">
+              Anything else they should know
+            </label>
+            {{ form.note }}
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'production:request_list' %}" class="btn btn-outline-secondary btn-sm">
+            Cancel
+          </a>
+          <button class="btn btn-primary btn-sm">
+            <i class="bi bi-send me-1"></i> Send the request
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header">Who will see this</div>
+      <div class="card-body small text-muted">
+        <p>
+          The person you choose gets a notification on their phone straight
+          away, and the request stays on their list until they answer it.
+          You are told either way.
+        </p>
+        <p class="mb-0">
+          Only people who can actually record a production batch are listed.
+          Sending it to somebody who cannot make it would look answered and
+          never be.
+        </p>
+      </div>
+      {% if form.deciders %}
+        <ul class="list-group list-group-flush">
+          {% for person in form.deciders %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+              <span>{{ person.display_name }}</span>
+              <span class="badge text-bg-light">{{ person.get_role_display }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="card-footer bg-light small text-danger">
+          Nobody in the system can record production yet, so there is no one to
+          ask. An administrator has to grant somebody
+          &ldquo;Record a production run&rdquo; first.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

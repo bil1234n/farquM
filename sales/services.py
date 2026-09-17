@@ -9,6 +9,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from core.models import resolve_option
+from core.options import channel_group_for_method
 from core.scoping import can_touch, owned_by, sees_everything
 from core.utils import ZERO, money
 from inventory.services import deduct_for_sale, reverse_sale
@@ -38,6 +40,9 @@ def create_sale(
     discount_amount: Decimal = ZERO,
     tax_amount: Decimal = ZERO,
     payment_method: str = PaymentMethod.CASH,
+    payment_channel_id=None,
+    payment_channel_name: str = "",
+    payment_reference: str = "",
     due_date=None,
     notes: str = "",
 ) -> Transaction:
@@ -112,20 +117,44 @@ def create_sale(
         _validate_credit_eligibility(customer, credit_needed)
 
     # --- 2. Header ----------------------------------------------------------
+    method = (
+        PaymentMethod.CREDIT
+        if (credit_needed > ZERO and amount_paid == ZERO)
+        else payment_method
+    )
+
+    # A bank transfer names a bank, a wallet payment names a wallet, cash
+    # names nothing. Resolved against the effective method rather than the
+    # one that was sent, so a sale that falls back to CREDIT does not keep a
+    # bank nobody transferred anything through.
+    channel, channel_name = None, ""
+    group = channel_group_for_method(method)
+    if group:
+        channel, channel_name = resolve_option(
+            group,
+            label=payment_channel_name,
+            option_id=payment_channel_id,
+            user=user,
+        )
+
     txn = Transaction.objects.create(
         owner=owned_by(user),
         customer=customer,
         discount_amount=discount_amount,
         tax_amount=tax_amount,
         amount_paid=amount_paid,
-        payment_method=(
-            PaymentMethod.CREDIT if (credit_needed > ZERO and amount_paid == ZERO)
-            else payment_method
-        ),
+        payment_method=method,
+        payment_channel=channel,
+        payment_channel_name=channel_name,
+        payment_reference=(payment_reference or "").strip()[:80],
         due_date=due_date if credit_needed > ZERO else None,
         sold_by=user,
         notes=notes,
     )
+    if channel is not None:
+        # Counted so the three banks this yard actually uses float to the top
+        # of a list of thirty next time.
+        channel.touch_use()
 
     # --- 3. Lines + stock ---------------------------------------------------
     for line in cart:

@@ -330,7 +330,7 @@ class ProductionRunViewSet(viewsets.ReadOnlyModelViewSet):
         qs = scoped(
             ProductionRun.objects.select_related(
                 "product", "owner", "created_by", "reversed_by"
-            ).prefetch_related("materials__material"),
+            ).prefetch_related("materials__material", "damages"),
             self.request.user,
         )
         params = self.request.query_params
@@ -363,6 +363,8 @@ class ProductionRunViewSet(viewsets.ReadOnlyModelViewSet):
                 product=product,
                 quantity_produced=data["quantity_produced"],
                 quantity_rejected=data.get("quantity_rejected") or 0,
+                damages=data.get("damages") or [],
+                fulfils=data.get("fulfils") or [],
                 produced_on=data.get("produced_on"),
                 notes=data.get("notes", ""),
                 materials=[

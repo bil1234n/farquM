@@ -11,7 +11,9 @@ from rest_framework import serializers
 
 from production.models import (
     MaterialMovement,
+    ProductionDamage,
     ProductionMaterial,
+    ProductionRequest,
     ProductionRun,
     RawMaterial,
     Recipe,
@@ -273,6 +275,53 @@ class ProductionMaterialSerializer(FinancialFieldsMixin,
         ]
 
 
+class ProductionDamageSerializer(FinancialFieldsMixin, serializers.ModelSerializer):
+    """One damage line, priced at what a good unit of that batch cost."""
+
+    financial_fields = ("unit_cost", "line_cost")
+
+    unit_cost = serializers.DecimalField(
+        max_digits=12, decimal_places=2, read_only=True
+    )
+    line_cost = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+
+    class Meta:
+        model = ProductionDamage
+        fields = [
+            "id", "damage_type", "type_name", "quantity", "note",
+            "unit_cost", "line_cost",
+        ]
+        read_only_fields = fields
+
+
+class ProductionDamageWriteSerializer(serializers.Serializer):
+    """
+    What the 'add more damage' rows send.
+
+    `damage_type` is the id of an entry in the DAMAGE_TYPE list; `type_name`
+    is a name typed into the add row. One of the two must be present, and
+    sending only the name creates the entry so the next shift finds it there.
+    """
+
+    damage_type = serializers.IntegerField(required=False, allow_null=True)
+    type_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=120
+    )
+    quantity = serializers.IntegerField(min_value=1)
+    note = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=255
+    )
+
+    def validate(self, attrs):
+        if not attrs.get("damage_type") and not (attrs.get("type_name") or "").strip():
+            raise serializers.ValidationError(
+                {"damage_type": "Choose what kind of damage this was."}
+            )
+        return attrs
+
+
 class ProductionLineWriteSerializer(serializers.Serializer):
     material = serializers.PrimaryKeyRelatedField(
         queryset=RawMaterial.objects.alive()
@@ -288,7 +337,10 @@ class ProductionLineWriteSerializer(serializers.Serializer):
 class ProductionRunSerializer(
     OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
 ):
-    financial_fields = ("material_cost", "unit_cost", "rejected_cost")
+    financial_fields = (
+        "material_cost", "unit_cost", "rejected_cost",
+        "naive_rejected_cost", "damage_loss_gap",
+    )
 
     product_name = serializers.CharField(source="product.name", read_only=True)
     product_sku = serializers.CharField(source="product.sku", read_only=True)
@@ -305,6 +357,16 @@ class ProductionRunSerializer(
     rejected_cost = serializers.DecimalField(
         max_digits=14, decimal_places=2, read_only=True
     )
+    # The same breakage priced the old way, sent so the run screen can show
+    # both figures side by side and make the rule obvious to whoever reads it.
+    naive_rejected_cost = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+    damage_loss_gap = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+    damages = ProductionDamageSerializer(many=True, read_only=True)
+    damage_summary = serializers.CharField(read_only=True)
     total_attempted = serializers.IntegerField(read_only=True)
     created_by_name = serializers.CharField(
         source="created_by.display_name", default=None, read_only=True
@@ -322,6 +384,8 @@ class ProductionRunSerializer(
             "quantity_produced", "quantity_rejected", "total_attempted",
             "yield_percent", "produced_on",
             "material_cost", "unit_cost", "rejected_cost",
+            "naive_rejected_cost", "damage_loss_gap",
+            "damages", "damage_summary",
             "status", "status_display", "notes",
             "reversed_at", "reversed_by_name", "reversal_reason",
             "materials", "created_by_name", "owner_name", "created_at",
@@ -346,6 +410,14 @@ class ProductionRunCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(max_length=2000, required=False,
                                   allow_blank=True)
     materials = ProductionLineWriteSerializer(many=True)
+    # What broke, itemised. When present these ARE the rejected figure - the
+    # service adds them up - so a client that sends lines need not also keep
+    # `quantity_rejected` in step, and the two can never contradict.
+    damages = ProductionDamageWriteSerializer(many=True, required=False)
+    #: Requests this batch answers, closed and notified on save.
+    fulfils = serializers.ListField(
+        child=serializers.IntegerField(), required=False, allow_empty=True
+    )
     update_product_cost = serializers.BooleanField(required=False, default=True)
 
     def validate_materials(self, value):
@@ -354,6 +426,89 @@ class ProductionRunCreateSerializer(serializers.Serializer):
                 "Record at least one material used in this run."
             )
         return value
+
+    def validate(self, attrs):
+        damages = attrs.get("damages") or []
+        if damages:
+            attrs["quantity_rejected"] = sum(d["quantity"] for d in damages)
+        return attrs
+
+
+# ---------------------------------------------------------------------------
+# "We are running out - please make more"
+# ---------------------------------------------------------------------------
+class ProductionRequestSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    unit_display = serializers.CharField(
+        source="product.get_unit_display", read_only=True
+    )
+    current_stock = serializers.IntegerField(
+        source="product.stock_quantity", read_only=True
+    )
+    requested_by_name = serializers.CharField(
+        source="requested_by.display_name", read_only=True
+    )
+    assigned_to_name = serializers.CharField(
+        source="assigned_to.display_name", read_only=True
+    )
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
+    is_open = serializers.BooleanField(read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    can_respond = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductionRequest
+        fields = [
+            "id", "product", "product_name", "product_sku", "unit_display",
+            "quantity", "current_stock", "stock_at_request",
+            "requested_by", "requested_by_name",
+            "assigned_to", "assigned_to_name",
+            "reason", "reason_name", "note", "needed_by",
+            "status", "status_display", "is_open", "is_overdue",
+            "responded_at", "response_note", "fulfilled_run",
+            "can_respond", "can_cancel", "created_at",
+        ]
+        read_only_fields = fields
+
+    def _user(self):
+        return getattr(self.context.get("request"), "user", None)
+
+    def get_can_respond(self, obj) -> bool:
+        user = self._user()
+        if user is None or not obj.is_pending:
+            return False
+        return obj.assigned_to_id == user.pk or bool(user.is_admin)
+
+    def get_can_cancel(self, obj) -> bool:
+        user = self._user()
+        if user is None or not obj.is_open:
+            return False
+        return obj.requested_by_id == user.pk or bool(user.is_admin)
+
+
+class ProductionRequestCreateSerializer(serializers.Serializer):
+    product = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
+    assigned_to = serializers.IntegerField()
+    reason = serializers.IntegerField(required=False, allow_null=True)
+    reason_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=120
+    )
+    note = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=255
+    )
+    needed_by = serializers.DateField(required=False, allow_null=True)
+
+
+class RequestResponseSerializer(serializers.Serializer):
+    accept = serializers.BooleanField()
+    note = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=255
+    )
 
 
 class ReversalSerializer(serializers.Serializer):

@@ -1,6 +1,7 @@
 """Abstract base models shared across every app, plus system settings."""
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class TimeStampedModel(models.Model):
@@ -230,3 +231,158 @@ class SystemSetting(models.Model):
     @property
     def currency(self) -> str:
         return self.value("currency_symbol", "CURRENCY_SYMBOL", "ETB")
+
+
+class OptionQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_active=True)
+
+    def in_group(self, key):
+        return self.filter(group=(key or "").strip().upper())
+
+
+class Option(TimeStampedModel):
+    """
+    One entry in a managed pick-list. The groups live in core/options.py.
+
+    WHY ONE TABLE AND NOT EIGHT
+    ---------------------------
+    Every one of these lists behaves identically: show what exists, let
+    somebody add the missing entry without leaving the form, let them take
+    back a mistake. Eight tables would be eight of everything - migrations,
+    endpoints, forms - to express one idea.
+
+    WHY ROWS THAT USE AN OPTION ALSO STORE ITS NAME
+    ----------------------------------------------
+    Anything pointing here does so with on_delete=SET_NULL and keeps a
+    snapshot of the label beside the link. Deleting 'Dashen Bank' a year from
+    now must not quietly blank out what last March's sale said it was. The
+    link is for grouping and filtering; the snapshot is the record.
+    """
+
+    group = models.CharField(
+        max_length=40,
+        db_index=True,
+        help_text="Which list this belongs to. See core/options.py.",
+    )
+    label = models.CharField(max_length=120)
+    sort_order = models.PositiveSmallIntegerField(
+        default=100, help_text="Lower sorts first. Ties fall back to the label."
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Off hides it from new forms without touching old records.",
+    )
+    is_seeded = models.BooleanField(
+        default=False,
+        help_text="Shipped with the system rather than typed in by somebody.",
+    )
+    use_count = models.PositiveIntegerField(
+        default=0,
+        help_text="How often it has been picked. Drives 'most used first'.",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="options_added",
+    )
+
+    objects = OptionQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["sort_order", "label"]
+        indexes = [
+            models.Index(
+                fields=["group", "is_active", "sort_order"],
+                name="option_group_active_idx",
+            )
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                "group",
+                Lower("label"),
+                name="option_label_unique_per_group",
+            )
+        ]
+
+    def __str__(self):
+        return self.label
+
+    def save(self, *args, **kwargs):
+        self.group = (self.group or "").strip().upper()
+        self.label = " ".join((self.label or "").split())[:120]
+        super().save(*args, **kwargs)
+
+    @property
+    def group_label(self) -> str:
+        from .options import group_for
+
+        group = group_for(self.group)
+        return group.label if group else self.group.replace("_", " ").title()
+
+    def touch_use(self):
+        """Count one use. Written with F() so two tills cannot lose a count."""
+        Option.objects.filter(pk=self.pk).update(use_count=models.F("use_count") + 1)
+
+    def may_be_removed_by(self, user) -> bool:
+        """
+        Who may take an entry back out of the list.
+
+        Whoever typed it can undo their own typo - that is the whole point of
+        letting them add one in the first place. Beyond that it is a shared
+        list, so removing somebody else's entry (or one that shipped with the
+        system) needs the permission that governs the other shared lookups.
+        """
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        if user.has_access("catalog.manage"):
+            return True
+        return bool(
+            not self.is_seeded
+            and self.created_by_id
+            and self.created_by_id == user.pk
+        )
+
+
+def resolve_option(group: str, *, label: str = "", option_id=None, user=None):
+    """
+    Turn what a form sent into (Option | None, label).
+
+    A client may send an id it picked, a label it typed, or both. A label that
+    matches nothing yet is CREATED - that is the "add it from inside the
+    select" behaviour, and doing it here means every caller gets it without
+    re-implementing the case-insensitive match that stops 'Dashen' and
+    'dashen' becoming two banks.
+
+    Returns (None, "") when nothing was chosen, which is a normal answer: a
+    cash sale names no bank.
+    """
+    from .options import is_known
+
+    group = (group or "").strip().upper()
+    label = " ".join((label or "").split())[:120]
+
+    if option_id:
+        found = Option.objects.in_group(group).filter(pk=option_id).first()
+        if found is not None:
+            return found, found.label
+
+    if not label or not is_known(group):
+        return None, label
+
+    existing = Option.objects.in_group(group).filter(label__iexact=label).first()
+    if existing is not None:
+        if not existing.is_active:
+            Option.objects.filter(pk=existing.pk).update(is_active=True)
+            existing.is_active = True
+        return existing, existing.label
+
+    created = Option.objects.create(
+        group=group,
+        label=label,
+        created_by=user if getattr(user, "pk", None) else None,
+    )
+    return created, created.label

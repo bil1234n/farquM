@@ -615,6 +615,7 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
     customer_display = serializers.CharField(read_only=True)
     payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
     payment_method_display = serializers.CharField(source="get_payment_method_display", read_only=True)
+    payment_display = serializers.CharField(read_only=True)
     sold_by_name = serializers.CharField(source="sold_by.display_name", default=None, read_only=True)
     total_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     gross_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
@@ -632,6 +633,8 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
             "amount_paid", "balance_due",
             "payment_status", "payment_status_display",
             "payment_method", "payment_method_display",
+            "payment_channel", "payment_channel_name", "payment_reference",
+            "payment_display",
             "due_date", "notes", "sold_by_name", "created_at",
             "is_voided", "void_reason", "is_overdue", "item_count",
             "total_cost", "gross_profit", "profit_margin",
@@ -681,6 +684,17 @@ class SaleCreateSerializer(serializers.Serializer):
         max_digits=14, decimal_places=2, default=Decimal("0.00")
     )
     payment_method = serializers.CharField(default="CASH")
+    # The bank or the wallet. Either half may be sent: an id for an entry
+    # already in the list, a name for one the seller typed into the 'add'
+    # row. Sending only the name is what creates it, so the next seller finds
+    # it waiting - see core.models.resolve_option.
+    payment_channel = serializers.IntegerField(required=False, allow_null=True)
+    payment_channel_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=120
+    )
+    payment_reference = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=80
+    )
     due_date = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
 
@@ -688,6 +702,27 @@ class SaleCreateSerializer(serializers.Serializer):
         if not value:
             raise serializers.ValidationError("A sale needs at least one item.")
         return value
+
+    def validate(self, attrs):
+        """
+        A transfer has to say which bank it came from.
+
+        Checked here as well as in the web form because the API is the other
+        front door, and a rule enforced on only one of them is a rule the
+        reports cannot rely on.
+        """
+        from core.options import channel_group_for_method
+
+        method = attrs.get("payment_method") or "CASH"
+        paid = attrs.get("amount_paid") or Decimal("0.00")
+        if channel_group_for_method(method) and paid > 0:
+            if not (attrs.get("payment_channel")
+                    or (attrs.get("payment_channel_name") or "").strip()):
+                raise serializers.ValidationError({
+                    "payment_channel":
+                        "Choose which bank or wallet the money came through."
+                })
+        return attrs
 
 
 # ---------------------------------------------------------------------------

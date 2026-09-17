@@ -31,6 +31,7 @@ from accounts.models import RegistrationPasscode, User
 from accounts.roles import ensure_system_roles
 from api.messages import EXACT_AM, translate
 from api.renderers import translate_payload
+from core.models import Option
 from credit.models import DebtRecord
 from inventory.models import Category, Product
 from sales.models import Customer
@@ -1112,3 +1113,304 @@ class DebtLookupFromSaleTests(ApiTestBase):
             rows, [],
             "a seller must not reach a colleague's debt by guessing a sale id",
         )
+
+
+class OptionListTests(ApiTestBase):
+    """
+    The managed pick-lists: a select anyone can add to, and take back from.
+
+    The point of the endpoint being open to any signed-in user is that a clerk
+    is never blocked by a list somebody else forgot to maintain. Gating it
+    recreates the free typing it replaces - "dashn" in the notes field.
+    """
+
+    def test_a_seller_gets_the_seeded_bank_list(self):
+        rows = self.as_(self.sales).get("/api/options/?group=BANK").json()
+        labels = [row["label"] for row in rows]
+        self.assertIn("Commercial Bank of Ethiopia (CBE)", labels)
+        self.assertIn("Dashen Bank", labels)
+
+    def test_a_missing_group_returns_nothing_rather_than_everything(self):
+        """A forgotten parameter must fail loudly, not load every list."""
+        rows = self.as_(self.sales).get("/api/options/").json()
+        self.assertEqual(rows, [])
+
+    def test_a_seller_can_add_one_and_take_it_back(self):
+        # A name deliberately NOT in the shipped list, so this exercises the
+        # "somebody typed a new one" path rather than reviving a seeded row.
+        client = self.as_(self.sales)
+        created = client.post(
+            "/api/options/",
+            {"group": "BANK", "label": "Kifiya Microfinance"},
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 201)
+        row = created.json()
+        self.assertTrue(row["can_remove"], "you must be able to undo your own typo")
+
+        labels = [
+            o["label"]
+            for o in client.get("/api/options/?group=BANK").json()
+        ]
+        self.assertIn("Kifiya Microfinance", labels)
+
+        self.assertEqual(
+            client.delete(f"/api/options/{row['id']}/").status_code, 204
+        )
+        labels = [
+            o["label"]
+            for o in client.get("/api/options/?group=BANK").json()
+        ]
+        self.assertNotIn("Kifiya Microfinance", labels)
+
+    def test_re_adding_a_shipped_name_returns_the_shipped_row(self):
+        """
+        Somebody typing 'Siinqee Bank' when it is already in the list must get
+        that row, not a second one - and must not then be able to delete the
+        shared entry just because they were the one who typed it.
+        """
+        response = self.as_(self.sales).post(
+            "/api/options/",
+            {"group": "BANK", "label": "Siinqee Bank"},
+            content_type="application/json",
+        )
+        row = response.json()
+        self.assertTrue(row["is_seeded"])
+        self.assertFalse(row["can_remove"])
+        self.assertEqual(
+            Option.objects.in_group("BANK")
+            .filter(label__iexact="Siinqee Bank")
+            .count(),
+            1,
+        )
+
+    def test_adding_a_label_that_exists_returns_it_rather_than_refusing(self):
+        """
+        A dead end in the form somebody is standing in is worse than a
+        duplicate, and case must not create a second bank.
+        """
+        client = self.as_(self.sales)
+        again = client.post(
+            "/api/options/",
+            {"group": "BANK", "label": "dashen bank"},
+            content_type="application/json",
+        )
+        self.assertIn(again.status_code, (200, 201))
+        self.assertEqual(again.json()["label"], "Dashen Bank")
+
+    def test_a_seller_cannot_remove_somebody_elses_entry(self):
+        seeded = self.as_(self.admin).get("/api/options/?group=BANK").json()[0]
+        response = self.as_(self.sales).delete(f"/api/options/{seeded['id']}/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_an_unknown_list_is_refused(self):
+        response = self.as_(self.sales).post(
+            "/api/options/",
+            {"group": "NOT_A_LIST", "label": "x"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class SalePaymentChannelTests(ApiTestBase):
+    """'BANK' on its own cannot be reconciled against anything."""
+
+    def _cart(self):
+        return [{"product": self.product.pk, "quantity": 1,
+                 "unit_price": "15.00"}]
+
+    def test_a_transfer_must_name_a_bank(self):
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {"items": self._cart(), "amount_paid": "15.00",
+             "payment_method": "BANK"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_bank_is_stored_and_read_back(self):
+        client = self.as_(self.sales)
+        bank = [
+            o for o in client.get("/api/options/?group=BANK").json()
+            if o["label"] == "Dashen Bank"
+        ][0]
+
+        sale = client.post(
+            "/api/sales/",
+            {"items": self._cart(), "amount_paid": "15.00",
+             "payment_method": "BANK", "payment_channel": bank["id"],
+             "payment_reference": "TX99213"},
+            content_type="application/json",
+        ).json()
+
+        self.assertEqual(sale["payment_channel_name"], "Dashen Bank")
+        self.assertEqual(sale["payment_reference"], "TX99213")
+        self.assertIn("Dashen Bank", sale["payment_display"])
+        self.assertIn("TX99213", sale["payment_display"])
+
+    def test_a_bank_typed_in_at_the_counter_joins_the_list(self):
+        client = self.as_(self.sales)
+        sale = client.post(
+            "/api/sales/",
+            {"items": self._cart(), "amount_paid": "15.00",
+             "payment_method": "MOBILE",
+             "payment_channel_name": "Kacha"},
+            content_type="application/json",
+        ).json()
+
+        self.assertEqual(sale["payment_channel_name"], "Kacha")
+        labels = [
+            o["label"]
+            for o in client.get("/api/options/?group=MOBILE_MONEY").json()
+        ]
+        self.assertIn("Kacha", labels)
+
+    def test_cash_names_nothing_even_if_a_bank_is_sent(self):
+        """A stale value in a client's form must not invent a transfer."""
+        client = self.as_(self.sales)
+        bank = client.get("/api/options/?group=BANK").json()[0]
+        sale = client.post(
+            "/api/sales/",
+            {"items": self._cart(), "amount_paid": "15.00",
+             "payment_method": "CASH", "payment_channel": bank["id"]},
+            content_type="application/json",
+        ).json()
+        self.assertEqual(sale["payment_channel_name"], "")
+
+
+class StockRequestTests(ApiTestBase):
+    """
+    The counter asking the yard for more stock.
+
+    The automatic low-stock alert says something is nearly gone. It does not
+    say how many are wanted, who is waiting, or whether anybody agreed - so it
+    gets swiped away and the seller finds out at the counter. This is the half
+    that survives that.
+    """
+
+    def _ask(self, client=None, **overrides):
+        payload = {
+            "product": self.product.pk,
+            "quantity": 200,
+            "assigned_to": self.manager.pk,
+            "reason_name": "Stock is low",
+            "note": "Two lorries booked for Friday",
+        }
+        payload.update(overrides)
+        return (client or self.as_(self.sales)).post(
+            "/api/production-requests/",
+            payload,
+            content_type="application/json",
+        )
+
+    def test_only_people_who_can_make_things_may_be_asked(self):
+        rows = self.as_(self.sales).get(
+            "/api/production-requests/deciders/"
+        ).json()
+        names = [row["name"] for row in rows]
+        self.assertIn(self.manager.display_name, names)
+        self.assertNotIn(
+            self.sales.display_name, names,
+            "a seller who cannot record a batch must not appear as an answer",
+        )
+
+    def test_a_seller_asks_and_the_manager_sees_it(self):
+        created = self._ask()
+        self.assertEqual(created.status_code, 201)
+        row = created.json()
+        self.assertEqual(row["status"], "PENDING")
+        self.assertEqual(row["quantity"], 200)
+        # Snapshotted, because by the time it is read the shelf has moved.
+        self.assertEqual(row["stock_at_request"], self.product.stock_quantity)
+
+        incoming = self.as_(self.manager).get(
+            "/api/production-requests/?box=incoming"
+        ).json()["results"]
+        self.assertEqual(len(incoming), 1)
+        self.assertTrue(incoming[0]["can_respond"])
+        self.assertFalse(incoming[0]["can_cancel"])
+
+    def test_the_asker_can_cancel_but_not_answer_their_own_request(self):
+        request_id = self._ask().json()["id"]
+        mine = self.as_(self.sales).get(
+            "/api/production-requests/?box=sent"
+        ).json()["results"][0]
+        self.assertTrue(mine["can_cancel"])
+        self.assertFalse(mine["can_respond"])
+
+        cancelled = self.as_(self.sales).post(
+            f"/api/production-requests/{request_id}/cancel/",
+            {}, content_type="application/json",
+        )
+        self.assertEqual(cancelled.json()["status"], "CANCELLED")
+
+    def test_the_manager_accepts_and_the_seller_is_told(self):
+        request_id = self._ask().json()["id"]
+        answered = self.as_(self.manager).post(
+            f"/api/production-requests/{request_id}/respond/",
+            {"accept": True, "note": "Pouring tomorrow"},
+            content_type="application/json",
+        ).json()
+        self.assertEqual(answered["status"], "ACCEPTED")
+        self.assertEqual(answered["response_note"], "Pouring tomorrow")
+
+        from api.models import NotificationLog
+
+        self.assertTrue(
+            NotificationLog.objects.filter(user=self.sales).exists(),
+            "the person who asked has to be told either way",
+        )
+
+    def test_a_second_open_request_for_the_same_thing_is_refused(self):
+        self.assertEqual(self._ask().status_code, 201)
+        second = self._ask()
+        self.assertEqual(second.status_code, 400)
+        self.assertIn("already", second.json()["detail"].lower())
+
+    def test_a_request_is_private_to_the_two_people_in_it(self):
+        self._ask()
+        other = User.objects.create_user(
+            "zed", password="pw", role="SALES", manager=self.manager
+        )
+        rows = self.as_(other).get("/api/production-requests/").json()["results"]
+        self.assertEqual(
+            rows, [],
+            "a request is a conversation between two named people",
+        )
+
+    def test_recording_the_batch_closes_the_request(self):
+        from decimal import Decimal as D
+
+        request_id = self._ask().json()["id"]
+        self.as_(self.manager).post(
+            f"/api/production-requests/{request_id}/respond/",
+            {"accept": True}, content_type="application/json",
+        )
+
+        from production.models import RawMaterial
+
+        cement = RawMaterial.objects.create(
+            name="Cement", code="CEM", unit="BAG",
+            quantity_in_stock=D("500"), unit_cost=D("18.00"),
+            owner=self.manager,
+        )
+        run = self.as_(self.manager).post(
+            "/api/production/",
+            {
+                "product": self.product.pk,
+                "quantity_produced": 200,
+                "materials": [{"material": cement.pk, "quantity": "50.000"}],
+                "damages": [{"type_name": "Cracked", "quantity": 5}],
+                "fulfils": [request_id],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(run.status_code, 201)
+        # The itemised lines ARE the rejected figure.
+        self.assertEqual(run.json()["quantity_rejected"], 5)
+
+        closed = self.as_(self.sales).get(
+            "/api/production-requests/?box=sent"
+        ).json()["results"][0]
+        self.assertEqual(closed["status"], "FULFILLED")
+        self.assertIsNotNone(closed["fulfilled_run"])

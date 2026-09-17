@@ -139,6 +139,34 @@
             {{ form.payment_method }}
           </div>
 
+          {% comment %}
+            WHICH bank, or which wallet. "BANK" on its own cannot be reconciled
+            against anything - somebody still has to open the slip to find out.
+            The list can be added to from inside the select, so a bank nobody
+            thought of is one tap away rather than a note.
+          {% endcomment %}
+          <div class="mb-3 d-none" id="channelBox">
+            <label class="form-label" id="channelLabel">Bank</label>
+            <div class="option-select"
+                 id="channelSelect"
+                 data-group="BANK"
+                 data-id-field="payment_channel"
+                 data-name-field="payment_channel_name"
+                 data-value="{{ form.payment_channel.value|default_if_none:'' }}"
+                 data-value-name="{{ form.payment_channel_name.value|default_if_none:'' }}"
+                 data-placeholder="Select a bank"></div>
+            {% for e in form.payment_channel_name.errors %}
+              <div class="text-danger small mt-1">{{ e }}</div>
+            {% endfor %}
+            <div class="mt-2">
+              <label class="form-label small text-muted mb-1"
+                     for="{{ form.payment_reference.id_for_label }}">
+                Transfer / cheque number
+              </label>
+              {{ form.payment_reference }}
+            </div>
+          </div>
+
           <div class="mb-3">
             <label class="form-label" for="{{ form.amount_paid.id_for_label }}">Amount paid now</label>
             {{ form.amount_paid }}
@@ -420,8 +448,41 @@ function updateProofHint() {
   }
 }
 
+// ---- Which bank / which wallet ----------------------------------------
+// A transfer names a bank, a wallet payment names a wallet, cash names
+// nothing. Swapping the group rather than rendering three selects keeps one
+// pair of hidden inputs, so whatever is on screen is what gets posted.
+const CHANNEL_GROUPS = {
+  BANK:   {group: 'BANK',         label: 'Bank',            placeholder: 'Select a bank'},
+  CHEQUE: {group: 'BANK',         label: 'Bank (cheque)',   placeholder: 'Select a bank'},
+  MOBILE: {group: 'MOBILE_MONEY', label: 'Mobile money',    placeholder: 'Select a provider'}
+};
+
+function updateChannel() {
+  const box = $('channelBox');
+  const host = $('channelSelect');
+  if (!box || !host) return;
+
+  const spec = CHANNEL_GROUPS[$('id_payment_method').value];
+  box.classList.toggle('d-none', !spec);
+  if (!spec) return;
+
+  $('channelLabel').textContent = spec.label;
+  if (host.dataset.group !== spec.group) {
+    // Rebuilt rather than re-filtered: the hidden inputs must not keep an id
+    // from the list that is no longer on screen.
+    host.dataset.group = spec.group;
+    host.dataset.placeholder = spec.placeholder;
+    host.dataset.ready = '';
+    host.innerHTML = '';
+    if (window.OptionSelect) window.OptionSelect.scan(host.parentElement);
+  }
+}
+
 $('id_payment_method').addEventListener('change', updateProofHint);
+$('id_payment_method').addEventListener('change', updateChannel);
 $('id_amount_paid').addEventListener('input', updateProofHint);
+updateChannel();
 
 $('id_receipt').addEventListener('change', function () {
   const preview = $('receiptPreview');

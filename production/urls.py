@@ -27,6 +27,13 @@ urlpatterns = [
     path("runs/new/", views.run_create, name="run_create"),
     path("runs/<int:pk>/", views.RunDetailView.as_view(), name="run_detail"),
     path("runs/<int:pk>/reverse/", views.run_reverse, name="run_reverse"),
+    # "We are running out - please make more"
+    path("requests/", views.request_list, name="request_list"),
+    path("requests/new/", views.request_create, name="request_create"),
+    path("requests/<int:pk>/respond/", views.request_respond,
+         name="request_respond"),
+    path("requests/<int:pk>/cancel/", views.request_cancel,
+         name="request_cancel"),
     # Used by the run form as you type
     path("api/plan/", views.plan_api, name="plan_api"),
 ]

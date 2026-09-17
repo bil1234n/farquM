@@ -1,7 +1,13 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from . import parity_views, production_views, views
+from . import (
+    option_views,
+    parity_views,
+    production_views,
+    request_views,
+    views,
+)
 
 app_name = "api"
 
@@ -20,6 +26,15 @@ router.register("recipes", production_views.RecipeViewSet, basename="recipe")
 router.register(
     "production", production_views.ProductionRunViewSet, basename="productionrun"
 )
+router.register(
+    "production-requests",
+    request_views.ProductionRequestViewSet,
+    basename="productionrequest",
+)
+# The managed pick-lists. Served to the phone AND to the web forms, which call
+# it with the session cookie - one list, so a bank added on a phone is in the
+# browser's dropdown a moment later.
+router.register("options", option_views.OptionViewSet, basename="option")
 router.register("customers", views.CustomerViewSet, basename="customer")
 router.register("sales", views.TransactionViewSet, basename="sale")
 router.register("debts", views.DebtViewSet, basename="debt")
@@ -82,6 +97,10 @@ urlpatterns = [
     # The permanent record.
     path("audit-log/", parity_views.audit_log, name="audit_log"),
     path("my-activity/", parity_views.my_activity, name="my_activity"),
+
+    # Several pick-lists in one round trip, for a screen that needs the bank
+    # list and the wallet list before the seller has chosen between them.
+    path("options/bundle/", option_views.option_bundle, name="option_bundle"),
 
     path("health/", views.health, name="health"),
 

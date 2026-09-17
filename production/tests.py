@@ -25,6 +25,7 @@ from django.utils import timezone
 
 from accounts.models import User
 from accounts.roles import ensure_system_roles
+from core.models import Option
 from inventory.models import MovementType, Product, StockMovement
 from production import services
 from production.models import (
@@ -297,16 +298,91 @@ class ProductionTests(YardTestBase):
         self.block.refresh_from_db()
         self.assertEqual(self.block.cost_price, D("25.00"))
 
-    def test_rejects_reduce_the_yield_and_carry_their_share_of_the_cost(self):
+    def test_damage_is_priced_at_what_a_sellable_unit_cost(self):
+        """
+        The breakage is charged at the GOOD-unit cost, not at a share of the
+        mix - and the difference is real money.
+
+        Six of sixty failed on a batch that cost 1,062 in materials. There are
+        two ways to price the six:
+
+            across everything attempted   1062 x 6/60      = 106.20
+            at what a good block costs   (1062/54) x 6     = 118.02
+
+        The first is what a system reports when it forgets the six cannot be
+        sold. But the 1,062 has to come back out of 54 blocks, not 60 - each
+        survivor now carries 19.67, not 17.70 - so the breakage cost 118.02 of
+        sellable product. Under-reporting it by 11.82 a batch is how a yard
+        loses money it never sees on a report.
+        """
         run = self._run(produced=54, rejected=6)
         self.assertEqual(run.total_attempted, 60)
         self.assertEqual(run.yield_percent, D("90.00"))
-        # A tenth of the batch failed, so a tenth of 1062 was spent on nothing.
-        self.assertEqual(run.rejected_cost, D("106.20"))
-        # And the good blocks carry the whole cost, which is the honest figure.
+        # The good blocks carry the whole cost, which is the honest figure.
         self.assertEqual(run.unit_cost, D("19.67"))
+        # 19.67 x 6, not 1062 x 6/60.
+        self.assertEqual(run.rejected_cost, D("118.02"))
+        # Both figures are kept so the run page can show the gap between them.
+        self.assertEqual(run.naive_rejected_cost, D("106.20"))
+        self.assertEqual(run.damage_loss_gap, D("11.82"))
         self.block.refresh_from_db()
         self.assertEqual(self.block.stock_quantity, 54)
+
+    def test_damage_lines_itemise_the_rejected_total(self):
+        """
+        A shift does not fail in one way, and the reason is the only part
+        anybody can act on. The lines are the total - the run's own
+        `quantity_rejected` is derived from them so the two cannot disagree.
+        """
+        run = services.record_production(
+            product=self.block,
+            quantity_produced=54,
+            # Deliberately wrong, and deliberately ignored: the itemised lines
+            # win, because they are the ones somebody actually counted.
+            quantity_rejected=99,
+            damages=[
+                {"type_name": "Cracked", "quantity": 4, "note": "mix too wet"},
+                {"type_name": "Chipped edge", "quantity": 2},
+            ],
+            materials=[
+                {"material": self.cement, "quantity": D("50")},
+                {"material": self.sand, "quantity": D("0.18")},
+            ],
+            user=self.manager,
+        )
+
+        self.assertEqual(run.quantity_rejected, 6)
+        self.assertEqual(run.damages.count(), 2)
+
+        cracked = run.damages.get(type_name="Cracked")
+        self.assertEqual(cracked.quantity, 4)
+        self.assertEqual(cracked.note, "mix too wet")
+        # Each broken block is charged at the good-unit cost, 19.67.
+        self.assertEqual(cracked.line_cost, D("78.68"))
+
+        # A type typed in for the first time joins the shared list, so the
+        # next shift picks it instead of inventing a fourth spelling.
+        self.assertTrue(
+            Option.objects.in_group("DAMAGE_TYPE")
+            .filter(label__iexact="Cracked")
+            .exists()
+        )
+
+    def test_damage_lines_naming_the_same_type_are_combined(self):
+        """Tapping 'add more damage' twice and picking Cracked twice is 20."""
+        run = services.record_production(
+            product=self.block,
+            quantity_produced=40,
+            damages=[
+                {"type_name": "Cracked", "quantity": 12},
+                {"type_name": "cracked", "quantity": 8},
+            ],
+            materials=[{"material": self.cement, "quantity": D("50")}],
+            user=self.manager,
+        )
+        self.assertEqual(run.damages.count(), 1)
+        self.assertEqual(run.damages.first().quantity, 20)
+        self.assertEqual(run.quantity_rejected, 20)
 
     def test_the_actual_quantity_is_stored_next_to_the_expected_one(self):
         run = self._run(cement=D("54"))

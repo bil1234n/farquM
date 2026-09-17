@@ -113,7 +113,7 @@
       {% endif %}
     {% endif %}
 
-    {% if user|can:"material.view,production.view,recipe.manage" %}
+    {% if user|can:"material.view,production.view,recipe.manage,production.request,production.approve" %}
       <div class="nav-section">Production</div>
       {% if user|can:"material.view" %}
         <a class="nav-link {% if NAV == 'materials' %}active{% endif %}"
@@ -132,6 +132,15 @@
         <a class="nav-link {% if NAV == 'recipes' %}active{% endif %}"
            href="{% url 'production:recipe_list' %}">
           <i class="bi bi-list-check"></i> Recipes
+        </a>
+      {% endif %}
+      {% if user|can:"production.request,production.approve" %}
+        <a class="nav-link {% if NAV == 'requests' %}active{% endif %}"
+           href="{% url 'production:request_list' %}">
+          <i class="bi bi-megaphone"></i> Stock Requests
+          {% if badge_open_requests %}
+            <span class="badge text-bg-warning">{{ badge_open_requests }}</span>
+          {% endif %}
         </a>
       {% endif %}
     {% endif %}

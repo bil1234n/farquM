@@ -208,6 +208,31 @@ class Transaction(OwnedModel, TimeStampedModel):
     payment_method = models.CharField(
         max_length=10, choices=PaymentMethod.choices, default=PaymentMethod.CASH
     )
+    # WHICH bank, or which wallet. "BANK" on its own cannot be reconciled
+    # against anything - somebody still has to open the slip to find out
+    # whether it was CBE or Dashen, and by then the slip is in a drawer.
+    #
+    # SET_NULL plus a snapshot, for the reason on core.models.Option: a bank
+    # removed from the list next year must not blank out what this sale said.
+    payment_channel = models.ForeignKey(
+        "core.Option",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="transactions",
+        help_text="The bank or wallet the money came through.",
+    )
+    payment_channel_name = models.CharField(
+        max_length=120,
+        blank=True,
+        db_index=True,
+        help_text="What it was called at the time. Survives the option going.",
+    )
+    payment_reference = models.CharField(
+        max_length=80,
+        blank=True,
+        help_text="Transfer number, cheque number or wallet confirmation code.",
+    )
     due_date = models.DateField(
         null=True, blank=True, help_text="Only used when there is a balance to collect."
     )
@@ -340,6 +365,24 @@ class Transaction(OwnedModel, TimeStampedModel):
         if self.customer:
             return f"{self.customer.name} ({self.customer.phone})"
         return self.customer_name_snapshot or "Walk-in customer"
+
+    @property
+    def payment_display(self) -> str:
+        """'Bank transfer - Dashen Bank (TX99213)' for a receipt line."""
+        parts = [self.get_payment_method_display()]
+        if self.payment_channel_name:
+            parts.append(self.payment_channel_name)
+        line = " - ".join(parts)
+        if self.payment_reference:
+            line = f"{line} ({self.payment_reference})"
+        return line
+
+    @property
+    def needs_channel(self) -> bool:
+        """Whether this method should have named a bank or a wallet."""
+        from core.options import channel_group_for_method
+
+        return bool(channel_group_for_method(self.payment_method))
 
     @property
     def debt(self):

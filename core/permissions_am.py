@@ -104,6 +104,14 @@ AMHARIC: dict[str, str] = {
     "perm.production.reverse.label": "የምርት ዙርን መመለስ",
     "perm.production.reverse.help":
         "ጥሬ ዕቃውን ይመልሳል፤ የተመረተውንም ከመደርደሪያው ያወርዳል። ሁለቱም እርምጃዎች በመዝገብ ላይ ይቀራሉ።",
+    "perm.production.request.label": "ተጨማሪ ምርት እንዲሠራ መጠየቅ",
+    "perm.production.request.help":
+        "ለሻጩ፦ ክምችቱ ሊያልቅ ሲል፣ የክምችት ማስጠንቀቂያውን ማንም እንደሚያነበው ከመተማመን ይልቅ "
+        "ለተወሰነ ሥራ አስኪያጅ የሚፈለገውን ብዛት የሚገልጽ ጥያቄ ይልካል።",
+    "perm.production.approve.label": "የምርት ጥያቄን መመለስ",
+    "perm.production.approve.help":
+        "ሻጩ የጠየቀውን መቀበል ወይም አለመቀበል። የጠየቀው ሰው በሁለቱም ሁኔታ ይነገረዋል።",
+
 
     # -- Sales --------------------------------------------------------------
     "perm.sale.view.label": "ሽያጮችንና የግብይት ታሪክ ማየት",

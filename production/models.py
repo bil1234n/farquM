@@ -515,18 +515,73 @@ class ProductionRun(AuthoredModel, OwnedModel):
     @property
     def rejected_cost(self) -> Decimal:
         """
-        What the failures cost.
+        What the damage actually cost, valued at what a GOOD unit costs.
 
-        Materials were consumed for the rejects too, so the honest figure is
-        the whole batch's material cost apportioned across everything
-        attempted - not zero, which is what a system that only counts good
-        units quietly reports.
+        THIS IS NOT THE OBVIOUS SUM, AND THE DIFFERENCE IS REAL MONEY
+        ------------------------------------------------------------
+        Pour a mix for 100 blocks, get 80 good and 20 broken, and spend 8,000
+        on materials. There are two ways to price the 20:
+
+            across everything attempted   8,000 x 20/100 = 1,600
+            at what a good block costs    (8,000/80) x 20 = 2,000
+
+        The first is what a system reports when it forgets that the 20 broken
+        blocks cannot be sold. But the 8,000 has to come back out of 80
+        blocks, not 100 - each survivor now carries 100, not 80 - and the
+        breakage therefore cost 2,000 of sellable product, not 1,600.
+
+        Under-reporting it by 400 a batch is exactly how a yard loses money it
+        never sees on a report. `unit_cost` is already material_cost divided
+        by the good units, so this multiplies by that, deliberately.
+        """
+        if not self.quantity_rejected:
+            return Decimal("0.00")
+        unit = self.unit_cost
+        if unit <= 0:
+            # A run costed before the unit figure was written (or with no
+            # material cost at all). Fall back to deriving it the same way.
+            if not self.quantity_produced:
+                return Decimal("0.00")
+            unit = (self.material_cost / Decimal(self.quantity_produced))
+        return (unit * Decimal(self.quantity_rejected)).quantize(Decimal("0.01"))
+
+    @property
+    def good_unit_cost(self) -> Decimal:
+        """Readable alias: what one sellable unit of this batch cost to make."""
+        return self.unit_cost
+
+    @property
+    def naive_rejected_cost(self) -> Decimal:
+        """
+        The same failures priced across every unit attempted.
+
+        Kept only so the run page can show the two side by side - seeing
+        "1,600 if you count the broken ones as production, 2,000 in blocks you
+        can actually sell" is what makes the rule land for the person reading
+        it.
         """
         attempted = self.total_attempted
         if not attempted or not self.quantity_rejected:
             return Decimal("0.00")
         share = Decimal(self.quantity_rejected) / Decimal(attempted)
         return (self.material_cost * share).quantize(Decimal("0.01"))
+
+    @property
+    def damage_loss_gap(self) -> Decimal:
+        """How much the naive figure under-reports this batch's breakage by."""
+        return (self.rejected_cost - self.naive_rejected_cost).quantize(
+            Decimal("0.01")
+        )
+
+    @property
+    def damage_summary(self) -> str:
+        """'12 Broken, 8 Cracked' - one line for a list row."""
+        parts = [
+            f"{d.quantity} {d.type_name}"
+            for d in self.damages.all()
+            if d.quantity
+        ]
+        return ", ".join(parts)
 
 
 class ProductionMaterial(models.Model):
@@ -580,3 +635,234 @@ class ProductionMaterial(models.Model):
         if self.expected_quantity is None:
             return None
         return self.quantity - self.expected_quantity
+
+
+class ProductionDamage(models.Model):
+    """
+    One kind of failure on a batch: what went wrong, and how many.
+
+    WHY THIS IS A LIST AND NOT A NUMBER
+    -----------------------------------
+    A shift does not fail in one way. Twelve came out cracked because the mix
+    was wet, eight got chipped being stacked, three were the wrong size. A
+    single 'rejected: 23' box records the loss and throws away every reason
+    for it - and the reason is the only part anybody can act on. Split into
+    lines, the same data answers 'what keeps breaking our blocks' over a month.
+
+    `ProductionRun.quantity_rejected` stays as the total, kept in step by
+    production.services. It is what every cost figure and report already
+    reads, and a second source of truth for one number is how the two stop
+    agreeing.
+
+    `type_name` is a snapshot beside the link, for the reason given on
+    core.models.Option: removing a damage type next year must not blank out
+    what last year's batch said broke.
+    """
+
+    run = models.ForeignKey(
+        ProductionRun, on_delete=models.CASCADE, related_name="damages"
+    )
+    damage_type = models.ForeignKey(
+        "core.Option",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="production_damages",
+        help_text="An entry from the DAMAGE_TYPE list.",
+    )
+    type_name = models.CharField(
+        max_length=120,
+        blank=True,
+        db_index=True,
+        help_text="What it was called at the time. Survives the option going.",
+    )
+    quantity = models.PositiveIntegerField(
+        default=0, help_text="How many units failed this way."
+    )
+    note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-quantity", "id"]
+        verbose_name = "Production damage"
+        verbose_name_plural = "Production damage"
+        indexes = [
+            models.Index(fields=["run"], name="damage_run_idx"),
+            models.Index(fields=["type_name"], name="damage_type_name_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0), name="damage_quantity_positive"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.type_name or 'Damaged'}"
+
+    def save(self, *args, **kwargs):
+        if self.damage_type_id and not self.type_name:
+            self.type_name = self.damage_type.label
+        super().save(*args, **kwargs)
+
+    @property
+    def unit_cost(self) -> Decimal:
+        """What one of these would have cost had it survived."""
+        return self.run.unit_cost if self.run_id else Decimal("0.00")
+
+    @property
+    def line_cost(self) -> Decimal:
+        """
+        This line's share of the breakage, at the good-unit cost.
+
+        Same rule as ProductionRun.rejected_cost, and for the same reason:
+        broken blocks are paid for by the ones that can still be sold.
+        """
+        return (self.unit_cost * Decimal(self.quantity)).quantize(Decimal("0.01"))
+
+
+class RequestStatus(models.TextChoices):
+    PENDING = "PENDING", "Waiting for an answer"
+    ACCEPTED = "ACCEPTED", "Accepted - will be produced"
+    DECLINED = "DECLINED", "Declined"
+    FULFILLED = "FULFILLED", "Produced and added to stock"
+    CANCELLED = "CANCELLED", "Cancelled by the person who asked"
+
+
+class ProductionRequestQuerySet(models.QuerySet):
+    def open(self):
+        return self.filter(
+            status__in=[RequestStatus.PENDING, RequestStatus.ACCEPTED]
+        )
+
+    def pending(self):
+        return self.filter(status=RequestStatus.PENDING)
+
+    def for_decider(self, user):
+        return self.filter(assigned_to=user)
+
+
+class ProductionRequest(TimeStampedModel):
+    """
+    'We are running out of this - please make more.'
+
+    WHY A RECORD AND NOT A PHONE CALL
+    ---------------------------------
+    The automatic low-stock alert (api/signals.py) tells the owner a product
+    is nearly gone. It does not say how many are wanted, who is waiting, or
+    whether anybody agreed to make them - so it gets read, half-remembered,
+    and the seller finds out at the counter that nothing was poured.
+
+    A request is the missing half: a named person asked a named person for a
+    stated quantity, and that person answered. It survives the notification
+    being swiped away, and it is the only way "I told them last week" can be
+    checked rather than argued about.
+
+    `stock_at_request` is a snapshot. By the time the manager reads it the
+    shelf has moved, and the interesting number is what it looked like when
+    somebody thought it was worth asking.
+    """
+
+    product = models.ForeignKey(
+        "inventory.Product",
+        on_delete=models.CASCADE,
+        related_name="production_requests",
+    )
+    quantity = models.PositiveIntegerField(
+        help_text="How many units are being asked for."
+    )
+
+    requested_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="production_requests_made",
+    )
+    assigned_to = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="production_requests_received",
+        help_text="The manager or administrator being asked.",
+    )
+
+    reason = models.ForeignKey(
+        "core.Option",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="production_requests",
+        help_text="An entry from the PRODUCTION_REQUEST_REASON list.",
+    )
+    reason_name = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+
+    needed_by = models.DateField(null=True, blank=True)
+    stock_at_request = models.IntegerField(
+        default=0, help_text="What the shelf held when this was raised."
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=RequestStatus.choices,
+        default=RequestStatus.PENDING,
+        db_index=True,
+    )
+    responded_at = models.DateTimeField(null=True, blank=True)
+    response_note = models.CharField(max_length=255, blank=True)
+    fulfilled_run = models.ForeignKey(
+        ProductionRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requests_fulfilled",
+    )
+
+    objects = ProductionRequestQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        verbose_name = "Production request"
+        indexes = [
+            models.Index(
+                fields=["assigned_to", "status", "-created_at"],
+                name="request_assigned_idx",
+            ),
+            models.Index(
+                fields=["requested_by", "-created_at"], name="request_asker_idx"
+            ),
+            models.Index(fields=["product", "status"], name="request_product_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0), name="request_quantity_positive"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product.name} ({self.get_status_display()})"
+
+    def get_absolute_url(self):
+        return reverse("production:request_list")
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in {RequestStatus.PENDING, RequestStatus.ACCEPTED}
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == RequestStatus.PENDING
+
+    @property
+    def status_class(self) -> str:
+        return {
+            RequestStatus.PENDING: "warning",
+            RequestStatus.ACCEPTED: "info",
+            RequestStatus.DECLINED: "danger",
+            RequestStatus.FULFILLED: "success",
+            RequestStatus.CANCELLED: "secondary",
+        }.get(self.status, "secondary")
+
+    @property
+    def is_overdue(self) -> bool:
+        from django.utils import timezone
+
+        return bool(
+            self.needed_by and self.is_open and self.needed_by < timezone.localdate()
+        )

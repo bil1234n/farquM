@@ -265,6 +265,13 @@ def sale_create(request):
                     discount_amount=form.cleaned_data.get("discount_amount") or ZERO,
                     tax_amount=form.cleaned_data.get("tax_amount") or ZERO,
                     payment_method=form.cleaned_data["payment_method"],
+                    payment_channel_id=form.cleaned_data.get("payment_channel"),
+                    payment_channel_name=form.cleaned_data.get(
+                        "payment_channel_name", ""
+                    ),
+                    payment_reference=form.cleaned_data.get(
+                        "payment_reference", ""
+                    ),
                     due_date=form.cleaned_data.get("due_date"),
                     notes=form.cleaned_data.get("notes", ""),
                 )

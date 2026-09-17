@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Production requests{% endblock %}
+{% block page_title %}Production requests{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb"><a href="{% url 'production:run_list' %}">Production</a> &rsaquo; <span>Requests</span></div>
+{% endblock %}
+
+{% block page_actions %}
+  {% if can_ask %}
+    <a href="{% url 'production:request_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i> Ask for production
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% comment %}
+  Two boxes, not one list. Being asked for something and waiting on somebody
+  else are different jobs with different next actions, and merging them buries
+  the one that needs an answer today.
+{% endcomment %}
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#incoming" type="button">
+      Asked of me
+      {% with n=incoming.count %}{% if n %}<span class="badge text-bg-warning ms-1">{{ n }}</span>{% endif %}{% endwith %}
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#sent" type="button">
+      I asked for
+      {% with n=sent.count %}{% if n %}<span class="badge text-bg-secondary ms-1">{{ n }}</span>{% endif %}{% endwith %}
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="incoming">
+    {% include "production/_request_table.html" with rows=incoming mine=True response_form=response_form %}
+  </div>
+  <div class="tab-pane fade" id="sent">
+    {% include "production/_request_table.html" with rows=sent mine=False response_form=response_form %}
+  </div>
+</div>
+{% endblock %}

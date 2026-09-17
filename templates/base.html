@@ -95,6 +95,17 @@
 <script src="{% static 'js/theme.js' %}"></script>
 <script src="{% static 'js/ethiopian-date.js' %}"></script>
 <script src="{% static 'js/i18n.js' %}"></script>
+{% comment %}
+  Managed pick-lists: a select you can add to and take back from, without
+  leaving the form. Loaded globally because it enhances any element carrying
+  .option-select, and several unrelated screens carry one.
+
+  Written as a comment BLOCK rather than the hash form: Django's hash comment
+  is single-line only, and one spread over several lines stops being a comment
+  and prints itself - onto every page in the app, since base.html is on all of
+  them. core.tests.RenderedOutputTests catches exactly that.
+{% endcomment %}
+<script src="{% static 'js/option-select.js' %}"></script>
 <script>
   // Auto-dismiss transient alerts, but never error or warning messages.
   setTimeout(function () {
