@@ -43,6 +43,8 @@ def create_sale(
     payment_channel_id=None,
     payment_channel_name: str = "",
     payment_reference: str = "",
+    walk_in_name: str = "",
+    walk_in_phone: str = "",
     due_date=None,
     notes: str = "",
 ) -> Transaction:
@@ -137,9 +139,30 @@ def create_sale(
             user=user,
         )
 
+    # A one-off buyer: somebody who paid and left, and is never coming back.
+    #
+    # WHY THIS IS NOT A Customer ROW
+    # ------------------------------
+    # The customer book is for people you will sell to again - it carries a
+    # credit limit, a balance and an aging position. Filing every passer-by in
+    # it turns a list somebody actually works from into a phone directory, and
+    # the debtor report into a haystack. The name and number still reach the
+    # receipt, because they go into the snapshot columns the sale already
+    # keeps for exactly this.
+    #
+    # No customer means no credit (see _validate_credit_eligibility), so a
+    # walk-in is paid in full or it is not a sale.
+    if customer is None:
+        walk_in_name = " ".join((walk_in_name or "").split())[:160]
+        walk_in_phone = (walk_in_phone or "").strip()[:30]
+    else:
+        walk_in_name, walk_in_phone = "", ""
+
     txn = Transaction.objects.create(
         owner=owned_by(user),
         customer=customer,
+        customer_name_snapshot=walk_in_name,
+        customer_phone_snapshot=walk_in_phone,
         discount_amount=discount_amount,
         tax_amount=tax_amount,
         amount_paid=amount_paid,

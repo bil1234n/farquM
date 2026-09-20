@@ -27,6 +27,10 @@ def seed_options(apps, schema_editor):
         for row in Option.objects.values("group", "label")
     }
 
+    # The `code` column arrives in core.0003, which also seeds the coded
+    # groups and backfills these rows. Anything with a code is therefore that
+    # migration's job, not this one's - writing it here would fail on a fresh
+    # database, where the column does not exist yet.
     Option.objects.bulk_create(
         [
             Option(
@@ -36,8 +40,8 @@ def seed_options(apps, schema_editor):
                 is_active=True,
                 is_seeded=True,
             )
-            for group, label, order in seed_pairs()
-            if (group, label.lower()) not in existing
+            for group, code, label, order in seed_pairs()
+            if not code and (group, label.lower()) not in existing
         ]
     )
 

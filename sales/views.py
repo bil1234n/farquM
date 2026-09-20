@@ -272,6 +272,9 @@ def sale_create(request):
                     payment_reference=form.cleaned_data.get(
                         "payment_reference", ""
                     ),
+                    # A one-off buyer: on the receipt, not in the book.
+                    walk_in_name=form.cleaned_data.get("walk_in_name", ""),
+                    walk_in_phone=form.cleaned_data.get("walk_in_phone", ""),
                     due_date=form.cleaned_data.get("due_date"),
                     notes=form.cleaned_data.get("notes", ""),
                 )

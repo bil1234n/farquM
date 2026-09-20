@@ -115,9 +115,14 @@ class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
     )
     name = models.CharField(max_length=160, db_index=True)
     description = models.TextField(blank=True)
-    unit = models.CharField(
-        max_length=10, choices=MaterialUnit.choices, default=MaterialUnit.KG
-    )
+    # `choices` keeps the built-in wording and a readable admin, but the
+    # column is NOT limited to it - a store that measures in jerrycans adds
+    # one from inside the dropdown. See get_unit_display below. 32, not 10,
+    # because a unit somebody types is not a two-letter code.
+    # No `choices=` - see the twin of this on inventory.Product: the list is
+    # editable, so binding the shipped eight to the field would have the model
+    # refuse a unit the dropdown had just offered.
+    unit = models.CharField(max_length=32, default=MaterialUnit.KG)
     supplier = models.ForeignKey(
         "inventory.Supplier",
         on_delete=models.SET_NULL,
@@ -175,6 +180,18 @@ class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
 
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+    def get_unit_display(self) -> str:
+        """
+        The wording for this material's unit, from the editable list.
+
+        Shadows Django's generated method on purpose - see the twin of this on
+        inventory.Product for why, and why every existing caller keeps working
+        without being touched.
+        """
+        from core.models import coded_label
+
+        return coded_label("MATERIAL_UNIT", self.unit, MaterialUnit.choices)
 
     def get_absolute_url(self):
         return reverse("production:material_detail", args=[self.pk])

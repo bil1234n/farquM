@@ -322,6 +322,29 @@ class SupplierSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "contact_person", "phone", "email", "address", "is_active"]
 
 
+def _validate_unit(value, group, builtin):
+    """
+    Accept any unit the editable list actually offers, and nothing else.
+
+    Open enough for a unit somebody added five minutes ago, closed enough that
+    a typo does not become an eighth unit nobody can see in the dropdown. The
+    built-ins are always allowed so a deployment whose seed has not run still
+    works.
+    """
+    from core.models import Option
+
+    value = (value or "").strip().upper()
+    if not value:
+        return value
+    if value in {code for code, _ in builtin.choices}:
+        return value
+    if Option.objects.in_group(group).filter(code=value).exists():
+        return value
+    raise serializers.ValidationError(
+        "That unit is not in the list. Add it from the dropdown first."
+    )
+
+
 class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
     financial_fields = ("cost_price", "stock_value")
     profit_fields = ("margin_percent", "profit_per_unit")
@@ -359,6 +382,16 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
     # answered with "This field is required." for a field the form says is
     # optional.
     sku = serializers.CharField(max_length=60, required=False, allow_blank=True)
+
+    # A plain CharField, not the ChoiceField DRF would build from the model's
+    # `choices`. The unit list is editable (core/options.py PRODUCT_UNIT), so a
+    # yard that sells by the jerrycan sends JERRYCAN - and a serializer frozen
+    # to the seven shipped units would answer "is not a valid choice" for a
+    # unit the app itself just offered them.
+    unit = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_unit(self, value):
+        return _validate_unit(value, "PRODUCT_UNIT", Product.Unit)
 
     class Meta:
         model = Product
@@ -695,6 +728,15 @@ class SaleCreateSerializer(serializers.Serializer):
     payment_reference = serializers.CharField(
         required=False, allow_blank=True, default="", max_length=80
     )
+    # A one-off buyer: a name and a number on the receipt, and no row in the
+    # customer book. Somebody who paid and left does not belong in a list that
+    # carries credit limits and an aging position.
+    walk_in_name = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=160
+    )
+    walk_in_phone = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=30
+    )
     due_date = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
 
@@ -715,6 +757,20 @@ class SaleCreateSerializer(serializers.Serializer):
 
         method = attrs.get("payment_method") or "CASH"
         paid = attrs.get("amount_paid") or Decimal("0.00")
+
+        # A walk-in has no credit account to owe against, so the only shape a
+        # walk-in sale can take is paid in full. Said here rather than left to
+        # the service's generic "a credit sale needs a registered customer",
+        # because at the counter the useful sentence names the choice: either
+        # collect it all, or register them.
+        if (attrs.get("walk_in_name") or "").strip() and not attrs.get("customer"):
+            if attrs.get("due_date"):
+                raise serializers.ValidationError({
+                    "due_date":
+                        "A one-off customer cannot be given a due date. "
+                        "Register them if they need to pay later."
+                })
+
         if channel_group_for_method(method) and paid > 0:
             if not (attrs.get("payment_channel")
                     or (attrs.get("payment_channel_name") or "").strip()):

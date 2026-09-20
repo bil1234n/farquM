@@ -362,9 +362,25 @@ class Transaction(OwnedModel, TimeStampedModel):
 
     @property
     def customer_display(self) -> str:
+        """
+        Who this sale was to, in one line.
+
+        A one-off buyer reads exactly like a registered one - name and number
+        - because on a receipt, or in a list somebody is scanning for "that
+        sale to Chala", the difference between a passer-by and an account is
+        not the interesting part. What they are NOT is anonymous: before the
+        one-off boxes existed, every walk-in was the same unsearchable words.
+        """
         if self.customer:
             return f"{self.customer.name} ({self.customer.phone})"
-        return self.customer_name_snapshot or "Walk-in customer"
+        if self.customer_name_snapshot:
+            phone = self.customer_phone_snapshot.strip()
+            return (
+                f"{self.customer_name_snapshot} ({phone})"
+                if phone
+                else self.customer_name_snapshot
+            )
+        return "Walk-in customer"
 
     @property
     def payment_display(self) -> str:

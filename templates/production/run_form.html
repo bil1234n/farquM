@@ -80,8 +80,8 @@
         </div>
         <div class="card-footer bg-light small d-flex justify-content-between">
           <span class="text-muted">
-            Leave this empty if nothing failed. Anything listed here replaces
-            the &ldquo;rejected&rdquo; figure on the left.
+            Leave this empty if nothing failed. These lines are the batch's
+            rejected total - there is no separate figure to keep in step.
           </span>
           <strong>Total damaged: <span id="damageTotal">0</span></strong>
         </div>
@@ -178,7 +178,9 @@
     var template = document.getElementById("lineTemplate");
     var productField = document.getElementById("id_product");
     var quantityField = document.getElementById("id_quantity_produced");
-    var rejectField = document.getElementById("id_quantity_rejected");
+    // Declared up here because attempted() reads it, and that runs from the
+    // material planner as well as from the damage rows.
+    var damageTotal = document.getElementById("damageTotal");
     var planCard = document.getElementById("planCard");
     var planSummary = document.getElementById("planSummary");
     var planUrl = "{% url 'production:plan_api' %}";
@@ -202,10 +204,12 @@
     }
 
     /* The whole mix, not just the good units: materials go in before anyone
-       knows which blocks will crack. */
+       knows which blocks will crack, so the failures are part of what the
+       recipe has to cover. The damage lines are where that figure lives now -
+       damageTotal holds their sum. */
     function attempted() {
       var made = parseInt(quantityField && quantityField.value, 10) || 0;
-      var lost = parseInt(rejectField && rejectField.value, 10) || 0;
+      var lost = parseInt(damageTotal && damageTotal.textContent, 10) || 0;
       return made + lost;
     }
 
@@ -271,19 +275,19 @@
       if (event.target.classList.contains("material")) { showStock(event.target.closest("tr")); }
     });
 
-    [productField, quantityField, rejectField].forEach(function (field) {
+    [productField, quantityField].forEach(function (field) {
       if (field) { field.addEventListener("change", function () { loadPlan(); }); }
     });
 
     addLine();
 
     /* ---- Damage -----------------------------------------------------
-       The itemised lines are the truth; the "rejected" box mirrors their
-       total and goes read-only, because two boxes holding the same number
-       is one box too many and they always end up disagreeing. */
+       The itemised lines are the only record of what broke. There used to be
+       a "rejected" box above them holding the same number in a different
+       place, and the two drifted apart; the total below is shown, not typed,
+       and the batch is saved with it. */
     var damageBody = document.querySelector("#damages tbody");
     var damageTemplate = document.getElementById("damageTemplate");
-    var damageTotal = document.getElementById("damageTotal");
 
     function addDamage() {
       damageBody.appendChild(damageTemplate.content.cloneNode(true));
@@ -299,21 +303,9 @@
         total += parseInt(input.value, 10) || 0;
       });
       damageTotal.textContent = total;
-
-      if (rejectField) {
-        var itemised = damageBody.querySelectorAll("tr").length > 0;
-        if (itemised) {
-          rejectField.value = total;
-          rejectField.readOnly = true;
-          rejectField.classList.add("bg-body-secondary");
-        } else {
-          rejectField.readOnly = false;
-          rejectField.classList.remove("bg-body-secondary");
-        }
-        // The mix is good units plus failures, so the recipe plan has to be
-        // recalculated whenever the damage total moves.
-        loadPlan();
-      }
+      // The mix is good units plus failures - the broken ones ate cement too -
+      // so the recipe plan is recalculated whenever the damage total moves.
+      loadPlan();
     }
 
     document.getElementById("addDamage").addEventListener("click", function () {

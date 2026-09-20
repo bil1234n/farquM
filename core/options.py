@@ -35,8 +35,22 @@ class OptionGroup:
     #: Wording for the "add a new one" row inside the select.
     add_label: str = "Add new"
     help: str = ""
-    #: Seeded once by migration.
-    defaults: tuple[str, ...] = field(default_factory=tuple)
+    #: Seeded once by migration. Either a plain label, or a (code, label)
+    #: pair when something stores the CODE rather than the wording - a unit,
+    #: for instance, where every product row already holds "PIECE".
+    defaults: tuple = field(default_factory=tuple)
+
+    @property
+    def is_coded(self) -> bool:
+        """
+        Whether rows elsewhere store this group's code instead of its label.
+
+        A coded group can be RENAMED safely - "Piece" becoming "Each" leaves
+        every product still pointing at PIECE. An uncoded one is referenced by
+        id with a snapshot of the wording, which is the right shape for a bank
+        or a damage type.
+        """
+        return any(isinstance(d, tuple) for d in self.defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +159,40 @@ GROUPS: tuple[OptionGroup, ...] = (
         ),
     ),
     OptionGroup(
+        key="PRODUCT_UNIT",
+        label="Sold by",
+        add_label="Add a unit",
+        help="How a finished product is counted and sold.",
+        defaults=(
+            ("PIECE", "Piece"),
+            ("BOX", "Box"),
+            ("CARTON", "Carton"),
+            ("KG", "Kilogram"),
+            ("LITRE", "Litre"),
+            ("METER", "Meter"),
+            ("PACK", "Pack"),
+        ),
+    ),
+    OptionGroup(
+        key="MATERIAL_UNIT",
+        label="Measured in",
+        add_label="Add a unit",
+        help="How a raw material is weighed or counted in the store.",
+        # Deliberately not the same list as PRODUCT_UNIT: nobody sells a cubic
+        # metre of hollow blocks, and nobody buys cement by the "carton".
+        # Sharing one list would put wrong options in both dropdowns.
+        defaults=(
+            ("KG", "Kilogram"),
+            ("TONNE", "Tonne"),
+            ("BAG", "Bag"),
+            ("M3", "Cubic metre"),
+            ("LITRE", "Litre"),
+            ("PIECE", "Piece"),
+            ("METER", "Metre"),
+            ("ROLL", "Roll"),
+        ),
+    ),
+    OptionGroup(
         key="PRODUCTION_REQUEST_REASON",
         label="Reason",
         add_label="Add a reason",
@@ -175,13 +223,22 @@ def is_known(key: str) -> bool:
     return group_for(key) is not None
 
 
-def seed_pairs() -> list[tuple[str, str, int]]:
-    """(group, label, sort_order) for every default, for the seed migration."""
-    rows: list[tuple[str, str, int]] = []
+def seed_pairs() -> list[tuple[str, str, str, int]]:
+    """(group, code, label, sort_order) for every default, for the migration."""
+    rows: list[tuple[str, str, str, int]] = []
     for group in GROUPS:
-        for index, label in enumerate(group.defaults):
-            rows.append((group.key, label, (index + 1) * 10))
+        for index, entry in enumerate(group.defaults):
+            code, label = entry if isinstance(entry, tuple) else ("", entry)
+            rows.append((group.key, code, label, (index + 1) * 10))
     return rows
+
+
+#: Groups whose code is written into another table's column.
+CODED_GROUPS: frozenset[str] = frozenset(g.key for g in GROUPS if g.is_coded)
+
+
+def is_coded(key: str) -> bool:
+    return (key or "").strip().upper() in CODED_GROUPS
 
 
 # ---------------------------------------------------------------------------

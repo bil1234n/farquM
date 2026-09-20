@@ -27,19 +27,33 @@ from core.options import GROUPS, group_for, is_known
 
 class OptionSerializer(serializers.ModelSerializer):
     can_remove = serializers.SerializerMethodField()
+    #: Renaming is the wider right of the two - see Option.may_be_renamed_by -
+    #: so a client cannot work it out from `can_remove` and has to be told.
+    can_rename = serializers.SerializerMethodField()
     group_label = serializers.CharField(read_only=True)
+    #: What a client sends back when this entry is chosen - the code for a
+    #: list stored by code (units), the id for everything else. One field to
+    #: read, so no caller has to know which kind of list it is looking at.
+    value = serializers.CharField(read_only=True)
 
     class Meta:
         model = Option
         fields = [
-            "id", "group", "group_label", "label", "sort_order",
-            "is_active", "is_seeded", "use_count", "can_remove",
+            "id", "group", "group_label", "label", "code", "value",
+            "sort_order", "is_active", "is_seeded", "use_count",
+            "can_remove", "can_rename",
         ]
-        read_only_fields = ["id", "is_seeded", "use_count"]
+        # `code` is generated, never sent: a client choosing its own identifier
+        # could collide with one already written into a thousand product rows.
+        read_only_fields = ["id", "code", "value", "is_seeded", "use_count"]
 
     def get_can_remove(self, obj) -> bool:
         request = self.context.get("request")
         return obj.may_be_removed_by(getattr(request, "user", None))
+
+    def get_can_rename(self, obj) -> bool:
+        request = self.context.get("request")
+        return obj.may_be_renamed_by(getattr(request, "user", None))
 
     def validate_group(self, value):
         value = (value or "").strip().upper()
@@ -115,8 +129,18 @@ class OptionViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user, is_seeded=False)
 
     def perform_update(self, serializer):
-        instance = serializer.instance
-        if not instance.may_be_removed_by(self.request.user):
+        """
+        Rename an entry.
+
+        Safe for a coded list by construction: products store PIECE, not
+        "Piece", so renaming it to "Each" re-words every product at once - and
+        that is the point of the list being editable. For an uncoded list the
+        rows that already used it keep their own snapshot, so a rename only
+        changes what future ones say.
+        """
+        # One rule, on the model, so the list a client is shown (can_rename)
+        # and the answer it gets when it tries cannot drift apart.
+        if not serializer.instance.may_be_renamed_by(self.request.user):
             raise serializers.ValidationError(
                 "You can only change entries you added yourself."
             )

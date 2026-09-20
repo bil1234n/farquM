@@ -1414,3 +1414,264 @@ class StockRequestTests(ApiTestBase):
         ).json()["results"][0]
         self.assertEqual(closed["status"], "FULFILLED")
         self.assertIsNotNone(closed["fulfilled_run"])
+
+
+class EditableUnitTests(ApiTestBase):
+    """
+    "Sold by" and "Measured in" are lists, not a fixed seven.
+
+    WHY THIS EXISTS
+    ---------------
+    A yard that sells by the pallet used to have three bad options: pick the
+    nearest wrong unit, put "pallet" in the description, or wait for an app
+    release. The list is now the same managed pick-list as the banks - with
+    one difference that these tests are really about.
+
+    A product stores the CODE `PIECE`, never the word "Piece". So re-wording
+    the entry re-labels every product that uses it, in both languages, with no
+    migration and nothing orphaned. Get that wrong in either direction and you
+    either cannot rename anything, or a rename silently detaches a thousand
+    rows from their unit.
+    """
+
+    def test_the_unit_list_is_served_with_codes(self):
+        rows = self.as_(self.sales).get(
+            "/api/options/?group=PRODUCT_UNIT"
+        ).json()
+        by_code = {row["code"]: row for row in rows}
+        self.assertIn("PIECE", by_code, "the seeded units must carry codes")
+        self.assertEqual(
+            by_code["PIECE"]["value"], "PIECE",
+            "a coded list sends the code back, not the row id",
+        )
+
+    def test_a_product_can_be_saved_with_a_unit_somebody_added(self):
+        client = self.as_(self.manager)
+        added = client.post(
+            "/api/options/",
+            {"group": "PRODUCT_UNIT", "label": "Pallet"},
+            content_type="application/json",
+        )
+        self.assertEqual(added.status_code, 201)
+        code = added.json()["value"]
+        self.assertTrue(code, "a new unit needs a code to be stored by")
+
+        saved = client.patch(
+            f"/api/products/{self.product.pk}/",
+            {"unit": code},
+            content_type="application/json",
+        )
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(saved.json()["unit_display"], "Pallet")
+
+    def test_renaming_a_unit_re_words_every_product_that_uses_it(self):
+        """The whole point: one edit, and the products follow."""
+        self.product.unit = "PIECE"
+        self.product.save(update_fields=["unit"])
+
+        piece = Option.objects.in_group("PRODUCT_UNIT").get(code="PIECE")
+        renamed = self.as_(self.admin).patch(
+            f"/api/options/{piece.pk}/",
+            {"label": "Each"},
+            content_type="application/json",
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.content)
+
+        shown = self.as_(self.sales).get(
+            f"/api/products/{self.product.pk}/"
+        ).json()
+        self.assertEqual(shown["unit_display"], "Each")
+        self.product.refresh_from_db()
+        self.assertEqual(
+            self.product.unit, "PIECE",
+            "the stored code must not move when the wording does",
+        )
+
+    def test_a_seller_may_not_re_word_the_shared_unit_list(self):
+        piece = Option.objects.in_group("PRODUCT_UNIT").get(code="PIECE")
+        response = self.as_(self.sales).patch(
+            f"/api/options/{piece.pk}/",
+            {"label": "Each"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            Option.objects.get(pk=piece.pk).label, "Piece",
+            "a refused rename must change nothing",
+        )
+
+    def test_can_rename_is_told_to_the_client_not_guessed(self):
+        """
+        Renaming is wider than removal - a seeded unit may be re-worded but
+        not removed - so the two flags cannot be collapsed into one.
+        """
+        piece = [
+            row for row in self.as_(self.admin).get(
+                "/api/options/?group=PRODUCT_UNIT"
+            ).json()
+            if row["code"] == "PIECE"
+        ][0]
+        self.assertTrue(piece["can_rename"])
+
+        as_seller = [
+            row for row in self.as_(self.sales).get(
+                "/api/options/?group=PRODUCT_UNIT"
+            ).json()
+            if row["code"] == "PIECE"
+        ][0]
+        self.assertFalse(as_seller["can_rename"])
+        self.assertFalse(as_seller["can_remove"])
+
+    def test_a_unit_that_is_in_no_list_is_refused(self):
+        """
+        Open enough for a unit added five minutes ago, closed enough that a
+        typo does not become an eighth unit nobody can see in the dropdown.
+        """
+        response = self.as_(self.manager).patch(
+            f"/api/products/{self.product.pk}/",
+            {"unit": "PALLETT"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unit", response.json())
+
+    def test_a_material_takes_its_own_list(self):
+        from production.models import RawMaterial
+
+        client = self.as_(self.manager)
+        added = client.post(
+            "/api/options/",
+            {"group": "MATERIAL_UNIT", "label": "Truckload"},
+            content_type="application/json",
+        )
+        code = added.json()["value"]
+
+        material = RawMaterial.objects.create(
+            name="Sand", code="SND", unit="KG",
+            quantity_in_stock=Decimal("0"), unit_cost=Decimal("1.00"),
+            owner=self.manager,
+        )
+        saved = client.patch(
+            f"/api/materials/{material.pk}/",
+            {"unit": code},
+            content_type="application/json",
+        )
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(saved.json()["unit_display"], "Truckload")
+
+        # The two lists stay apart: a material unit is not offered for a
+        # product, or the dropdowns become a jumble of both trades.
+        refused = client.patch(
+            f"/api/products/{self.product.pk}/",
+            {"unit": code},
+            content_type="application/json",
+        )
+        self.assertEqual(refused.status_code, 400)
+
+
+class WalkInCustomerTests(ApiTestBase):
+    """
+    Somebody who paid and left.
+
+    The customer book carries a credit limit, a balance and a place in the
+    aging report. Filing every passer-by in it turns the list somebody works
+    from into a phone directory and the debtor report into a haystack - so a
+    one-off buyer gets a name and a number on the receipt, and no account.
+
+    No account means no credit: these tests are mostly about that door being
+    shut, because the alternative is a debt with nobody's name on it.
+    """
+
+    def _cart(self):
+        return [{
+            "product": self.product.pk,
+            "quantity": 1,
+            "unit_price": "15.00",
+        }]
+
+    def test_a_one_off_buyer_is_named_on_the_sale_but_not_in_the_book(self):
+        before = Customer.objects.count()
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {
+                "items": self._cart(),
+                "amount_paid": "15.00",
+                "payment_method": "CASH",
+                "walk_in_name": "  Chala   Bekele ",
+                "walk_in_phone": " 0922 ",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        sale = response.json()
+        self.assertIsNone(sale["customer"])
+        # Name and number, tidied of the spaces a phone keyboard adds, and on
+        # the sale itself rather than in a book somebody has to maintain.
+        self.assertEqual(sale["customer_display"], "Chala Bekele (0922)")
+        self.assertEqual(
+            Customer.objects.count(), before,
+            "a passer-by must not land in the customer book",
+        )
+
+    def test_a_one_off_buyer_cannot_be_given_a_due_date(self):
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {
+                "items": self._cart(),
+                "amount_paid": "15.00",
+                "payment_method": "CASH",
+                "walk_in_name": "Chala",
+                "due_date": "2030-01-01",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("due_date", response.json())
+
+    def test_a_part_paid_one_off_sale_is_refused(self):
+        """An unpaid balance with no account behind it is not a debt - it is
+        a hole. The server refuses it whatever the app sends."""
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {
+                "items": self._cart(),
+                "amount_paid": "5.00",
+                "payment_method": "CASH",
+                "walk_in_name": "Chala",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            DebtRecord.objects.count(), 0,
+            "nothing may be owed by somebody with no account",
+        )
+
+    def test_a_registered_customer_keeps_their_own_name(self):
+        """
+        A name typed into the one-off boxes by mistake must not end up on a
+        registered customer's sale - the account is the answer, not both.
+        """
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {
+                "items": self._cart(),
+                "customer": self.customer.pk,
+                "amount_paid": "15.00",
+                "payment_method": "CASH",
+                "walk_in_name": "Somebody Else",
+                "walk_in_phone": "0999",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["customer_display"], "Abebe (0911)")
+
+        from sales.models import Transaction
+
+        txn = Transaction.objects.get(pk=response.json()["id"])
+        self.assertEqual(
+            txn.customer_name_snapshot, "Abebe",
+            "the snapshot follows the account, never the one-off boxes",
+        )
+        self.assertEqual(txn.customer_phone_snapshot, "0911")

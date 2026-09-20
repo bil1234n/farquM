@@ -72,6 +72,18 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         empty_label="Walk-in customer (cash only)",
         help_text="Required if any balance will be left unpaid.",
     )
+    # A one-off buyer: a name and a number on the receipt, and no row in the
+    # customer book. That book is for people you will sell to again - it
+    # carries a credit limit and an aging position - and filing every
+    # passer-by in it turns a working list into a phone directory.
+    walk_in_name = forms.CharField(
+        required=False, max_length=160, label="Name",
+        help_text="For somebody buying once. They are not added to your "
+                  "customer list, and the sale must be paid in full.",
+    )
+    walk_in_phone = forms.CharField(
+        required=False, max_length=30, label="Phone",
+    )
     payment_method = forms.ChoiceField(
         choices=PaymentMethod.choices, initial=PaymentMethod.CASH
     )
@@ -159,6 +171,12 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
             raise forms.ValidationError("The due date cannot be in the past.")
         return due
 
+    def clean_walk_in_name(self):
+        return " ".join((self.cleaned_data.get("walk_in_name") or "").split())
+
+    def clean_walk_in_phone(self):
+        return (self.cleaned_data.get("walk_in_phone") or "").strip()
+
     def clean(self):
         """
         A bank transfer, cheque or mobile-money payment leaves no cash in the
@@ -169,6 +187,19 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         cleaned = super().clean()
         if not self.can_discount:
             cleaned["discount_amount"] = ZERO
+
+        # A one-off buyer has no account for a balance to sit against, so the
+        # only shape that sale can take is paid in full. Said here rather than
+        # left to the service's generic "a credit sale needs a registered
+        # customer", because at the counter the useful sentence names the
+        # choice: collect it all, or register them.
+        if cleaned.get("walk_in_name") and not cleaned.get("customer"):
+            if cleaned.get("due_date"):
+                self.add_error(
+                    "due_date",
+                    "A one-off customer cannot be given a due date. "
+                    "Register them if they need to pay later.",
+                )
         method = cleaned.get("payment_method")
         paid = cleaned.get("amount_paid") or 0
 

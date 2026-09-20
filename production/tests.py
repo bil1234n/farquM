@@ -17,6 +17,7 @@ WHAT THESE PROTECT
 5. Scope. One shared store - cement is cement, whoever recorded the
    delivery - while who may ADJUST or REVERSE it stays a permission.
 """
+import re
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -610,7 +611,6 @@ class WebAccessTests(YardTestBase):
             {
                 "product": self.block.pk,
                 "quantity_produced": 60,
-                "quantity_rejected": 0,
                 "produced_on": timezone.localdate().isoformat(),
                 "notes": "Morning shift",
                 # Parallel arrays, the same shape the till posts its cart in.
@@ -624,6 +624,62 @@ class WebAccessTests(YardTestBase):
         self.assertEqual(ProductionRun.objects.count(), 1)
         self.block.refresh_from_db()
         self.assertEqual(self.block.stock_quantity, 60)
+
+    def test_the_batch_date_leads_the_form_and_starts_on_today(self):
+        """
+        The date is the field most often silently wrong - a batch written up
+        the next morning belongs to yesterday - so it comes first, and it is
+        filled in: a required box that opens empty makes the common case the
+        extra work.
+        """
+        html = self.as_(self.manager).get("/production/runs/new/").content.decode()
+        names = re.findall(r'<(?:input|select|textarea)\b[^>]*\bname="([a-z_]+)"', html)
+        fields = [n for n in names if n in {"produced_on", "product",
+                                            "quantity_produced", "notes"}]
+        self.assertEqual(fields[0], "produced_on", fields)
+        today = timezone.localdate().isoformat()
+        self.assertRegex(
+            html, r'<input[^>]*name="produced_on"[^>]*value="%s"' % today
+        )
+
+    def test_the_form_has_no_rejected_box_to_disagree_with_the_lines(self):
+        """
+        There were two fields holding the same number and they drifted: the
+        box said 26 while the lines below added up to 23, with nothing on
+        screen saying which the batch would be saved with. The lines are the
+        answer - they are what somebody counted - so the box is gone from
+        both front doors and the total is added up.
+        """
+        page = self.as_(self.manager).get("/production/runs/new/")
+        self.assertNotContains(page, 'name="quantity_rejected"')
+
+        response = self.as_(self.manager).post(
+            "/production/runs/new/",
+            {
+                "product": self.block.pk,
+                "quantity_produced": 57,
+                "produced_on": timezone.localdate().isoformat(),
+                "material_id[]": [str(self.cement.pk), str(self.sand.pk)],
+                "quantity[]": ["50", "0.180"],
+                "expected[]": ["50", "0.180"],
+                "damage_type[]": ["", ""],
+                "damage_name[]": ["Cracked", "Chipped"],
+                "damage_quantity[]": ["2", "1"],
+                "damage_note[]": ["Mix too wet", ""],
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        run = ProductionRun.objects.latest("id")
+        self.assertEqual(
+            run.quantity_rejected, 3,
+            "the rejected total has to come from the damage lines",
+        )
+        self.block.refresh_from_db()
+        self.assertEqual(
+            self.block.stock_quantity, 57,
+            "only the good units reach the shelf",
+        )
 
 
 class ApiTests(YardTestBase):

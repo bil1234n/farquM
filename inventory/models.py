@@ -138,7 +138,20 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
         null=True,
         blank=True,
     )
-    unit = models.CharField(max_length=10, choices=Unit.choices, default=Unit.PIECE)
+    # `choices` is kept for the built-in wording and for a readable admin, but
+    # the column is NOT limited to it: a yard that sells by the jerrycan adds
+    # one from inside the dropdown and the code is stored here like any other.
+    # 32, not 10, because a unit somebody types is not a two-letter code.
+    # NO `choices=` ON PURPOSE.
+    #
+    # `Unit` above is still the shipped list - it seeds the editable one and
+    # supplies the fallback wording - but binding it to the field here would
+    # make Model.full_clean() refuse every unit added since deploy, which is
+    # exactly the thing this field was opened up for: a product form posting
+    # PALLET was told "Select a valid choice" even though PALLET was in the
+    # dropdown it came from. What may be stored is decided by the list, in
+    # one place - see api.serializers._validate_unit and core.forms.unit_choices.
+    unit = models.CharField(max_length=32, default=Unit.PIECE)
 
     # -- Money --------------------------------------------------------------
     cost_price = models.DecimalField(
@@ -205,6 +218,26 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
 
     def __str__(self):
         return f"{self.name} ({self.sku})"
+
+    def get_unit_display(self) -> str:
+        """
+        The wording for this product's unit, from the editable list.
+
+        DELIBERATELY SHADOWING DJANGO'S GENERATED METHOD
+        -----------------------------------------------
+        `choices` on a field makes Django attach a `get_unit_display` that can
+        only ever return one of the seven it shipped with - so a unit added
+        from the dropdown would render as "BUCKET" everywhere. Django only
+        attaches its version when the class does not already define one
+        (Field.contribute_to_class checks hasattr), so defining it here wins.
+
+        Doing it this way rather than renaming the method means every caller
+        keeps working untouched: the serializers that read
+        `source="get_unit_display"`, the templates, and the phone.
+        """
+        from core.models import coded_label
+
+        return coded_label("PRODUCT_UNIT", self.unit, self.Unit.choices)
 
     def get_absolute_url(self):
         return reverse("inventory:product_detail", args=[self.pk])

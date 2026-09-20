@@ -1115,3 +1115,184 @@ class FriendlyErrorTests(TestCase):
             text = describe(DatabaseError("relation does not exist"))
         self.assertNotIn("relation does not exist", text)
         self.assertIn("nothing was changed", text)
+
+
+class WebFormPickListTests(AccessTestBase):
+    """
+    The browser half of "every select can be added to and re-worded".
+
+    The phone got this first. The web forms are the other front door, and a
+    rule that holds on only one of them is a rule the reports cannot rely on -
+    so these check the page actually carries the hooks the shared widget
+    attaches to, rather than trusting that somebody remembered.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.admin)
+
+    def _unit_widget(self, html):
+        """The opening tag of whatever renders `name="unit"`."""
+        match = re.search(r'<(select|input)\b[^>]*\bname="unit"[^>]*>', html)
+        self.assertIsNotNone(match, "the form has no unit field at all")
+        return match.group(0)
+
+    def test_the_product_unit_select_is_a_managed_list(self):
+        from django.urls import reverse
+
+        html = self.client.get(reverse("inventory:product_create")).content.decode()
+        tag = self._unit_widget(html)
+        # A DROPDOWN - not merely the attributes. Taking `choices` off the
+        # model field once turned this into a free-text box that still
+        # carried them, and a test that only looked for the attribute passed.
+        self.assertTrue(tag.startswith("<select"), tag)
+        self.assertIn('data-option-group="PRODUCT_UNIT"', tag)
+        self.assertIn('data-option-value="code"', tag)
+        select = re.search(r'<select\b[^>]*name="unit".*?</select>', html, re.S).group(0)
+        self.assertIn('<option value="PIECE" selected>Piece</option>', select,
+                      "a new product starts on the model's default unit")
+
+    def test_the_material_unit_select_is_a_managed_list(self):
+        from django.urls import reverse
+
+        html = self.client.get(reverse("production:material_create")).content.decode()
+        tag = self._unit_widget(html)
+        self.assertTrue(tag.startswith("<select"), tag)
+        self.assertIn('data-option-group="MATERIAL_UNIT"', tag)
+
+    def test_a_unit_in_no_list_is_refused_by_the_browser_form(self):
+        """
+        Open enough for a unit added a minute ago, closed enough that a typo
+        does not become a unit nobody can pick again.
+        """
+        from django.urls import reverse
+
+        response = self.client.post(
+            reverse("inventory:product_create"),
+            {
+                "name": "Typo block",
+                "unit": "PALLETT",
+                "cost_price": "30.00",
+                "selling_price": "42.00",
+                "low_stock_threshold": "5",
+                "is_active": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 200, "the form should re-render")
+        self.assertIn("unit", response.context["form"].errors)
+        self.assertFalse(Product.objects.filter(name="Typo block").exists())
+
+    def test_a_product_saves_with_a_unit_somebody_added(self):
+        """
+        The end of the round trip: a unit added from either front door has to
+        be accepted by the form, not met with "Select a valid choice".
+        """
+        from django.urls import reverse
+
+        from core.models import Option
+
+        Option.objects.create(
+            group="PRODUCT_UNIT", label="Pallet", created_by=self.admin
+        )
+        code = Option.objects.get(group="PRODUCT_UNIT", label="Pallet").code
+        self.assertTrue(code, "a unit needs a code to be stored by")
+
+        response = self.client.post(
+            reverse("inventory:product_create"),
+            {
+                "name": "Hollow block",
+                "unit": code,
+                "cost_price": "30.00",
+                "selling_price": "42.00",
+                "low_stock_threshold": "5",
+                "is_active": "on",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        saved = Product.objects.get(name="Hollow block")
+        self.assertEqual(saved.unit, code)
+        self.assertEqual(saved.get_unit_display(), "Pallet")
+
+
+class WebWalkInSaleTests(AccessTestBase):
+    """
+    A buyer who is not coming back, recorded at the browser till.
+
+    The customer book carries a credit limit and a place in the aging report,
+    so filing a passer-by in it costs something: the list somebody works from
+    becomes a phone directory. Their name and number belong on the sale.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.client.force_login(self.sales)
+
+    def _post(self, **extra):
+        data = {
+            "product_id[]": [str(self.product.pk)],
+            "quantity[]": ["2"],
+            "unit_price[]": ["20.00"],
+            "line_discount[]": ["0.00"],
+            "payment_method": "CASH",
+            "amount_paid": "40.00",
+            "discount_amount": "0",
+            "tax_amount": "0",
+        }
+        data.update(extra)
+        return self.client.post("/sales/new/", data, follow=True)
+
+    def test_a_one_off_buyer_is_named_on_the_sale_and_not_in_the_book(self):
+        from sales.models import Transaction
+
+        before = Customer.objects.count()
+        response = self._post(
+            walk_in_name="  Chala   Bekele ", walk_in_phone=" 0933 "
+        )
+        self.assertEqual(response.status_code, 200)
+
+        txn = Transaction.objects.latest("id")
+        self.assertIsNone(txn.customer)
+        self.assertEqual(txn.customer_name_snapshot, "Chala Bekele")
+        self.assertEqual(txn.customer_phone_snapshot, "0933")
+        self.assertEqual(
+            Customer.objects.count(), before,
+            "a passer-by must not land in the customer book",
+        )
+
+    def test_a_one_off_buyer_cannot_be_given_a_due_date(self):
+        from sales.models import Transaction
+
+        before = Transaction.objects.count()
+        response = self._post(
+            walk_in_name="Chala",
+            amount_paid="10.00",
+            due_date="2030-01-01",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "cannot be given a due date")
+        self.assertEqual(
+            Transaction.objects.count(), before,
+            "the sale must not be recorded when the form is refused",
+        )
+
+    def test_an_unpaid_one_off_sale_is_refused(self):
+        """No account behind it means the balance is owed by nobody."""
+        from sales.models import Transaction
+
+        before = Transaction.objects.count()
+        self._post(walk_in_name="Chala", amount_paid="5.00")
+        self.assertEqual(Transaction.objects.count(), before)
+        self.assertEqual(DebtRecord.objects.count(), 0)
+
+    def test_a_registered_customer_wins_over_the_one_off_boxes(self):
+        from sales.models import Transaction
+
+        self._post(
+            customer=str(self.customer.pk),
+            walk_in_name="Somebody Else",
+            walk_in_phone="0999",
+        )
+        txn = Transaction.objects.latest("id")
+        self.assertEqual(txn.customer_id, self.customer.pk)
+        self.assertEqual(txn.customer_name_snapshot, "Abebe")

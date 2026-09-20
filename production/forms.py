@@ -2,15 +2,38 @@
 from decimal import Decimal, InvalidOperation
 
 from django import forms
+from django.utils import timezone
 
+from core.forms import unit_choices
 from core.models import Option
 from core.scoping import scoped
 from inventory.models import Product, Supplier
 
-from .models import ProductionRequest, ProductionRun, RawMaterial, Recipe
+from .models import (
+    MaterialUnit,
+    ProductionRequest,
+    ProductionRun,
+    RawMaterial,
+    Recipe,
+)
 
 
 class RawMaterialForm(forms.ModelForm):
+    # DECLARED, NOT GENERATED.
+    #
+    # The model field no longer carries `choices` - a unit added since deploy
+    # has to be storable - so left to itself the ModelForm would render a
+    # free-text box here, and a typo would quietly become a unit nobody can
+    # pick from the dropdown. A ChoiceField keeps both halves: the list is
+    # whatever the editable Option list holds right now (filled in per request
+    # in __init__), and anything outside it is refused with the usual
+    # "Select a valid choice".
+    # `initial` from the model: a declared field does not inherit its default.
+    unit = forms.ChoiceField(
+        label="Unit", choices=(),
+        initial=RawMaterial._meta.get_field("unit").default,
+    )
+
     class Meta:
         model = RawMaterial
         fields = [
@@ -29,6 +52,18 @@ class RawMaterialForm(forms.ModelForm):
         self.fields["code"].required = False
         self.fields["supplier"].queryset = Supplier.objects.filter(is_active=True)
         self.fields["supplier"].empty_label = "No supplier"
+
+        # "Measured in" is an editable list, so its choices come from the
+        # table rather than the model's frozen eight - see core.forms.
+        self.fields["unit"].choices = unit_choices(
+            "MATERIAL_UNIT", MaterialUnit,
+            current=self.instance.unit if self.instance and self.instance.pk else "",
+        )
+        # Editable in place as well - see ProductForm for why it posts codes.
+        self.fields["unit"].widget.attrs.update({
+            "data-option-group": "MATERIAL_UNIT",
+            "data-option-value": "code",
+        })
 
         # A manager who may not see cost prices may not set one either. The
         # field is removed rather than disabled: a disabled input still posts
@@ -140,23 +175,34 @@ class ProductionRunForm(forms.ModelForm):
     view, the same way the till parses a cart.
     """
 
+    #: NO "Rejected / broken" BOX.
+    #:
+    #: There was one, above the damage lines, and the two disagreed: the box
+    #: said 26 while the lines below it added up to 23, and nothing on the
+    #: screen said which the batch would be saved with. The lines win - they
+    #: are the ones somebody counted, and they record WHAT went wrong as well
+    #: as how many - so the rejected total is now added up from them (see
+    #: production.services.record_production) and shown, never typed. The
+    #: phone form dropped the same box; two front doors, one answer.
     class Meta:
         model = ProductionRun
-        fields = ["product", "quantity_produced", "quantity_rejected",
-                  "produced_on", "notes"]
+        # The date FIRST, as on the phone's batch screen. It is the field most
+        # often silently wrong - a batch written up the next morning belongs
+        # to yesterday - and at the bottom of the card it was the last thing
+        # anybody looked at.
+        fields = ["produced_on", "product", "quantity_produced", "notes"]
         widgets = {
-            "produced_on": forms.DateInput(attrs={"type": "date"}),
+            # ISO explicitly: an <input type="date"> shows nothing at all for
+            # a value in any other format, which is how a filled-in date
+            # renders as an empty required box.
+            "produced_on": forms.DateInput(
+                attrs={"type": "date"}, format="%Y-%m-%d"
+            ),
             "notes": forms.Textarea(attrs={"rows": 2}),
         }
         labels = {
             "quantity_produced": "Good units produced",
-            "quantity_rejected": "Rejected / broken",
             "produced_on": "Date produced",
-        }
-        help_texts = {
-            "quantity_rejected": "Filled in from the damage lines below. "
-                                 "Type a figure only if you are not "
-                                 "itemising what went wrong.",
         }
 
     def __init__(self, *args, **kwargs):
@@ -167,6 +213,13 @@ class ProductionRunForm(forms.ModelForm):
                 Product.objects.active(), self.user
             ).order_by("name")
         self.fields["product"].empty_label = "Select a product"
+
+        # Today unless somebody says otherwise. The field had no default, so
+        # every batch opened on an empty required box - and a form should
+        # never make the common case the extra work.
+        today = timezone.localdate()
+        self.fields["produced_on"].initial = today
+        self.fields["produced_on"].widget.attrs["max"] = today.isoformat()
 
     def clean_quantity_produced(self):
         value = self.cleaned_data.get("quantity_produced") or 0

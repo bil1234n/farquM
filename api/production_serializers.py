@@ -11,6 +11,7 @@ from rest_framework import serializers
 
 from production.models import (
     MaterialMovement,
+    MaterialUnit,
     ProductionDamage,
     ProductionMaterial,
     ProductionRequest,
@@ -45,6 +46,17 @@ class RawMaterialSerializer(
     # the name, and a form that says "leave blank" must not be answered with
     # "this field is required".
     code = serializers.CharField(max_length=40, required=False, allow_blank=True)
+
+    # A plain CharField rather than the ChoiceField DRF builds from the
+    # model's `choices`: the unit list is editable (core/options.py
+    # MATERIAL_UNIT), and a serializer frozen to the eight shipped units would
+    # refuse one the app itself just offered.
+    unit = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_unit(self, value):
+        from .serializers import _validate_unit
+
+        return _validate_unit(value, "MATERIAL_UNIT", MaterialUnit)
 
     class Meta:
         model = RawMaterial

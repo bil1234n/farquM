@@ -100,3 +100,42 @@ class ReceiptField(MultipleFileField):
         for f in files:
             validate_receipt_file(f)
         return files
+
+
+def unit_choices(group, builtin, current=""):
+    """
+    The (code, label) pairs for an editable unit list.
+
+    WHY NOT JUST THE MODEL'S `choices`
+    ----------------------------------
+    Those are frozen at deploy time. "Sold by" and "Measured in" are lists the
+    yard maintains itself - a jerrycan, a wheelbarrow - so a form built from
+    the shipped seven would refuse a unit the app offered on a phone an hour
+    earlier, with "Select a valid choice".
+
+    `current` keeps the value a record already holds selectable even when that
+    entry has since been deactivated. Without it, opening an old product to
+    fix a typo would quietly move it onto a different unit on save.
+    """
+    from .models import Option
+
+    rows = list(
+        Option.objects.in_group(group)
+        .active()
+        .exclude(code="")
+        .order_by("sort_order", "-use_count", "label")
+        .values_list("code", "label")
+    )
+    if not rows:
+        # Nothing seeded yet - a fresh database mid-migration, say. The
+        # built-ins are a working list, not an empty dropdown.
+        rows = [(code, str(label)) for code, label in builtin.choices]
+
+    known = {code for code, _ in rows}
+    current = (current or "").strip()
+    if current and current not in known:
+        fallback = dict(builtin.choices).get(
+            current, current.replace("_", " ").title()
+        )
+        rows.append((current, str(fallback)))
+    return rows

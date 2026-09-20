@@ -477,10 +477,9 @@ def run_create(request):
                 run = record_production(
                     product=form.cleaned_data["product"],
                     quantity_produced=form.cleaned_data["quantity_produced"],
-                    quantity_rejected=form.cleaned_data.get("quantity_rejected") or 0,
-                    # When damage lines were filled in they ARE the rejected
-                    # total - the service adds them up and overwrites the box,
-                    # so the two can never disagree on the same run.
+                    # The damage lines ARE the rejected total: the service
+                    # adds them up. Nothing to pass, and nothing that can
+                    # disagree with them.
                     damages=damages,
                     fulfils=request.POST.getlist("fulfils[]"),
                     produced_on=form.cleaned_data.get("produced_on"),

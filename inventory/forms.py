@@ -1,6 +1,7 @@
 from django import forms
 
 from accounts.forms import StyledFormMixin
+from core.forms import unit_choices
 
 from .models import Category, Product, Supplier
 
@@ -34,6 +35,23 @@ class ProductForm(StyledFormMixin, forms.ModelForm):
     Matching is case-insensitive, which stops "Drinks" and "drinks" becoming
     two separate categories.
     """
+
+    # DECLARED, NOT GENERATED.
+    #
+    # The model field no longer carries `choices` - a unit added since deploy
+    # has to be storable - so left to itself the ModelForm would render a
+    # free-text box here, and a typo would quietly become a unit nobody can
+    # pick from the dropdown. A ChoiceField keeps both halves: the list is
+    # whatever the editable Option list holds right now (filled in per request
+    # in __init__), and anything outside it is refused with the usual
+    # "Select a valid choice".
+    # `initial` repeated from the model on purpose: a declared field does not
+    # inherit the model default, and without it a new product would take
+    # whichever unit happened to sort first in the list.
+    unit = forms.ChoiceField(
+        label="Unit", choices=(),
+        initial=Product._meta.get_field("unit").default,
+    )
 
     category_name = forms.CharField(
         required=False,
@@ -80,6 +98,22 @@ class ProductForm(StyledFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         self.fields["sku"].required = False
+
+        # "Sold by" is an editable list, so its choices come from the table
+        # rather than from the model's frozen seven. Rebuilt per form instance
+        # because a unit added on a phone thirty seconds ago has to be here.
+        self.fields["unit"].choices = unit_choices(
+            "PRODUCT_UNIT", Product.Unit, current=self.instance.unit
+            if self.instance and self.instance.pk else ""
+        )
+        # ...and the select itself can be added to, re-worded and pruned in
+        # place - static/js/option-select.js picks this up. `code` because a
+        # product stores PIECE rather than the word, which is what lets a
+        # rename re-label every product at once.
+        self.fields["unit"].widget.attrs.update({
+            "data-option-group": "PRODUCT_UNIT",
+            "data-option-value": "code",
+        })
 
         # Pre-fill the text boxes when editing an existing product.
         if self.instance and self.instance.pk:

@@ -1165,6 +1165,9 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
                 payment_channel_id=data.get("payment_channel"),
                 payment_channel_name=data.get("payment_channel_name", ""),
                 payment_reference=data.get("payment_reference", ""),
+                # A one-off buyer: on the receipt, not in the customer book.
+                walk_in_name=data.get("walk_in_name", ""),
+                walk_in_phone=data.get("walk_in_phone", ""),
                 due_date=data.get("due_date"),
                 notes=data.get("notes", ""),
             )

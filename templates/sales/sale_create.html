@@ -117,6 +117,46 @@
             <a href="{% url 'sales:customer_create' %}" target="_blank" class="small">
               <i class="bi bi-plus-circle me-1"></i>Register a new customer
             </a>
+
+            {% comment %}
+              A buyer who is not coming back.
+
+              Before this there were two options and both were bad: file the
+              passer-by in the customer book - which carries a credit limit
+              and a place in the aging report, so the list somebody works
+              from becomes a phone directory - or sell to them anonymously,
+              leaving nothing on the receipt to ring back. Name and number
+              live on the sale itself, in the snapshot columns it already
+              keeps, and no account is created. No account means no credit,
+              so the sale is paid in full; the server enforces that whatever
+              this page posts.
+            {% endcomment %}
+            <div class="mt-2">
+              <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none"
+                      id="walkInToggle">
+                <i class="bi bi-person-walking me-1"></i>
+                <span id="walkInToggleText">Buying once? Just take a name and phone</span>
+              </button>
+            </div>
+
+            <div class="border rounded p-2 mt-2 bg-body-tertiary {% if not form.walk_in_name.value %}d-none{% endif %}"
+                 id="walkInBox">
+              <div class="row g-2">
+                <div class="col-sm-7">
+                  <label class="form-label small mb-1"
+                         for="{{ form.walk_in_name.id_for_label }}">{{ form.walk_in_name.label }}</label>
+                  {{ form.walk_in_name }}
+                  {% for e in form.walk_in_name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+                </div>
+                <div class="col-sm-5">
+                  <label class="form-label small mb-1"
+                         for="{{ form.walk_in_phone.id_for_label }}">{{ form.walk_in_phone.label }}</label>
+                  {{ form.walk_in_phone }}
+                  {% for e in form.walk_in_phone.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+                </div>
+              </div>
+              <div class="form-text mb-0">{{ form.walk_in_name.help_text }}</div>
+            </div>
           </div>
 
           <div class="row g-2 mb-3">
@@ -175,7 +215,8 @@
                 Pay in full
               </button>
               {% if can_credit %}
-                <button type="button" class="btn btn-sm btn-outline-warning flex-fill" onclick="payNothing()">
+                <button type="button" id="payNothingBtn"
+                        class="btn btn-sm btn-outline-warning flex-fill" onclick="payNothing()">
                   Full credit
                 </button>
               {% endif %}
@@ -369,6 +410,59 @@ function recalc() {
   $('cartTable').classList.toggle('d-none', document.querySelectorAll('#cartBody tr').length === 0);
 
   window._saleTotal = total;
+}
+
+// ---- A buyer who is not coming back -----------------------------------
+// The two modes are mutually exclusive on purpose: a customer left selected
+// behind a one-off sale would be billed for it, and a name left in the boxes
+// would end up on a registered customer's receipt.
+const walkInBox  = $('walkInBox');
+const walkInName = $('id_walk_in_name');
+const walkInPhone = $('id_walk_in_phone');
+
+function walkInOn() {
+  return walkInBox && !walkInBox.classList.contains('d-none');
+}
+
+function showWalkIn(on) {
+  if (!walkInBox) return;
+  walkInBox.classList.toggle('d-none', !on);
+  $('walkInToggleText').textContent = on
+    ? 'Cancel - this is a registered customer'
+    : 'Buying once? Just take a name and phone';
+  if (on) {
+    if (custSelect.value) selectCustomer('');
+    walkInName.focus();
+  } else {
+    walkInName.value = '';
+    walkInPhone.value = '';
+  }
+  applyWalkInLock();
+}
+
+// With no account behind the sale, "full credit" and a due date are choices
+// that do not exist. Disabled rather than hidden, so the clerk can see WHY
+// the option went away rather than wondering where it went.
+function applyWalkInLock() {
+  const on = walkInOn();
+  const nothing = $('payNothingBtn');
+  if (nothing) { nothing.disabled = on; }
+  const due = $('id_due_date');
+  if (due) {
+    due.disabled = on;
+    if (on) due.value = '';
+  }
+  if (on) payFull();
+}
+
+if (walkInBox) {
+  $('walkInToggle').addEventListener('click', () => showWalkIn(!walkInOn()));
+  // Typing a name is itself the decision, so picking a customer afterwards
+  // has to undo it rather than leave both filled in.
+  walkInName.addEventListener('input', function () {
+    if (this.value.trim() && custSelect.value) selectCustomer('');
+  });
+  applyWalkInLock();
 }
 
 function payFull()    { $('id_amount_paid').value = fmt(window._saleTotal || 0); recalc(); }
@@ -600,6 +694,11 @@ function filterCustomers(term) {
 
 function selectCustomer(id) {
   custSelect.value = id || '';
+  if (id && typeof walkInOn === 'function' && walkInOn()) {
+    // Chose an account after starting a one-off: the account wins, and the
+    // name typed a moment ago must not ride along on their receipt.
+    showWalkIn(false);
+  }
   custPanel.classList.add('d-none');
   custSearch.value = '';
 

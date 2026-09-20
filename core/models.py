@@ -241,6 +241,67 @@ class OptionQuerySet(models.QuerySet):
         return self.filter(group=(key or "").strip().upper())
 
 
+#: group -> {code: label}, for the lists other tables store by code.
+#:
+#: A unit is read once per row on every product list, every sale line and
+#: every material card - one query each would turn a single page into a
+#: hundred. The table is a handful of short rows that change about twice a
+#: year, so it is held in the process and dropped whenever an Option is
+#: written. See Option.save().
+_LABEL_CACHE: dict = {}
+
+
+def labels_for(group: str) -> dict:
+    """{code: label} for one coded group, cached."""
+    group = (group or "").strip().upper()
+    cached = _LABEL_CACHE.get(group)
+    if cached is not None:
+        return cached
+    try:
+        rows = dict(
+            Option.objects.in_group(group)
+            .exclude(code="")
+            .values_list("code", "label")
+        )
+    except Exception:
+        # The table may not exist yet - during the migration that creates it,
+        # or on a half-built deployment. Falling back to the built-in wording
+        # beats a 500 on the product list.
+        return {}
+    _LABEL_CACHE[group] = rows
+    return rows
+
+
+def forget_labels(group: str = "") -> None:
+    """Drop the cached labels for one group, or for all of them."""
+    if group:
+        _LABEL_CACHE.pop((group or "").strip().upper(), None)
+    else:
+        _LABEL_CACHE.clear()
+
+
+def coded_label(group: str, code: str, builtin=None) -> str:
+    """
+    What to show for a stored code.
+
+    Order matters. The editable list wins, because renaming "Piece" to "Each"
+    has to change what every product says. The built-in wording is the
+    fallback for a deployment whose seed has not run, and the raw code is the
+    last resort - a unit somebody deleted still has to render as something.
+    """
+    code = (code or "").strip()
+    if not code:
+        return ""
+    found = labels_for(group).get(code)
+    if found:
+        return found
+    if builtin:
+        got = dict(builtin).get(code)
+        if got:
+            return str(got)
+    return code.replace("_", " ").title()
+
+
 class Option(TimeStampedModel):
     """
     One entry in a managed pick-list. The groups live in core/options.py.
@@ -266,6 +327,16 @@ class Option(TimeStampedModel):
         help_text="Which list this belongs to. See core/options.py.",
     )
     label = models.CharField(max_length=120)
+    #: Set only for groups whose CODE is written into another table's column -
+    #: a unit, where every product row already holds "PIECE". Renaming such an
+    #: entry to "Each" then leaves those rows pointing at the same thing,
+    #: which is exactly what an editable unit list has to allow.
+    code = models.CharField(
+        max_length=32,
+        blank=True,
+        db_index=True,
+        help_text="Stable identifier for lists other tables store by code.",
+    )
     sort_order = models.PositiveSmallIntegerField(
         default=100, help_text="Lower sorts first. Ties fall back to the label."
     )
@@ -312,9 +383,48 @@ class Option(TimeStampedModel):
         return self.label
 
     def save(self, *args, **kwargs):
+        from .options import is_coded
+
         self.group = (self.group or "").strip().upper()
         self.label = " ".join((self.label or "").split())[:120]
+        self.code = (self.code or "").strip().upper()
+        if not self.code and is_coded(self.group):
+            self.code = self._generate_code()
         super().save(*args, **kwargs)
+        # Units are read on every product row that renders. The cache is
+        # cleared here rather than by a signal so it cannot be skipped by a
+        # caller that saves through a different path.
+        forget_labels(self.group)
+
+    def delete(self, *args, **kwargs):
+        group = self.group
+        result = super().delete(*args, **kwargs)
+        forget_labels(group)
+        return result
+
+    def _generate_code(self) -> str:
+        """
+        A stable identifier from the label: "Jerry can" -> JERRY_CAN.
+
+        Kept short enough for the columns that store it, and made unique
+        within the group so two similar names cannot collide into one unit.
+        """
+        base = "".join(
+            ch if ch.isalnum() else "_" for ch in self.label.upper()
+        ).strip("_")
+        base = "_".join(part for part in base.split("_") if part)[:32] or "OPT"
+
+        candidate, suffix = base, 1
+        taken = Option.objects.in_group(self.group).exclude(pk=self.pk)
+        while taken.filter(code=candidate).exists():
+            suffix += 1
+            candidate = f"{base[:29]}_{suffix}"
+        return candidate
+
+    @property
+    def value(self) -> str:
+        """What a client should send back: the code when there is one."""
+        return self.code or str(self.pk)
 
     @property
     def group_label(self) -> str:
@@ -345,6 +455,27 @@ class Option(TimeStampedModel):
             and self.created_by_id
             and self.created_by_id == user.pk
         )
+
+    def may_be_renamed_by(self, user) -> bool:
+        """
+        Who may change the wording of an entry.
+
+        Everyone who could remove it, plus one case removal does not allow:
+        re-wording a seeded entry of a CODED list. "Piece" is wording, not
+        identity - the products that use it store PIECE - so renaming it to
+        "Each" re-words every product at once and loses nothing. That is the
+        whole point of the units being editable, and it is why this is not
+        simply may_be_removed_by: taking "Piece" OUT of the list would leave
+        those products pointing at a unit nobody can read.
+
+        For an uncoded list the rows that already used an entry keep their own
+        snapshot of the label, so a rename only changes what future ones say.
+        """
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        if self.may_be_removed_by(user):
+            return True
+        return bool(self.code) and user.has_access("catalog.manage")
 
 
 def resolve_option(group: str, *, label: str = "", option_id=None, user=None):
