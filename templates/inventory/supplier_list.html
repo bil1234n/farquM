@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load core_extras %}
 {% block title %}Suppliers{% endblock %}
 {% block page_title %}Suppliers{% endblock %}
 {% block page_actions %}
@@ -25,7 +26,8 @@
       <tbody>
         {% for s in suppliers %}
           <tr>
-            <td><span class="fw-semibold">{{ s.name }}</span>
+            <td><span class="fw-semibold">{{ s.name }}</span> {% note_mark s.note_tag compact=True %}
+              {% if s.notes %}<div class="text-muted-sm">{{ s.notes|truncatechars:60 }}</div>{% endif %}
               {% if s.address %}<div class="text-muted-sm">{{ s.address|truncatechars:50 }}</div>{% endif %}</td>
             <td>{{ s.contact_person|default:"&mdash;" }}</td>
             <td class="mono">{{ s.phone|default:"&mdash;" }}</td>

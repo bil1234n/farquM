@@ -39,6 +39,13 @@ class OptionGroup:
     #: pair when something stores the CODE rather than the wording - a unit,
     #: for instance, where every product row already holds "PIECE".
     defaults: tuple = field(default_factory=tuple)
+    #: (label, "#RRGGBB") for a list drawn as coloured marks. Kept apart from
+    #: `defaults` so the seed that older migrations import keeps its shape.
+    colors: tuple = field(default_factory=tuple)
+
+    @property
+    def is_colored(self) -> bool:
+        return bool(self.colors)
 
     @property
     def is_coded(self) -> bool:
@@ -193,6 +200,66 @@ GROUPS: tuple[OptionGroup, ...] = (
         ),
     ),
     OptionGroup(
+        key="NOTE_TAG",
+        label="Note colour",
+        add_label="Add a colour",
+        help="A coloured mark on a note, so its meaning shows before anybody "
+             "reads it.",
+        # The three the business asked for. Anybody may add another colour or
+        # change what one means - that is the point of it being a list.
+        defaults=("Good", "Normal", "Bad"),
+        colors=(
+            ("Good", "#16A34A"),
+            ("Normal", "#2563EB"),
+            ("Bad", "#DC2626"),
+        ),
+    ),
+    OptionGroup(
+        key="EXPENSE_CATEGORY",
+        label="Category",
+        add_label="Add a category",
+        help="What the money was spent on.",
+        defaults=(
+            "Salaries & wages",
+            "Rent",
+            "Electricity",
+            "Water",
+            "Fuel",
+            "Transport & delivery",
+            "Machine repairs",
+            "Maintenance",
+            "Phone & internet",
+            "Food & tea",
+            "Taxes & fees",
+            "Bank charges",
+            "Office supplies",
+            "Other",
+        ),
+    ),
+    OptionGroup(
+        key="EMPLOYEE_PAY_TYPE",
+        label="Payment type",
+        add_label="Add a payment type",
+        help="What a payment to an employee was for.",
+        defaults=("Salary", "Advance", "Bonus", "Overtime", "Allowance"),
+    ),
+    OptionGroup(
+        key="EMPLOYEE_JOB",
+        label="Job",
+        add_label="Add a job",
+        help="What an employee does.",
+        defaults=(
+            "Block maker",
+            "Mixer operator",
+            "Loader",
+            "Driver",
+            "Guard",
+            "Cleaner",
+            "Cashier",
+            "Supervisor",
+        ),
+    ),
+    OptionGroup(
         key="PRODUCTION_REQUEST_REASON",
         label="Reason",
         add_label="Add a reason",
@@ -231,6 +298,19 @@ def seed_pairs() -> list[tuple[str, str, str, int]]:
             code, label = entry if isinstance(entry, tuple) else ("", entry)
             rows.append((group.key, code, label, (index + 1) * 10))
     return rows
+
+
+def seed_colors() -> list[tuple[str, str, str]]:
+    """(group, label, "#RRGGBB") for every coloured default."""
+    return [
+        (group.key, label, color)
+        for group in GROUPS
+        for label, color in group.colors
+    ]
+
+
+#: Groups drawn as coloured marks; their entries carry a colour.
+COLORED_GROUPS: frozenset[str] = frozenset(g.key for g in GROUPS if g.is_colored)
 
 
 #: Groups whose code is written into another table's column.

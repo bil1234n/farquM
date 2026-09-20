@@ -47,6 +47,7 @@ def create_sale(
     walk_in_phone: str = "",
     due_date=None,
     notes: str = "",
+    note_tag=None,
 ) -> Transaction:
     """
     Record a complete sale.
@@ -173,6 +174,7 @@ def create_sale(
         due_date=due_date if credit_needed > ZERO else None,
         sold_by=user,
         notes=notes,
+        note_tag=note_tag,
     )
     if channel is not None:
         # Counted so the three banks this yard actually uses float to the top
@@ -309,6 +311,18 @@ def void_transaction(txn: Transaction, *, user, reason: str) -> Transaction:
         raise SaleError("A reason is required when voiding a transaction.")
 
     locked = Transaction.objects.select_for_update().get(pk=txn.pk)
+
+    # Goods that have physically left the yard are not coming back to the
+    # shelf because a sale was voided on paper. Putting them back would give
+    # the shelf stock that is sitting in a customer's lorry. The hand-overs
+    # are cancelled first - which says the goods came back - and then the
+    # sale can be voided and its stock returned honestly.
+    if locked.deliveries.filter(is_voided=False).exists():
+        raise SaleError(
+            "Goods from this sale have already been handed over. Cancel "
+            "those hand-overs first (the goods have come back), then void "
+            "the sale."
+        )
 
     # Put the goods back on the shelf.
     for item in locked.items.select_related("product"):

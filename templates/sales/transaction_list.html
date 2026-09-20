@@ -79,6 +79,7 @@
           <tr class="{% if t.is_voided %}table-secondary{% endif %}">
             <td>
               <a href="{% url 'sales:transaction_detail' t.pk %}" class="mono fw-semibold">{{ t.reference }}</a>
+              {% note_mark t.note_tag compact=True %}
               <div class="text-muted-sm">{{ t.created_at|date:"d M Y, H:i" }}</div>
             </td>
             <td>

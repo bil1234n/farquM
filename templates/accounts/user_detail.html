@@ -48,8 +48,8 @@
           <span>{{ target_user.date_joined|date:"d M Y" }}</span></div>
         <div class="d-flex justify-content-between py-1"><span class="text-muted">Last login</span>
           <span>{{ target_user.last_login|date:"d M Y, H:i"|default:"Never" }}</span></div>
-        {% if target_user.notes %}<hr class="my-2"><div class="text-muted mb-1">Notes</div>
-          <div>{{ target_user.notes|linebreaksbr }}</div>{% endif %}
+        {% if target_user.notes or target_user.note_tag %}<hr class="my-2">
+          {% note_block target_user.notes target_user.note_tag %}{% endif %}
       </div>
     </div>
 

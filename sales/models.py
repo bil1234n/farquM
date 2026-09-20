@@ -18,7 +18,7 @@ from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import AuthoredModel, OwnedModel, TimeStampedModel
+from core.models import AuthoredModel, OwnedModel, TimeStampedModel, note_tag_field
 from core.utils import ZERO, money, receipt_upload_path, validate_receipt_file
 
 
@@ -65,6 +65,7 @@ class Customer(AuthoredModel, OwnedModel):
     )
     is_active = models.BooleanField(default=True, db_index=True)
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     objects = CustomerQuerySet.as_manager()
 
@@ -138,6 +139,20 @@ class PaymentMethod(models.TextChoices):
     MIXED = "MIXED", "Mixed"
 
 
+class DeliveryStatus(models.TextChoices):
+    """
+    How much of a sale has left the yard.
+
+    Stock still leaves the shelf at the moment of sale - that is what stops a
+    seller offering blocks a customer has already paid for. This is the other
+    half: whether those goods have physically gone.
+    """
+
+    PENDING = "PENDING", "Waiting for collection"
+    PARTIAL = "PARTIAL", "Part collected"
+    DELIVERED = "DELIVERED", "Fully collected"
+
+
 class TransactionQuerySet(models.QuerySet):
     def active(self):
         """Everything except voided documents."""
@@ -154,6 +169,10 @@ class TransactionQuerySet(models.QuerySet):
 
     def today(self):
         return self.active().filter(created_at__date=timezone.localdate())
+
+    def awaiting_collection(self):
+        """Sales with goods still in the yard for the customer."""
+        return self.active().exclude(delivery_status=DeliveryStatus.DELIVERED)
 
     def with_profit(self):
         """
@@ -242,6 +261,7 @@ class Transaction(OwnedModel, TimeStampedModel):
         related_name="sales_made", null=True, blank=True,
     )
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     # -- Void (Admin override) ----------------------------------------------
     is_voided = models.BooleanField(default=False, db_index=True)
@@ -251,6 +271,18 @@ class Transaction(OwnedModel, TimeStampedModel):
         related_name="transactions_voided", null=True, blank=True,
     )
     void_reason = models.TextField(blank=True)
+
+    # -- Hand-over ----------------------------------------------------------
+    # Kept on the row, not worked out on every read, because it is what the
+    # stock keeper's queue filters on - dozens of times a day, across every
+    # sale in the business. sales.delivery keeps it in step with the lines.
+    delivery_status = models.CharField(
+        max_length=10,
+        choices=DeliveryStatus.choices,
+        default=DeliveryStatus.PENDING,
+        db_index=True,
+        editable=False,
+    )
 
     objects = TransactionQuerySet.as_manager()
 
@@ -352,6 +384,31 @@ class Transaction(OwnedModel, TimeStampedModel):
         }.get(self.payment_status, "secondary")
 
     @property
+    def delivery_status_class(self) -> str:
+        """Bootstrap colour for where the goods stand - see sales.delivery."""
+        return {
+            DeliveryStatus.PENDING: "warning",
+            DeliveryStatus.PARTIAL: "info",
+            DeliveryStatus.DELIVERED: "success",
+        }.get(self.delivery_status, "secondary")
+
+    @property
+    def units_sold(self) -> int:
+        return sum(item.quantity for item in self.items.all())
+
+    @property
+    def units_waiting(self) -> int:
+        """Paid-for units still in the yard. Uses the prefetched lines."""
+        return sum(item.quantity_waiting for item in self.items.all())
+
+    @property
+    def collected_percent(self) -> int:
+        sold = self.units_sold
+        if not sold:
+            return 0
+        return round((sold - self.units_waiting) * 100 / sold)
+
+    @property
     def is_overdue(self) -> bool:
         return bool(
             self.due_date
@@ -432,12 +489,23 @@ class TransactionItem(models.Model):
     line_discount = models.DecimalField(max_digits=12, decimal_places=2, default=ZERO)
     line_total = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO)
 
+    #: How many of `quantity` the customer has actually taken away. The sum
+    #: of the live delivery lines, kept here so "what is still waiting" is a
+    #: column read, not a join over every hand-over ever made.
+    quantity_delivered = models.PositiveIntegerField(default=0, editable=False)
+
     class Meta:
         ordering = ["id"]
         verbose_name = "Sale line item"
         indexes = [models.Index(fields=["transaction"]), models.Index(fields=["product"])]
         constraints = [
             models.CheckConstraint(check=Q(quantity__gt=0), name="item_quantity_positive"),
+            # The one rule a hand-over must never break: nobody leaves with
+            # more than they bought.
+            models.CheckConstraint(
+                condition=Q(quantity_delivered__lte=F("quantity")),
+                name="item_delivered_within_sold",
+            ),
         ]
 
     def __str__(self):
@@ -453,12 +521,116 @@ class TransactionItem(models.Model):
         super().save(*args, **kwargs)
 
     @property
+    def quantity_waiting(self) -> int:
+        """Bought and paid for, still in the yard."""
+        return max(self.quantity - self.quantity_delivered, 0)
+
+    @property
     def line_cost(self) -> Decimal:
         return money(self.unit_cost * self.quantity)
 
     @property
     def line_profit(self) -> Decimal:
         return money(self.line_total - self.line_cost)
+
+
+# ---------------------------------------------------------------------------
+# Hand-overs
+# ---------------------------------------------------------------------------
+class Delivery(TimeStampedModel):
+    """
+    One trip to the gate: some or all of a sale leaving the yard.
+
+    A customer who buys 1,000 blocks may take 400 today and 600 next week;
+    that is two Delivery rows against one sale. Each says who handed over,
+    who took them, and exactly how many of each line - so "where are my other
+    600?" is answered from the record, not from somebody's memory.
+
+    Never deleted. A hand-over recorded by mistake, or goods brought back, is
+    voided: the quantities go back to "waiting" and the row stays, with the
+    reason, for the audit trail.
+    """
+
+    reference = models.CharField(
+        max_length=40, unique=True, db_index=True, editable=False
+    )
+    transaction = models.ForeignKey(
+        Transaction, on_delete=models.PROTECT, related_name="deliveries"
+    )
+    delivered_at = models.DateTimeField(default=timezone.now, db_index=True)
+    delivered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="deliveries_made",
+    )
+    received_by_name = models.CharField(
+        max_length=160, blank=True,
+        help_text="Who took the goods - the customer, or their driver.",
+    )
+    received_by_phone = models.CharField(max_length=30, blank=True)
+    vehicle = models.CharField(
+        max_length=40, blank=True, help_text="Plate number, if it left on a lorry."
+    )
+    notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
+
+    is_voided = models.BooleanField(default=False, db_index=True)
+    voided_at = models.DateTimeField(null=True, blank=True)
+    voided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="deliveries_voided",
+        null=True,
+        blank=True,
+    )
+    void_reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-delivered_at", "-id"]
+        verbose_name_plural = "Deliveries"
+        indexes = [
+            models.Index(fields=["transaction", "-delivered_at"], name="dlv_txn_idx"),
+        ]
+
+    def __str__(self):
+        return self.reference
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            from core.utils import generate_reference
+
+            self.reference = generate_reference("DLV", Delivery)
+        super().save(*args, **kwargs)
+
+    @property
+    def total_quantity(self) -> int:
+        return sum(line.quantity for line in self.lines.all())
+
+
+class DeliveryLine(models.Model):
+    """How many of one sale line left on one hand-over."""
+
+    delivery = models.ForeignKey(
+        Delivery, on_delete=models.CASCADE, related_name="lines"
+    )
+    item = models.ForeignKey(
+        TransactionItem, on_delete=models.PROTECT, related_name="delivery_lines"
+    )
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(quantity__gt=0), name="delivery_line_quantity_positive"
+            ),
+            models.UniqueConstraint(
+                fields=["delivery", "item"], name="delivery_line_once_per_item"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.item.product_name}"
 
 
 # ---------------------------------------------------------------------------

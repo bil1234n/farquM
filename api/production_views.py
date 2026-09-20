@@ -367,6 +367,7 @@ class ProductionRunViewSet(viewsets.ReadOnlyModelViewSet):
                 fulfils=data.get("fulfils") or [],
                 produced_on=data.get("produced_on"),
                 notes=data.get("notes", ""),
+                note_tag=data.get("note_tag"),
                 materials=[
                     {
                         "material": line["material"],

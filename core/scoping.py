@@ -77,10 +77,17 @@ OWNER_PATHS = {
     "sales.Transaction": "owner",
     "sales.TransactionItem": "transaction__owner",
     "sales.Receipt": "transaction__owner",
+    # A hand-over is seen by whoever may see the sale it belongs to.
+    "sales.Delivery": "transaction__owner",
+    "sales.DeliveryLine": "delivery__transaction__owner",
     "credit.DebtRecord": "owner",
     "credit.CreditAccount": "customer__owner",
     "credit.Repayment": "debt__owner",
     "credit.RepaymentProof": "repayment__debt__owner",
+    # Money going out is a ledger like money coming in: a manager sees their
+    # own and their team's, the owner sees all of it. (Employees are not
+    # here - the payroll is the business's, shared like the product list.)
+    "expenses.Expense": "owner",
 }
 
 #: Models that follow the SHARED rule (see the module docstring). Everything

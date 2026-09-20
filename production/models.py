@@ -35,7 +35,13 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
 
-from core.models import AuthoredModel, OwnedModel, SoftDeleteModel, TimeStampedModel
+from core.models import (
+    AuthoredModel,
+    OwnedModel,
+    SoftDeleteModel,
+    TimeStampedModel,
+    note_tag_field,
+)
 
 #: Quantities are stored to three decimal places - 0.001 kg is a gram, and no
 #: yard weighs finer than that. Shared so every column and every serializer
@@ -475,6 +481,7 @@ class ProductionRun(AuthoredModel, OwnedModel):
         db_index=True,
     )
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     reversed_at = models.DateTimeField(null=True, blank=True)
     reversed_by = models.ForeignKey(
@@ -809,6 +816,7 @@ class ProductionRequest(TimeStampedModel):
     )
     reason_name = models.CharField(max_length=120, blank=True)
     note = models.CharField(max_length=255, blank=True)
+    note_tag = note_tag_field()
 
     needed_by = models.DateField(null=True, blank=True)
     stock_at_request = models.IntegerField(

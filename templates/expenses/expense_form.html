@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{% if expense %}Correct {{ expense.reference }}{% else %}Record expense{% endif %}{% endblock %}
+{% block page_title %}{% if expense %}Correct {{ expense.reference }}{% else %}Record an expense{% endif %}{% endblock %}
+{% block breadcrumb %}<div class="crumb">
+  <a href="{% url 'expenses:expense_list' %}">Expenses</a>
+  {% if expense %}&middot; <span>recorded {{ expense.created_at|date:"d M Y" }} by {{ expense.recorded_by.display_name }}</span>{% endif %}
+</div>{% endblock %}
+
+{% block content %}
+<form method="post" enctype="multipart/form-data" id="expenseForm" novalidate>
+  {% csrf_token %}
+  {% comment %}
+    No hidden inputs for the three managed lists here: each .option-select
+    below writes its own pair (the id picked, the name typed), and a second
+    copy of the same name would be a second answer in the POST.
+  {% endcomment %}
+
+  {% if form.non_field_errors %}
+    <div class="alert alert-danger py-2 px-3 small">
+      {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="row g-3">
+    {# ---------------- What was paid ---------------- #}
+    <div class="col-lg-7">
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-receipt me-1"></i> What was paid</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label class="form-label" for="{{ form.spent_on.id_for_label }}">Date <span class="required-mark">*</span></label>
+              {{ form.spent_on }}
+              {% for e in form.spent_on.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label" for="{{ form.amount.id_for_label }}">Amount <span class="required-mark">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ CURRENCY }}</span>
+                {{ form.amount }}
+              </div>
+              {% for e in form.amount.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Spent on</label>
+              {% comment %}
+                A list that grows from inside the select - "Generator fuel"
+                typed once is there for everybody next time, on the phone too.
+              {% endcomment %}
+              <div class="option-select"
+                   data-group="EXPENSE_CATEGORY"
+                   data-id-field="category"
+                   data-name-field="category_name"
+                   data-value="{{ form.category.value|default_if_none:'' }}"
+                   data-value-name="{{ form.category_name.value|default_if_none:'' }}"
+                   data-placeholder="Choose a category"></div>
+              <div class="form-text">Leave it empty for a staff payment and it is filed under Salaries &amp; wages.</div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label" for="{{ form.payee.id_for_label }}">Paid to</label>
+              {{ form.payee }}
+              <div class="form-text">{{ form.payee.help_text }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ---------------- Staff ---------------- #}
+      <div class="card mb-3" id="staffCard">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-person-vcard me-1"></i> Staff payment</span>
+          <span class="text-muted-sm">salary, advance, bonus&hellip;</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.employee.id_for_label }}">Employee</label>
+              {{ form.employee }}
+              {% for e in form.employee.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6 staff-only">
+              <label class="form-label">Kind of payment</label>
+              <div class="option-select"
+                   data-group="EMPLOYEE_PAY_TYPE"
+                   data-id-field="pay_type"
+                   data-name-field="pay_type_name"
+                   data-value="{{ form.pay_type.value|default_if_none:'' }}"
+                   data-value-name="{{ form.pay_type_name.value|default_if_none:'' }}"
+                   data-placeholder="Salary"></div>
+            </div>
+            <div class="col-md-6 staff-only">
+              <label class="form-label" for="{{ form.pay_period.id_for_label }}">{{ form.pay_period.label }}</label>
+              {{ form.pay_period }}
+              <div class="form-text">{{ form.pay_period.help_text }}</div>
+            </div>
+            <div class="col-md-6 staff-only d-flex align-items-end">
+              <button type="button" class="btn btn-outline-success btn-sm" id="useSalary">
+                <i class="bi bi-magic me-1"></i> Use their monthly salary
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ---------------- How it was paid ---------------- #}
+    <div class="col-lg-5">
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-credit-card me-1"></i> How it was paid</div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.payment_method.id_for_label }}">{{ form.payment_method.label }}</label>
+            {{ form.payment_method }}
+          </div>
+          <div class="mb-3 d-none" id="channelBox">
+            <label class="form-label" id="channelLabel">Bank</label>
+            <div class="option-select"
+                 id="channelSelect"
+                 data-group="BANK"
+                 data-id-field="payment_channel"
+                 data-name-field="payment_channel_name"
+                 data-value="{{ form.payment_channel.value|default_if_none:'' }}"
+                 data-value-name="{{ form.payment_channel_name.value|default_if_none:'' }}"
+                 data-placeholder="Select a bank"></div>
+            <div class="mt-2">
+              <label class="form-label small text-muted mb-1" for="{{ form.payment_reference.id_for_label }}">
+                {{ form.payment_reference.label }}
+              </label>
+              {{ form.payment_reference }}
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.receipt.id_for_label }}">{{ form.receipt.label }}</label>
+            {{ form.receipt }}
+            <div class="form-text">{{ form.receipt.help_text }}</div>
+            {% for e in form.receipt.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            {% if expense.receipt %}
+              <div class="small mt-1">
+                <a href="{{ expense.receipt.url }}" target="_blank"><i class="bi bi-paperclip"></i> Current receipt</a>
+                &middot; choose a file only to replace it
+              </div>
+            {% endif %}
+          </div>
+          <div class="mb-0">
+            <label class="form-label" for="{{ form.notes.id_for_label }}">Notes</label>
+            {{ form.notes }}
+            <div class="mt-2">
+              <div class="form-label small text-muted mb-1">Mark</div>
+              {{ form.note_tag }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-grid gap-2">
+        <button type="submit" class="btn btn-primary py-2">
+          <i class="bi bi-check2-circle me-1"></i> {% if expense %}Save changes{% else %}Record expense{% endif %}
+        </button>
+        {% if not expense %}
+          <button type="submit" name="another" value="1" class="btn btn-outline-primary">
+            <i class="bi bi-plus-lg me-1"></i> Record and add another
+          </button>
+        {% endif %}
+        <a href="{% url 'expenses:expense_list' %}" class="btn btn-link">Cancel</a>
+      </div>
+    </div>
+  </div>
+</form>
+{{ salaries|json_script:"salaries" }}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const salaries = JSON.parse($('salaries').textContent || '{}');
+  const method = $('id_payment_method');
+  const employee = $('id_employee');
+  const amount = $('id_amount');
+  const payee = $('id_payee');
+
+  // ---- Which bank / which wallet: the same swap as the sale screen. ----
+  const CHANNEL_GROUPS = {
+    BANK:   {group: 'BANK',         label: 'Bank',          placeholder: 'Select a bank'},
+    CHEQUE: {group: 'BANK',         label: 'Bank (cheque)', placeholder: 'Select a bank'},
+    MOBILE: {group: 'MOBILE_MONEY', label: 'Mobile money',  placeholder: 'Select a provider'}
+  };
+  function updateChannel() {
+    const box = $('channelBox'), host = $('channelSelect');
+    const spec = CHANNEL_GROUPS[method.value];
+    box.classList.toggle('d-none', !spec);
+    if (!spec) return;
+    $('channelLabel').textContent = spec.label;
+    if (host.dataset.group !== spec.group) {
+      host.dataset.group = spec.group;
+      host.dataset.placeholder = spec.placeholder;
+      host.dataset.ready = '';
+      host.innerHTML = '';
+      if (window.OptionSelect) window.OptionSelect.scan(host.parentElement);
+    }
+  }
+  method.addEventListener('change', updateChannel);
+  updateChannel();
+
+  // ---- Staff payment: only asks the staff questions for a staff payment. ----
+  function updateStaff() {
+    const on = !!employee.value;
+    document.querySelectorAll('.staff-only').forEach(el => el.classList.toggle('d-none', !on));
+    if (on && !payee.value) {
+      payee.value = employee.options[employee.selectedIndex].text.split(' - ')[0];
+    }
+  }
+  employee.addEventListener('change', function () {
+    if (employee.value && !amount.value && salaries[employee.value] && Number(salaries[employee.value]) > 0) {
+      amount.value = salaries[employee.value];
+    }
+    updateStaff();
+  });
+  $('useSalary').addEventListener('click', function () {
+    const pay = salaries[employee.value];
+    if (pay && Number(pay) > 0) { amount.value = pay; amount.focus(); }
+  });
+  updateStaff();
+})();
+</script>
+{% endblock %}

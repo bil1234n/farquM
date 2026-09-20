@@ -29,6 +29,11 @@
 </div>{% endblock %}
 
 {% block page_actions %}
+  {% if profile == 'keeper' and user|can:"delivery.view" %}
+    <a href="{% url 'sales:delivery_list' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-truck me-1"></i> Hand-overs
+    </a>
+  {% endif %}
   {% if can_sell %}
     <a href="{% url 'sales:sale_create' %}" class="btn btn-primary btn-sm">
       <i class="bi bi-cart-plus me-1"></i> New Sale

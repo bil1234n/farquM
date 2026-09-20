@@ -9,7 +9,7 @@
       <div class="card">
         <div class="card-header">{{ title }}</div>
         <div class="card-body">
-          {% include "partials/form_fields.html" with form=form wide_fields="description,notes,address" %}
+          {% include "partials/form_fields.html" with form=form wide_fields="description,notes,note_tag,address" %}
         </div>
         <div class="card-footer bg-light d-flex justify-content-between">
           <a href="{{ cancel_url }}" class="btn btn-outline-secondary btn-sm">Cancel</a>

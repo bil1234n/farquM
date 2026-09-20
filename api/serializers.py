@@ -14,11 +14,18 @@ from django.contrib.auth import authenticate
 from rest_framework import serializers
 
 from accounts.models import DataScope, RoleDefinition, User
-from core.models import SystemSetting
+from core.models import Option, SystemSetting
 from core.permissions import WILDCARD, clean_codes
 from credit.models import CreditAccount, DebtRecord, Repayment, RepaymentProof
 from inventory.models import Category, Product, StockMovement, Supplier
-from sales.models import Customer, Receipt, Transaction, TransactionItem
+from sales.models import (
+    Customer,
+    Delivery,
+    DeliveryLine,
+    Receipt,
+    Transaction,
+    TransactionItem,
+)
 
 from .models import DeviceToken, NotificationLog
 
@@ -79,6 +86,38 @@ class FinancialFieldsMixin:
             for field in self.profit_fields:
                 data.pop(field, None)
         return data
+
+
+class NoteTagField(serializers.PrimaryKeyRelatedField):
+    """
+    A colour mark on a record's notes: an id from the NOTE_TAG list, or null.
+
+    Switched-off marks are still accepted, because a record already carrying
+    one must stay saveable after somebody removed that colour from the picker.
+    """
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("allow_null", True)
+        super().__init__(queryset=Option.objects.filter(group="NOTE_TAG"), **kwargs)
+
+
+class NoteTagMixin(serializers.Serializer):
+    """
+    Sends a record's note mark as the id, the meaning and the colour, so a
+    list can draw the coloured mark without a second request per row.
+    """
+
+    note_tag = NoteTagField()
+    note_tag_label = serializers.CharField(
+        source="note_tag.label", read_only=True, default=None
+    )
+    note_tag_color = serializers.CharField(
+        source="note_tag.color", read_only=True, default=None
+    )
+
+
+NOTE_TAG_FIELDS = ["note_tag", "note_tag_label", "note_tag_color"]
 
 
 class OwnerNameMixin:
@@ -189,7 +228,7 @@ class UserSerializer(serializers.ModelSerializer):
         return url
 
 
-class UserAdminSerializer(UserSerializer):
+class UserAdminSerializer(NoteTagMixin, UserSerializer):
     """
     Admin-facing view of ANOTHER user. Adds the fields an administrator is
     allowed to change, which the self-service serializer deliberately locks.
@@ -210,7 +249,8 @@ class UserAdminSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + [
-            "password", "notes", "sales_count", "outstanding", "last_activity",
+            "password", "notes", *NOTE_TAG_FIELDS,
+            "sales_count", "outstanding", "last_activity",
             "manager", "manager_name", "data_scope", "scope_label",
             "data_scope_override", "is_customised",
         ]
@@ -316,10 +356,13 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = ["id", "name", "description", "is_active", "product_count"]
 
 
-class SupplierSerializer(serializers.ModelSerializer):
+class SupplierSerializer(NoteTagMixin, serializers.ModelSerializer):
     class Meta:
         model = Supplier
-        fields = ["id", "name", "contact_person", "phone", "email", "address", "is_active"]
+        fields = [
+            "id", "name", "contact_person", "phone", "email", "address",
+            "is_active", "notes", *NOTE_TAG_FIELDS,
+        ]
 
 
 def _validate_unit(value, group, builtin):
@@ -563,7 +606,7 @@ class CreditAccountSerializer(serializers.ModelSerializer):
         ]
 
 
-class CustomerSerializer(OwnerNameMixin, serializers.ModelSerializer):
+class CustomerSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializer):
     outstanding_balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     credit_limit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     available_credit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
@@ -576,7 +619,7 @@ class CustomerSerializer(OwnerNameMixin, serializers.ModelSerializer):
         fields = [
             "id", "name", "phone", "alternate_phone", "email", "address",
             "customer_type", "customer_type_display",
-            "is_credit_approved", "is_active", "notes",
+            "is_credit_approved", "is_active", "notes", "note_tag", "note_tag_label", "note_tag_color",
             "outstanding_balance", "credit_limit", "available_credit", "credit_account",
             "owner_name",
         ]
@@ -601,13 +644,14 @@ class TransactionItemSerializer(FinancialFieldsMixin, serializers.ModelSerialize
 
     line_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     line_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    quantity_waiting = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = TransactionItem
         fields = [
             "id", "product", "product_name", "product_sku", "quantity",
             "unit_price", "unit_cost", "line_discount", "line_total",
-            "line_cost", "line_profit",
+            "line_cost", "line_profit", "quantity_delivered", "quantity_waiting",
         ]
 
 
@@ -641,7 +685,9 @@ class ReceiptSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(url) if request else url
 
 
-class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
+class TransactionSerializer(
+    NoteTagMixin, OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
+):
     financial_fields = ("total_cost",)
     profit_fields = ("gross_profit", "profit_margin")
 
@@ -659,6 +705,9 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
     item_count = serializers.IntegerField(read_only=True)
     owner_name = serializers.SerializerMethodField()
     debt_id = serializers.SerializerMethodField()
+    delivery_status_display = serializers.CharField(
+        source="get_delivery_status_display", read_only=True
+    )
 
     class Meta:
         model = Transaction
@@ -670,7 +719,7 @@ class TransactionSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.Mo
             "payment_method", "payment_method_display",
             "payment_channel", "payment_channel_name", "payment_reference",
             "payment_display",
-            "due_date", "notes", "sold_by_name", "created_at",
+            "due_date", "notes", "note_tag", "note_tag_label", "note_tag_color", "delivery_status", "delivery_status_display", "sold_by_name", "created_at",
             "is_voided", "void_reason", "is_overdue", "item_count",
             "total_cost", "gross_profit", "profit_margin",
             "items", "receipts", "owner_name", "debt_id",
@@ -741,6 +790,7 @@ class SaleCreateSerializer(serializers.Serializer):
     )
     due_date = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True, default="")
+    note_tag = NoteTagField()
 
     def validate_items(self, value):
         if not value:
@@ -798,7 +848,7 @@ class RepaymentProofSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(obj.file.url) if request else obj.file.url
 
 
-class RepaymentSerializer(serializers.ModelSerializer):
+class RepaymentSerializer(NoteTagMixin, serializers.ModelSerializer):
     method_display = serializers.CharField(source="get_method_display", read_only=True)
     received_by_name = serializers.CharField(
         source="received_by.display_name", default=None, read_only=True
@@ -810,11 +860,11 @@ class RepaymentSerializer(serializers.ModelSerializer):
         fields = [
             "id", "reference", "debt", "amount", "method", "method_display",
             "paid_at", "balance_before", "balance_after", "external_reference",
-            "note", "received_by_name", "is_reversed", "reversal_reason", "proofs",
+            "note", "note_tag", "note_tag_label", "note_tag_color", "received_by_name", "is_reversed", "reversal_reason", "proofs",
         ]
 
 
-class DebtSerializer(OwnerNameMixin, serializers.ModelSerializer):
+class DebtSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializer):
     customer_name = serializers.CharField(source="customer.name", read_only=True)
     customer_phone = serializers.CharField(source="customer.phone", read_only=True)
     transaction_reference = serializers.CharField(
@@ -837,11 +887,12 @@ class DebtSerializer(OwnerNameMixin, serializers.ModelSerializer):
             "status", "status_display", "display_status",
             "issued_date", "due_date", "settled_date",
             "is_overdue", "days_overdue", "repayment_percent", "aging_bucket",
-            "notes", "created_at", "owner_name",
+            "notes", "note_tag", "note_tag_label", "note_tag_color", "created_at", "owner_name",
         ]
 
 
 class RepaymentCreateSerializer(serializers.Serializer):
+    note_tag = NoteTagField()
     amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
     method = serializers.CharField(default="CASH")
     external_reference = serializers.CharField(required=False, allow_blank=True, default="")
@@ -977,3 +1028,85 @@ class SystemSettingSerializer(serializers.ModelSerializer):
             "business_name_effective", "currency_effective",
         ]
         read_only_fields = ["updated_at"]
+
+
+# ---------------------------------------------------------------------------
+# Hand-overs
+# ---------------------------------------------------------------------------
+class DeliveryLineSerializer(serializers.ModelSerializer):
+    product = serializers.IntegerField(source="item.product_id", read_only=True)
+    product_name = serializers.CharField(source="item.product_name", read_only=True)
+    product_sku = serializers.CharField(source="item.product_sku", read_only=True)
+
+    class Meta:
+        model = DeliveryLine
+        fields = ["id", "item", "product", "product_name", "product_sku", "quantity"]
+
+
+class DeliverySerializer(NoteTagMixin, serializers.ModelSerializer):
+    lines = DeliveryLineSerializer(many=True, read_only=True)
+    sale = serializers.IntegerField(source="transaction_id", read_only=True)
+    sale_reference = serializers.CharField(source="transaction.reference", read_only=True)
+    customer_display = serializers.CharField(
+        source="transaction.customer_display", read_only=True
+    )
+    delivered_by_name = serializers.CharField(
+        source="delivered_by.display_name", read_only=True, default=None
+    )
+    voided_by_name = serializers.CharField(
+        source="voided_by.display_name", read_only=True, default=None
+    )
+    total_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Delivery
+        fields = [
+            "id", "reference", "sale", "sale_reference", "customer_display",
+            "delivered_at", "delivered_by_name",
+            "received_by_name", "received_by_phone", "vehicle",
+            "notes", *NOTE_TAG_FIELDS,
+            "is_voided", "voided_at", "voided_by_name", "void_reason",
+            "total_quantity", "lines",
+        ]
+
+    def get_total_quantity(self, obj) -> int:
+        # Summed over the prefetched lines rather than with a query per row.
+        return sum(line.quantity for line in obj.lines.all())
+
+
+class DeliveryLineInputSerializer(serializers.Serializer):
+    item = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=0)
+
+
+class DeliveryCreateSerializer(serializers.Serializer):
+    """
+    What the stock keeper sends: either `everything`, or the lines with how
+    many of each are going out now. A line at zero is "none of this today".
+    """
+
+    sale = serializers.IntegerField()
+    everything = serializers.BooleanField(required=False, default=False)
+    lines = DeliveryLineInputSerializer(many=True, required=False)
+    received_by_name = serializers.CharField(
+        max_length=160, required=False, allow_blank=True, default=""
+    )
+    received_by_phone = serializers.CharField(
+        max_length=30, required=False, allow_blank=True, default=""
+    )
+    vehicle = serializers.CharField(
+        max_length=40, required=False, allow_blank=True, default=""
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    note_tag = NoteTagField()
+
+    def validate(self, attrs):
+        if not attrs.get("everything") and not attrs.get("lines"):
+            raise serializers.ValidationError(
+                "Say what is being handed over: everything, or the lines."
+            )
+        return attrs
+
+
+class ReasonSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500)

@@ -196,8 +196,8 @@
           <span>{{ account.default_terms_days }} days</span></div>
         <div class="d-flex justify-content-between py-1"><span class="text-muted">Last purchase</span>
           <span>{{ account.last_purchase_date|date:"d M Y"|default:"&mdash;" }}</span></div>
-        {% if account.notes %}<hr class="my-2"><div class="text-muted mb-1">Notes</div>
-          <div>{{ account.notes|linebreaksbr }}</div>{% endif %}
+        {% if account.notes or account.note_tag %}<hr class="my-2">
+          {% note_block account.notes account.note_tag %}{% endif %}
       </div>
     </div>
   </div>

@@ -151,3 +151,70 @@ def perm_label(code):
     from core.permissions import label_for
 
     return label_for(code)
+
+
+# ---------------------------------------------------------------------------
+# Coloured note marks
+# ---------------------------------------------------------------------------
+@register.simple_tag
+def note_mark(tag, compact=False):
+    """
+    A note's mark as a coloured pill: {% note_mark txn.note_tag %}
+
+    `compact` draws the dot alone - for a table row where the pill would crowd
+    the reference out - with the meaning kept in the tooltip.
+    """
+    if not tag:
+        return ""
+    from django.utils.html import format_html
+
+    from core.forms import mark_color
+
+    color = mark_color(tag)
+    if compact:
+        return format_html(
+            '<span class="note-dot-only" style="--mark:{}" title="{}" '
+            'aria-label="{}"></span>',
+            color, tag.label, tag.label,
+        )
+    return format_html(
+        '<span class="note-mark" style="--mark:{}"><span class="note-dot"></span>{}</span>',
+        color, tag.label,
+    )
+
+
+@register.inclusion_tag("partials/note_block.html")
+def note_block(text, tag=None, title="Notes"):
+    """
+    A note, boxed in its mark's colour, with the mark's meaning on top.
+
+        {% note_block txn.notes txn.note_tag %}
+
+    Renders nothing for a record with neither a note nor a mark.
+    """
+    from core.forms import mark_color
+
+    return {
+        "text": text or "",
+        "tag": tag,
+        "color": mark_color(tag) if tag else "",
+        "title": title,
+    }
+
+
+@register.simple_tag
+def note_tag_select(name="note_tag", value=None, note_field="notes"):
+    """
+    The coloured mark picker for a hand-written form:
+
+        {% note_tag_select "note_tag" %}
+
+    Hand-written forms (the hand-over box on a sale, say) post plain fields
+    rather than going through a Django form; this gives them the same picker
+    the model forms get from core.forms.NoteTagField.
+    """
+    from core.forms import NoteTagField
+
+    current = getattr(value, "pk", value) or None
+    field = NoteTagField(current=current, note_field=note_field)
+    return field.widget.render(name, current, attrs={"id": f"id_{name}"})

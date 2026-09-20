@@ -1109,6 +1109,21 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         seller = params.get("seller")
         if seller:
             qs = qs.filter(owner_id=seller)
+        # The hand-over queue. "open" is everything with goods still in the
+        # yard; oldest first there, because the customer who has waited
+        # longest is the one standing at the gate.
+        delivery = params.get("delivery")
+        if delivery:
+            wanted = {
+                "open": ["PENDING", "PARTIAL"],
+                "waiting": ["PENDING"],
+                "partial": ["PARTIAL"],
+                "done": ["DELIVERED"],
+            }.get(delivery)
+            if wanted:
+                qs = qs.filter(is_voided=False, delivery_status__in=wanted)
+                if delivery != "done":
+                    return qs.order_by("created_at")
         return qs.order_by("-created_at")
 
     def create(self, request):
@@ -1170,6 +1185,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
                 walk_in_phone=data.get("walk_in_phone", ""),
                 due_date=data.get("due_date"),
                 notes=data.get("notes", ""),
+                note_tag=data.get("note_tag"),
             )
         except (SaleError, ValidationError) as exc:
             return _error(exc)
@@ -1352,6 +1368,7 @@ class DebtViewSet(viewsets.ReadOnlyModelViewSet):
                 method=serializer.validated_data.get("method", "CASH"),
                 external_reference=serializer.validated_data.get("external_reference", ""),
                 note=serializer.validated_data.get("note", ""),
+                note_tag=serializer.validated_data.get("note_tag"),
                 proof_files=request.FILES.getlist("proof"),
             )
         except (CreditError, ValidationError) as exc:
@@ -1741,6 +1758,38 @@ def dashboard(request):
             )[:5]
         ]
 
+    # -- The yard: goods sold but not yet collected ---------------------------
+    # The stock keeper's whole day, and a line on everybody else's who may see
+    # it. Counts, not money: this is about blocks standing in a yard.
+    if user.has_access("delivery.view"):
+        from sales.delivery import queue_summary
+
+        queue = queue_summary(user)
+        for row in queue["oldest"]:
+            row["created_at"] = row["created_at"].isoformat()
+        payload["deliveries"] = queue
+
+    # -- Money going out ------------------------------------------------------
+    if user.has_access("expense.view"):
+        from expenses.models import Expense
+        from expenses.services import summarize
+
+        spent = scoped(Expense.objects.all(), user)
+        month_spent = summarize(
+            spent.filter(spent_on__gte=month_start, spent_on__lte=today)
+        )
+        today_spent = summarize(spent.filter(spent_on=today))
+        payload["expenses"] = {
+            "month_total": str(month_spent["total"]),
+            "month_count": month_spent["count"],
+            "staff_total": str(month_spent["staff_total"]),
+            "today_total": str(today_spent["total"]),
+            "by_category": [
+                {"category": row["category"], "total": str(row["total"])}
+                for row in month_spent["by_category"][:5]
+            ],
+        }
+
     return Response(payload)
 
 
@@ -1760,12 +1809,26 @@ def profit_report(request):
     user = request.user
 
     data = profit_summary(start, end, user=user)
+
+    # Gross profit is what the goods earned; the business also paid rent,
+    # fuel and wages. Taken off here, from the same scoped rows the expenses
+    # page shows, so the two screens can never tell a different story.
+    from expenses.models import Expense
+    from expenses.services import summarize
+
+    spent = summarize(
+        scoped(Expense.objects.all(), user).filter(
+            spent_on__gte=start, spent_on__lte=end
+        )
+    )
     return Response({
         "start": start, "end": end,
         "revenue": str(data["revenue"]),
         "cogs": str(data["cogs"]),
         "gross_profit": str(data["gross_profit"]),
         "margin_percent": str(data["margin_percent"]),
+        "expenses": str(spent["total"]),
+        "net_profit": str(data["gross_profit"] - spent["total"]),
         "count": data["count"],
         "valuation": {k: str(v) for k, v in inventory_valuation(user=user).items()},
     })

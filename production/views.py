@@ -484,6 +484,7 @@ def run_create(request):
                     fulfils=request.POST.getlist("fulfils[]"),
                     produced_on=form.cleaned_data.get("produced_on"),
                     notes=form.cleaned_data.get("notes", ""),
+                    note_tag=form.cleaned_data.get("note_tag"),
                     materials=lines,
                     user=request.user,
                 )
@@ -625,6 +626,7 @@ def request_create(request):
                 reason_id=form.cleaned_data.get("reason_option"),
                 reason_name=form.cleaned_data.get("reason_name", ""),
                 note=form.cleaned_data.get("note", ""),
+                note_tag=form.cleaned_data.get("note_tag"),
                 needed_by=form.cleaned_data.get("needed_by"),
             )
         except (ValidationError, DatabaseError) as exc:

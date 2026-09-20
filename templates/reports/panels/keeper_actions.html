@@ -1,0 +1,50 @@
+{% load core_extras %}
+{% comment %}
+  The yard's everyday jobs as big round buttons, three to a row - one tap
+  each, no menu. Every tile is gated on the same permission as the page it
+  opens, so the panel never advertises a door that is locked.
+{% endcomment %}
+<div class="col-lg-{{ col|default:4 }}">
+  <div class="card h-100">
+    <div class="card-header"><i class="bi bi-lightning-charge me-1"></i> Quick actions</div>
+    <div class="card-body">
+      <div class="icon-tiles">
+        {% if user|can:"delivery.view" %}
+          <a class="icon-tile" href="{% url 'sales:delivery_list' %}">
+            <span class="circle" style="--tile:#0891b2"><i class="bi bi-truck"></i></span>Hand-overs
+          </a>
+        {% endif %}
+        {% if user|can:"sale.view" %}
+          <a class="icon-tile" href="{% url 'sales:transaction_list' %}">
+            <span class="circle" style="--tile:#2563eb"><i class="bi bi-receipt"></i></span>All sales
+          </a>
+        {% endif %}
+        {% if user|can:"product.view" %}
+          <a class="icon-tile" href="{% url 'inventory:product_list' %}">
+            <span class="circle" style="--tile:#16a34a"><i class="bi bi-box-seam"></i></span>Products
+          </a>
+        {% endif %}
+        {% if user|can:"stock.restock" %}
+          <a class="icon-tile" href="{% url 'inventory:low_stock' %}">
+            <span class="circle" style="--tile:#ea580c"><i class="bi bi-box-arrow-in-down"></i></span>Restock
+          </a>
+        {% endif %}
+        {% if user|can:"material.view" %}
+          <a class="icon-tile" href="{% url 'production:material_list' %}">
+            <span class="circle" style="--tile:#7c3aed"><i class="bi bi-boxes"></i></span>Materials
+          </a>
+        {% endif %}
+        {% if user|can:"production.request" %}
+          <a class="icon-tile" href="{% url 'production:request_create' %}">
+            <span class="circle" style="--tile:#db2777"><i class="bi bi-megaphone"></i></span>Ask for stock
+          </a>
+        {% endif %}
+        {% if user|can:"stock.view_movements" %}
+          <a class="icon-tile" href="{% url 'inventory:stock_movements' %}">
+            <span class="circle" style="--tile:#0d9488"><i class="bi bi-arrow-left-right"></i></span>Movements
+          </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% load core_extras humanize %}
+
+{% block title %}Employees{% endblock %}
+{% block page_title %}Employees{% endblock %}
+{% block breadcrumb %}<div class="crumb">The payroll &middot; pay for {{ month_start|date:"F Y" }} beside each name</div>{% endblock %}
+
+{% block page_actions %}
+  {% if can_manage %}
+    <a href="{% url 'expenses:employee_create' %}" class="btn btn-primary btn-sm">
+      <i class="bi bi-person-plus me-1"></i> Add employee
+    </a>
+  {% endif %}
+  {% if user|can:"expense.view" %}
+    <a href="{% url 'expenses:expense_list' %}?staff=1" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-wallet2 me-1"></i> Staff payments
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-primary">
+      <div class="label"><i class="bi bi-people me-1"></i>On the payroll</div>
+      <div class="value">{{ active_count|intcomma }}</div>
+      <div class="hint">active employee{{ active_count|pluralize }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-info">
+      <div class="label"><i class="bi bi-calendar3 me-1"></i>Monthly payroll</div>
+      <div class="value money">{{ payroll|money }}</div>
+      <div class="hint">salaries of everyone listed</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-success">
+      <div class="label"><i class="bi bi-cash-coin me-1"></i>Paid this month</div>
+      <div class="value money">{{ paid_total|money }}</div>
+      <div class="hint">salary, advances and bonuses</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-warning">
+      <div class="label"><i class="bi bi-hourglass-split me-1"></i>Still to pay</div>
+      <div class="value money">{{ to_pay|money }}</div>
+      <div class="hint">against this month's salaries</div>
+    </div>
+  </div>
+</div>
+
+<form method="get" class="filter-bar">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-6">
+      <label class="form-label">Search</label>
+      <input type="search" name="q" value="{{ q }}" class="form-control" placeholder="Name, phone or job" data-i18n-placeholder="r3.ph_employee">
+    </div>
+    <div class="col-md-4">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" name="all" value="1" id="fAll" {% if show_all %}checked{% endif %}>
+        <label class="form-check-label small" for="fAll">Include people who have left</label>
+      </div>
+    </div>
+    <div class="col-md-2 d-grid">
+      <button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Employee</th><th>Job</th><th class="num">Monthly salary</th>
+          <th style="min-width:190px">Paid in {{ month_start|date:"F" }}</th><th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% with p=row.person %}
+          <tr class="{% if not p.is_active %}table-secondary{% endif %}">
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="avatar">{{ p.name|slice:":2"|upper }}</div>
+                <div>
+                  <a href="{% url 'expenses:employee_detail' p.pk %}" class="fw-semibold">{{ p.name }}</a>
+                  {% note_mark p.note_tag compact=True %}
+                  {% if not p.is_active %}<span class="badge text-bg-secondary ms-1">Has left</span>{% endif %}
+                  {% if p.phone %}<div class="text-muted-sm"><i class="bi bi-telephone me-1"></i>{{ p.phone }}</div>{% endif %}
+                </div>
+              </div>
+            </td>
+            <td>{{ p.job_name|default:"&mdash;" }}</td>
+            <td class="num money">{{ p.monthly_salary|money }}</td>
+            <td>
+              <div class="d-flex justify-content-between small">
+                <span class="money fw-semibold">{{ row.paid|money }}</span>
+                {% if p.monthly_salary %}
+                  {% if row.outstanding %}
+                    <span class="text-warning-emphasis">{{ row.outstanding|money }} to go</span>
+                  {% else %}
+                    <span class="text-success"><i class="bi bi-check2-circle"></i> Paid</span>
+                  {% endif %}
+                {% endif %}
+              </div>
+              {% if p.monthly_salary %}
+                <div class="handover-bar mt-1"><span style="width:{{ row.percent }}%"></span></div>
+              {% endif %}
+            </td>
+            <td class="text-end text-nowrap">
+              {% if can_pay and p.is_active %}
+                <a href="{% url 'expenses:expense_create' %}?employee={{ p.pk }}" class="btn btn-sm btn-success">
+                  <i class="bi bi-cash-coin me-1"></i> Pay
+                </a>
+              {% endif %}
+              <a href="{% url 'expenses:employee_detail' p.pk %}" class="btn btn-sm btn-outline-secondary" title="Open">
+                <i class="bi bi-eye"></i>
+              </a>
+              {% if can_manage %}
+                <a href="{% url 'expenses:employee_edit' p.pk %}" class="btn btn-sm btn-outline-primary" title="Edit">
+                  <i class="bi bi-pencil"></i>
+                </a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endwith %}
+        {% empty %}
+          <tr><td colspan="5">
+            <div class="empty-state">
+              <i class="bi bi-person-vcard"></i>
+              <p class="mb-3">{% if q %}Nobody matches "{{ q }}".{% else %}Nobody is on the payroll yet.{% endif %}</p>
+              {% if can_manage %}
+                <a href="{% url 'expenses:employee_create' %}" class="btn btn-primary btn-sm">Add the first employee</a>
+              {% endif %}
+            </div>
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

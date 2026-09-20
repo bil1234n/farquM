@@ -462,7 +462,7 @@ class SupplierListView(PermissionRequiredMixin, ListView):
     paginate_by = 30
 
     def get_queryset(self):
-        qs = Supplier.objects.all()
+        qs = Supplier.objects.select_related("note_tag")
         q = self.request.GET.get("q", "").strip()
         if q:
             qs = qs.filter(

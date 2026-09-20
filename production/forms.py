@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
-from core.forms import unit_choices
+from core.forms import NoteTagFormMixin, unit_choices
 from core.models import Option
 from core.scoping import scoped
 from inventory.models import Product, Supplier
@@ -169,7 +169,7 @@ class RecipeForm(forms.ModelForm):
         return value
 
 
-class ProductionRunForm(forms.ModelForm):
+class ProductionRunForm(NoteTagFormMixin, forms.ModelForm):
     """
     The header. Material lines arrive as parallel arrays and are parsed by the
     view, the same way the till parses a cart.
@@ -190,7 +190,7 @@ class ProductionRunForm(forms.ModelForm):
         # often silently wrong - a batch written up the next morning belongs
         # to yesterday - and at the bottom of the card it was the last thing
         # anybody looked at.
-        fields = ["produced_on", "product", "quantity_produced", "notes"]
+        fields = ["produced_on", "product", "quantity_produced", "notes", "note_tag"]
         widgets = {
             # ISO explicitly: an <input type="date"> shows nothing at all for
             # a value in any other format, which is how a filled-in date
@@ -242,7 +242,7 @@ class ReversalForm(forms.Form):
         return reason
 
 
-class ProductionRequestForm(forms.ModelForm):
+class ProductionRequestForm(NoteTagFormMixin, forms.ModelForm):
     """
     The counter's half: how many, from whom, and why.
 
@@ -259,7 +259,7 @@ class ProductionRequestForm(forms.ModelForm):
 
     class Meta:
         model = ProductionRequest
-        fields = ["product", "quantity", "assigned_to", "note", "needed_by"]
+        fields = ["product", "quantity", "assigned_to", "note", "note_tag", "needed_by"]
         widgets = {"needed_by": forms.DateInput(attrs={"type": "date"})}
         labels = {
             "quantity": "How many do you need",

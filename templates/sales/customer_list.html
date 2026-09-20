@@ -54,6 +54,7 @@
           <tr>
             <td>
               <a href="{% url 'sales:customer_detail' c.pk %}" class="fw-semibold">{{ c.name }}</a>
+              {% note_mark c.note_tag compact=True %}
               {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
               {% if c.email %}<div class="text-muted-sm">{{ c.email }}</div>{% endif %}
             </td>

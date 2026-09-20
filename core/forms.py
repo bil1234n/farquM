@@ -1,10 +1,14 @@
 """
 Shared form widgets and fields.
 
-Currently one thing lives here: a file field that can actually accept more
-than one file. It is shared because getting it wrong is subtle and the wrong
-version was independently copy-pasted into three forms.
+    ReceiptField    a file field that can actually accept more than one file -
+                    shared because getting it wrong is subtle and the wrong
+                    version was independently copy-pasted into three forms
+    unit_choices    the editable unit lists, as select choices
+    NoteTagField    the coloured mark on a note (Good / Normal / Bad ...)
 """
+import re
+
 from django import forms
 
 from .utils import validate_receipt_file
@@ -139,3 +143,118 @@ def unit_choices(group, builtin, current=""):
         )
         rows.append((current, str(fallback)))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Coloured note marks
+# ---------------------------------------------------------------------------
+# A mark is a colour with a meaning - green "Good", red "Bad" - pinned to a
+# note so the reader knows what kind of note it is before reading a word of
+# it. The list is the NOTE_TAG group of core.Option, editable by the people
+# who use it (see api/option_views.py), so these helpers only ever READ it.
+HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+#: What a mark with no usable colour is painted in: slate, which reads as
+#: "a mark" without claiming to mean good or bad.
+DEFAULT_MARK_COLOR = "#64748B"
+
+
+def mark_color(option) -> str:
+    """
+    The colour to paint a mark in.
+
+    Only ever a #RRGGBB value: it is written into a style attribute, and the
+    API is not the only thing that can put a row in the table.
+    """
+    color = (getattr(option, "color", "") or "").strip()
+    return color.upper() if HEX_COLOR.match(color) else DEFAULT_MARK_COLOR
+
+
+def note_tag_queryset(current=None):
+    """
+    The marks a form offers: every live one, plus whichever the record
+    already carries even if it has since been switched off - so opening an
+    old note to fix a typo does not quietly strip its colour.
+    """
+    from django.db.models import Q
+
+    from .models import Option
+
+    wanted = Q(is_active=True)
+    current_id = getattr(current, "pk", current)
+    if current_id:
+        wanted |= Q(pk=current_id)
+    return (
+        Option.objects.in_group("NOTE_TAG")
+        .filter(wanted)
+        .order_by("sort_order", "label")
+    )
+
+
+class NoteTagSelect(forms.Select):
+    """
+    An ordinary <select> that carries each mark's colour.
+
+    It works with no JavaScript at all. static/js/note-tags.js then draws it
+    as a row of coloured chips, with a place to add a mark or change what one
+    means and what colour it is - and tints the note box beside it, so the
+    colour is visible while the note is being written, not only afterwards.
+    """
+
+    def __init__(self, attrs=None, note_field="notes"):
+        base = {"class": "form-select", "data-note-tag": "1"}
+        if note_field:
+            base["data-note-field"] = note_field
+        base.update(attrs or {})
+        super().__init__(base)
+
+    def create_option(self, name, value, label, selected, index, subindex=None,
+                      attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex, attrs
+        )
+        instance = getattr(value, "instance", None)
+        if instance is not None:
+            option["attrs"]["data-color"] = mark_color(instance)
+        return option
+
+
+class NoteTagField(forms.ModelChoiceField):
+    """The mark on a note. Optional - most notes are simply notes."""
+
+    def __init__(self, *, current=None, note_field="notes", **kwargs):
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("label", "Mark")
+        kwargs.setdefault("empty_label", "No mark")
+        kwargs.setdefault(
+            "help_text",
+            "A colour for the note, so its meaning shows before anyone reads it.",
+        )
+        kwargs.setdefault("widget", NoteTagSelect(note_field=note_field))
+        super().__init__(queryset=note_tag_queryset(current), **kwargs)
+
+
+class NoteTagFormMixin:
+    """
+    For a ModelForm whose Meta.fields includes the note's mark.
+
+    Swaps Django's default select (every NOTE_TAG row, live or not, with no
+    colour) for the coloured picker, offering only live marks plus the one the
+    record already has. Put it FIRST in the bases so it runs after the field
+    styling has been applied.
+    """
+
+    note_tag_field = "note_tag"
+    #: The text field the mark describes, so the picker can tint it.
+    note_text_field = "notes"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.note_tag_field in self.fields:
+            instance = getattr(self, "instance", None)
+            current = getattr(instance, f"{self.note_tag_field}_id", None)
+            old = self.fields[self.note_tag_field]
+            self.fields[self.note_tag_field] = NoteTagField(
+                current=current,
+                note_field=self.note_text_field,
+                label=old.label if old.label and old.label != "Note tag" else "Mark",
+            )

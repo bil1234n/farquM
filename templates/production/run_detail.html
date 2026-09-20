@@ -64,11 +64,8 @@ whole sellable one - not a share of the mix."></i>
       </ul>
     </div>
 
-    {% if run.notes %}
-      <div class="card mb-3">
-        <div class="card-header">Notes</div>
-        <div class="card-body small text-muted">{{ run.notes|linebreaksbr }}</div>
-      </div>
+    {% if run.notes or run.note_tag %}
+      <div class="mb-3">{% note_block run.notes run.note_tag %}</div>
     {% endif %}
 
     {% if can_reverse and not run.is_reversed %}

@@ -128,6 +128,35 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
                 .order_by("-credit_account__outstanding_balance", "name")[:8]
             )
 
+        # ---- The yard: goods sold but not yet collected --------------------
+        # Scoped like everything else: the stock keeper, who sees every sale,
+        # sees the whole yard; a seller sees their own customers' goods.
+        if user.has_access("delivery.view"):
+            from sales.delivery import queue_summary
+
+            ctx["delivery_queue"] = queue_summary(user)
+
+        # ---- What the business spent this month ---------------------------
+        if user.has_access("expense.view"):
+            from expenses.models import Expense
+            from expenses.services import summarize
+
+            spent = summarize(
+                scoped(Expense.objects.all(), user).filter(
+                    spent_on__gte=month_start, spent_on__lte=today
+                )
+            )
+            top = spent["total"]
+            for row in spent["by_category"]:
+                row["percent"] = round(row["total"] * 100 / top) if top else 0
+            spent["by_category"] = spent["by_category"][:5]
+            ctx["month_expenses"] = spent
+            month_profit = ctx.get("month_profit")
+            if month_profit is not None:
+                # Gross profit less what it cost to run the place: the number
+                # an owner actually means by "did we make money this month".
+                ctx["month_net_profit"] = month_profit["gross_profit"] - spent["total"]
+
         # ---- Which dashboard is this? -------------------------------------
         profile = profile_for(user)
         ctx["profile"] = profile

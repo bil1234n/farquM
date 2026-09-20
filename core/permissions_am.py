@@ -185,6 +185,33 @@ AMHARIC: dict[str, str] = {
     "perm.audit.view.label": "የኦዲት መዝገብን ማንበብ",
     "perm.audit.view.help": "የሁሉንም ሰው እንቅስቃሴ እንጂ የራሱን ብቻ አይደለም።",
 
+    # -- Deliveries ---------------------------------------------------------
+    "group.deliveries.label": "ማስረከቢያ",
+    "group.deliveries.blurb": "የተሸጠ ዕቃን ማስረከብ - በአንድ ጊዜ ሙሉውን ወይም በከፊል።",
+    "perm.delivery.view.label": "ለማስረከብ የሚጠብቀውን ማየት",
+    "perm.delivery.view.help":
+        "ሁሉም ሽያጭ፣ ደንበኛው ምን ያህል እንደወሰደ እና ምን ያህል ለእሱ በግቢው እንደቀረ።",
+    "perm.delivery.record.label": "ዕቃ ለደንበኞች ማስረከብ",
+    "perm.delivery.record.help":
+        "ከግቢው የወጣውን በሽያጩ ላይ ይመዘግባል - ሙሉውን ወይም ከፊሉን፣ እና ማን እንደወሰደው።",
+    "perm.delivery.void.label": "የተመዘገበ ርክክብን መሰረዝ",
+    "perm.delivery.void.help":
+        "ዕቃውን እንደገና ለደንበኛው እንደሚጠብቅ ያደርገዋል። በስህተት ለተመዘገበ ወይም ለተመለሰ ዕቃ።",
+
+    # -- Expenses & staff ---------------------------------------------------
+    "group.expenses.label": "ወጪዎች እና ሠራተኞች",
+    "group.expenses.blurb": "ንግዱ የሚያወጣው፣ እና ለሚሠሩበት ሰዎች የሚከፍለው።",
+    "perm.expense.view.label": "ወጪዎችን ማየት",
+    "perm.expense.view.help": "የተመዘገበ ሁሉም ወጪ፣ በምድብ እና በወር ድምር።",
+    "perm.expense.record.label": "ወጪዎችን መመዝገብ እና ማስተካከል",
+    "perm.expense.void.label": "ወጪን መሰረዝ",
+    "perm.expense.void.help":
+        "ወጪውን ከድምሩ ያወጣዋል። ከመጥፋት ይልቅ ከምክንያቱ ጋር በመዝገቡ ላይ ይቀመጣል።",
+    "perm.employee.view.label": "ሠራተኞችን እና የክፍያ ታሪካቸውን ማየት",
+    "perm.employee.manage.label": "ሠራተኞችን መጨመር እና ማስተካከል",
+    "perm.employee.manage.help":
+        "ሠራተኞች በደመወዝ መዝገብ ያሉ ሰዎች ናቸው። ለመከፈል መለያ አያስፈልጋቸውም።",
+
     # -- Odds and ends ------------------------------------------------------
     "perm.wildcard.label": "ሁሉንም ነገር ሙሉ ፈቃድ",
 }

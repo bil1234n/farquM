@@ -4,19 +4,19 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
-from core.forms import ReceiptField
+from core.forms import NoteTagField, NoteTagFormMixin, ReceiptField
 from core.scoping import scoped
 from core.utils import ZERO, default_due_date
 
 from .models import Customer, PaymentMethod, Receipt, Transaction
 
 
-class CustomerForm(StyledFormMixin, forms.ModelForm):
+class CustomerForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Customer
         fields = [
             "name", "phone", "alternate_phone", "email", "address",
-            "customer_type", "is_credit_approved", "is_active", "notes",
+            "customer_type", "is_credit_approved", "is_active", "notes", "note_tag",
         ]
         widgets = {
             "address": forms.Textarea(attrs={"rows": 2}),
@@ -135,6 +135,7 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
     notes = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 2}), label="Notes"
     )
+    note_tag = NoteTagField()
 
     def __init__(self, *args, **kwargs):
         self.user = kwargs.pop("user", None)

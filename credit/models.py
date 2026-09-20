@@ -25,7 +25,7 @@ from django.db.models import Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import OwnedModel, TimeStampedModel
+from core.models import OwnedModel, TimeStampedModel, note_tag_field
 from core.utils import ZERO, money, receipt_upload_path, validate_receipt_file
 
 
@@ -71,6 +71,7 @@ class CreditAccount(TimeStampedModel):
     )
     block_reason = models.CharField(max_length=255, blank=True)
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     objects = CreditAccountQuerySet.as_manager()
 
@@ -257,6 +258,7 @@ class DebtRecord(OwnedModel, TimeStampedModel):
         related_name="debts_created", null=True, blank=True,
     )
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     objects = DebtRecordQuerySet.as_manager()
 
@@ -434,6 +436,7 @@ class Repayment(TimeStampedModel):
         help_text="Bank slip number, mobile-money transaction ID, cheque number.",
     )
     note = models.TextField(blank=True)
+    note_tag = note_tag_field()
     received_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
         related_name="repayments_received", null=True, blank=True,

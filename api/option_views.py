@@ -16,13 +16,19 @@ permission recreates exactly the free-typing it replaces: the clerk writes
 Removal is narrower - see Option.may_be_removed_by. You may take back your own
 mistake; clearing out somebody else's entry is a shared-list decision.
 """
+import re
+
 from django.db.models import Count, Q
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 
 from core.models import Option
-from core.options import GROUPS, group_for, is_known
+from core.options import COLORED_GROUPS, GROUPS, group_for, is_known
+
+#: What a new entry in a coloured list gets when nobody picked a colour: slate,
+#: which reads as "a mark" without claiming to mean good or bad.
+DEFAULT_MARK_COLOR = "#64748B"
 
 
 class OptionSerializer(serializers.ModelSerializer):
@@ -39,7 +45,7 @@ class OptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Option
         fields = [
-            "id", "group", "group_label", "label", "code", "value",
+            "id", "group", "group_label", "label", "code", "value", "color",
             "sort_order", "is_active", "is_seeded", "use_count",
             "can_remove", "can_rename",
         ]
@@ -60,6 +66,15 @@ class OptionSerializer(serializers.ModelSerializer):
         if not is_known(value):
             raise serializers.ValidationError("That list does not exist.")
         return value
+
+    def validate_color(self, value):
+        """#RRGGBB or nothing - anything else could not be drawn anyway."""
+        value = (value or "").strip()
+        if not value:
+            return ""
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+            raise serializers.ValidationError("Use a colour like #16A34A.")
+        return value.upper()
 
     def validate_label(self, value):
         value = " ".join((value or "").split())
@@ -126,7 +141,10 @@ class OptionViewSet(viewsets.ModelViewSet):
             serializer.instance = existing
             return
 
-        serializer.save(created_by=self.request.user, is_seeded=False)
+        extra = {}
+        if group in COLORED_GROUPS and not serializer.validated_data.get("color"):
+            extra["color"] = DEFAULT_MARK_COLOR
+        serializer.save(created_by=self.request.user, is_seeded=False, **extra)
 
     def perform_update(self, serializer):
         """
@@ -161,7 +179,10 @@ class OptionViewSet(viewsets.ModelViewSet):
                 {"detail": "You can only remove entries you added yourself."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if option.is_seeded:
+        # A coloured mark is referenced by notes all over the system with no
+        # copy of its own (see core.models.note_tag_field), so it is switched
+        # off rather than deleted: gone from the pickers, still on old notes.
+        if option.is_seeded or option.group in COLORED_GROUPS:
             option.is_active = False
             option.save(update_fields=["is_active", "updated_at"])
             return Response(status=status.HTTP_204_NO_CONTENT)

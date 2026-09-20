@@ -11,7 +11,7 @@
       <div class="card">
         <div class="card-header"><i class="bi bi-person-gear me-1"></i> Account Details</div>
         <div class="card-body">
-          {% include "partials/form_fields.html" with form=form wide_fields="notes" %}
+          {% include "partials/form_fields.html" with form=form wide_fields="notes,note_tag" %}
         </div>
         <div class="card-footer bg-light d-flex justify-content-between">
           <a href="{% url 'accounts:user_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>

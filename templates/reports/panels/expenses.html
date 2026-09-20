@@ -1,0 +1,44 @@
+{% load core_extras %}
+{% comment %}
+  This month's spending, from expenses.services.summarize - the same numbers
+  as the Expenses page, so the two can never disagree.
+{% endcomment %}
+<div class="col-lg-{{ col|default:6 }}">
+  <div class="card h-100">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-wallet2 me-1"></i> Spent this month</span>
+      <span class="d-flex gap-1">
+        {% if user|can:"expense.record" %}
+          <a href="{% url 'expenses:expense_create' %}" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus-lg"></i> Expense
+          </a>
+        {% endif %}
+        <a href="{% url 'expenses:expense_list' %}" class="btn btn-sm btn-outline-secondary">View all</a>
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="d-flex flex-wrap gap-4 mb-3">
+        <div class="mini-stat">Total<span class="money text-danger">{{ month_expenses.total|money }}</span></div>
+        <div class="mini-stat">Staff pay<span class="money">{{ month_expenses.staff_total|money }}</span></div>
+        {% if show_profit %}
+          <div class="mini-stat">Profit after expenses
+            <span class="money {% if month_net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ month_net_profit|money }}</span>
+          </div>
+        {% endif %}
+      </div>
+      {% for row in month_expenses.by_category %}
+        <div class="mb-2">
+          <div class="d-flex justify-content-between small">
+            <span>{{ row.category }}</span><span class="money">{{ row.total|money }}</span>
+          </div>
+          <div class="cat-bar"><span style="width:{{ row.percent }}%"></span></div>
+        </div>
+      {% empty %}
+        <div class="empty-state py-3">
+          <i class="bi bi-inbox"></i>
+          Nothing recorded this month yet.
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>

@@ -40,14 +40,14 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
 
-from core.models import TimeStampedModel
+from core.models import TimeStampedModel, note_tag_field
 from core.permissions import WILDCARD, clean_codes, expand
 from core.utils import avatar_upload_path, validate_avatar_file
 
 
 class RoleCode(models.TextChoices):
     """
-    The three roles that always exist.
+    The roles that always exist.
 
     Custom roles are rows in RoleDefinition with codes not listed here. This
     enum exists so code that genuinely means "the administrator role" can say
@@ -57,6 +57,7 @@ class RoleCode(models.TextChoices):
     ADMIN = "ADMIN", "Administrator"
     MANAGER = "MANAGER", "Manager"
     SALES = "SALES", "Sales"
+    STOCK_KEEPER = "STOCK_KEEPER", "Stock keeper"
 
 
 #: Historical alias. Plenty of modules do `from .models import Role`.
@@ -372,6 +373,7 @@ class User(AbstractUser):
         help_text="Force a password reset on next login (used after admin resets).",
     )
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     objects = UserManager()
 

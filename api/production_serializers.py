@@ -21,7 +21,13 @@ from production.models import (
     RecipeItem,
 )
 
-from .serializers import FinancialFieldsMixin, OwnerNameMixin
+from .serializers import (
+    NOTE_TAG_FIELDS,
+    FinancialFieldsMixin,
+    NoteTagField,
+    NoteTagMixin,
+    OwnerNameMixin,
+)
 
 
 class RawMaterialSerializer(
@@ -347,7 +353,7 @@ class ProductionLineWriteSerializer(serializers.Serializer):
 
 
 class ProductionRunSerializer(
-    OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
+    NoteTagMixin, OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
 ):
     financial_fields = (
         "material_cost", "unit_cost", "rejected_cost",
@@ -398,7 +404,7 @@ class ProductionRunSerializer(
             "material_cost", "unit_cost", "rejected_cost",
             "naive_rejected_cost", "damage_loss_gap",
             "damages", "damage_summary",
-            "status", "status_display", "notes",
+            "status", "status_display", "notes", *NOTE_TAG_FIELDS,
             "reversed_at", "reversed_by_name", "reversal_reason",
             "materials", "created_by_name", "owner_name", "created_at",
         ]
@@ -421,6 +427,7 @@ class ProductionRunCreateSerializer(serializers.Serializer):
     produced_on = serializers.DateField(required=False, allow_null=True)
     notes = serializers.CharField(max_length=2000, required=False,
                                   allow_blank=True)
+    note_tag = NoteTagField()
     materials = ProductionLineWriteSerializer(many=True)
     # What broke, itemised. When present these ARE the rejected figure - the
     # service adds them up - so a client that sends lines need not also keep
@@ -449,7 +456,7 @@ class ProductionRunCreateSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 # "We are running out - please make more"
 # ---------------------------------------------------------------------------
-class ProductionRequestSerializer(serializers.ModelSerializer):
+class ProductionRequestSerializer(NoteTagMixin, serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
     product_sku = serializers.CharField(source="product.sku", read_only=True)
     unit_display = serializers.CharField(
@@ -479,7 +486,7 @@ class ProductionRequestSerializer(serializers.ModelSerializer):
             "quantity", "current_stock", "stock_at_request",
             "requested_by", "requested_by_name",
             "assigned_to", "assigned_to_name",
-            "reason", "reason_name", "note", "needed_by",
+            "reason", "reason_name", "note", *NOTE_TAG_FIELDS, "needed_by",
             "status", "status_display", "is_open", "is_overdue",
             "responded_at", "response_note", "fulfilled_run",
             "can_respond", "can_cancel", "created_at",
@@ -513,6 +520,7 @@ class ProductionRequestCreateSerializer(serializers.Serializer):
     note = serializers.CharField(
         required=False, allow_blank=True, default="", max_length=255
     )
+    note_tag = NoteTagField()
     needed_by = serializers.DateField(required=False, allow_null=True)
 
 

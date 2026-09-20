@@ -52,7 +52,9 @@
             </td>
             <td class="small">
               {{ row.reason_name|default:"-" }}
-              {% if row.note %}<div class="text-muted">{{ row.note }}</div>{% endif %}
+              {% if row.note or row.note_tag %}
+                <div class="text-muted">{% note_mark row.note_tag %} {{ row.note }}</div>
+              {% endif %}
               {% if row.needed_by %}
                 <div class="{% if row.is_overdue %}text-danger fw-semibold{% else %}text-muted{% endif %}">
                   needed by {{ row.needed_by|date:"d M Y" }}

@@ -27,7 +27,7 @@ from decimal import Decimal
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 
-from accounts.models import RegistrationPasscode, User
+from accounts.models import RegistrationPasscode, RoleDefinition, User
 from accounts.roles import ensure_system_roles
 from api.messages import EXACT_AM, translate
 from api.renderers import translate_payload
@@ -1675,3 +1675,431 @@ class WalkInCustomerTests(ApiTestBase):
             "the snapshot follows the account, never the one-off boxes",
         )
         self.assertEqual(txn.customer_phone_snapshot, "0911")
+
+
+
+# ---------------------------------------------------------------------------
+# Round 3: the stock keeper, hand-overs, expenses and coloured notes
+# ---------------------------------------------------------------------------
+class Round3Base(ApiTestBase):
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.keeper = User.objects.create_user(
+            "kebede", password="pw", role="STOCK_KEEPER"
+        )
+        cls.other_manager = User.objects.create_user(
+            "marta", password="pw", role="MANAGER"
+        )
+        cls.block = Product.objects.create(
+            name="Hollow block", sku="HB", category=cls.category,
+            cost_price=Decimal("20.00"), selling_price=Decimal("32.00"),
+            stock_quantity=2000, owner=cls.manager,
+        )
+
+    def _sale(self, user=None, quantity=1000, **extra):
+        return create_sale(
+            user=user or self.sales,
+            cart=[{"product": self.block, "quantity": quantity,
+                   "unit_price": Decimal("32.00")}],
+            amount_paid=Decimal("32.00") * quantity,
+            payment_method="CASH",
+            **extra,
+        )
+
+    def _deliver(self, sale, client=None, **payload):
+        body = {"sale": sale.pk, **payload}
+        return (client or self.as_(self.keeper)).post(
+            "/api/deliveries/", body, content_type="application/json"
+        )
+
+
+class StockKeeperRoleTests(Round3Base):
+    """A role that sees every sale and hands the goods over - and no more."""
+
+    def test_the_role_ships_with_the_system(self):
+        role = RoleDefinition.objects.get(code="STOCK_KEEPER")
+        self.assertTrue(role.is_system)
+        self.assertEqual(role.data_scope, "ALL")
+        for code in ("sale.view", "delivery.view", "delivery.record", "stock.restock"):
+            self.assertIn(code, role.permissions)
+        for code in ("sale.create", "product.view_cost", "credit.view", "expense.view"):
+            self.assertNotIn(code, role.permissions)
+
+    def test_a_stock_keeper_sees_every_sellers_sales(self):
+        mine = self._sale(user=self.sales, quantity=5)
+        theirs = self._sale(user=self.manager, quantity=7)
+        refs = {
+            row["reference"]
+            for row in self.as_(self.keeper).get("/api/sales/?page_size=50").json()["results"]
+        }
+        self.assertIn(mine.reference, refs)
+        self.assertIn(theirs.reference, refs)
+
+    def test_but_not_their_customers_debts_or_costs(self):
+        client = self.as_(self.keeper)
+        self.assertEqual(client.get("/api/customers/").status_code, 403)
+        self.assertEqual(client.get("/api/debts/").status_code, 403)
+        self.assertEqual(client.get("/api/expenses/").status_code, 403)
+        product = client.get(f"/api/products/{self.block.pk}/").json()
+        self.assertIsNone(product.get("cost_price"), "no cost prices")
+
+    def test_their_home_screen_is_the_yard(self):
+        self._sale(quantity=3)
+        data = self.as_(self.keeper).get("/api/dashboard/").json()
+        self.assertEqual(data["profile"], "keeper")
+        self.assertIn("deliveries", data)
+        self.assertNotIn("expenses", data)
+
+    def test_an_admin_can_give_somebody_the_role(self):
+        response = self.as_(self.admin).post(
+            "/api/users/",
+            {"username": "abel", "password": "longenough1", "role": "STOCK_KEEPER"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(User.objects.get(username="abel").role, "STOCK_KEEPER")
+
+    def test_the_new_codes_reached_the_existing_roles(self):
+        manager = RoleDefinition.objects.get(code="MANAGER")
+        for code in ("expense.view", "expense.record", "employee.manage",
+                     "delivery.view", "delivery.record"):
+            self.assertIn(code, manager.permissions)
+        self.assertIn("delivery.view", RoleDefinition.objects.get(code="SALES").permissions)
+
+
+class DeliveryTests(Round3Base):
+    """
+    A customer buys 1,000 blocks and takes 400 today, 600 next week. Stock
+    left the shelf at the sale; these follow the goods out of the gate.
+    """
+
+    def test_a_new_sale_waits_for_collection(self):
+        sale = self._sale()
+        item = sale.items.get()
+        self.assertEqual(sale.delivery_status, "PENDING")
+        self.assertEqual(item.quantity_waiting, 1000)
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.stock_quantity, 1000, "stock still drops at the sale")
+
+    def test_part_now_the_rest_later(self):
+        sale = self._sale()
+        item = sale.items.get()
+
+        first = self._deliver(
+            sale, lines=[{"item": item.pk, "quantity": 400}],
+            received_by_name="Driver Alemu", vehicle="3-A12345",
+        )
+        self.assertEqual(first.status_code, 201, first.content)
+        body = first.json()
+        self.assertEqual(body["sale"]["delivery_status"], "PARTIAL")
+        self.assertEqual(body["sale"]["items"][0]["quantity_delivered"], 400)
+        self.assertEqual(body["sale"]["items"][0]["quantity_waiting"], 600)
+        self.assertEqual(body["delivery"]["total_quantity"], 400)
+
+        second = self._deliver(sale, lines=[{"item": item.pk, "quantity": 600}])
+        self.assertEqual(second.json()["sale"]["delivery_status"], "DELIVERED")
+
+        history = self.as_(self.keeper).get(f"/api/deliveries/?sale={sale.pk}").json()
+        self.assertEqual(history["count"], 2)
+
+    def test_everything_in_one_tap(self):
+        sale = self._sale(quantity=250)
+        response = self._deliver(sale, everything=True)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["sale"]["delivery_status"], "DELIVERED")
+
+    def test_nobody_leaves_with_more_than_they_bought(self):
+        sale = self._sale(quantity=10)
+        item = sale.items.get()
+        response = self._deliver(sale, lines=[{"item": item.pk, "quantity": 11}])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10", response.json()["detail"])
+        item.refresh_from_db()
+        self.assertEqual(item.quantity_delivered, 0)
+
+    def test_the_queue_is_oldest_first_and_skips_what_is_done(self):
+        old = self._sale(quantity=5)
+        new = self._sale(quantity=6)
+        done = self._sale(quantity=7)
+        self._deliver(done, everything=True)
+
+        rows = self.as_(self.keeper).get("/api/sales/?delivery=open&page_size=50").json()["results"]
+        refs = [row["reference"] for row in rows]
+        self.assertNotIn(done.reference, refs)
+        self.assertLess(refs.index(old.reference), refs.index(new.reference))
+
+    def test_cancelling_a_hand_over_puts_the_goods_back_as_waiting(self):
+        sale = self._sale(quantity=20)
+        delivery_id = self._deliver(sale, everything=True).json()["delivery"]["id"]
+
+        response = self.as_(self.admin).post(
+            f"/api/deliveries/{delivery_id}/void/",
+            {"reason": "Lorry broke down at the gate"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        sale.refresh_from_db()
+        self.assertEqual(sale.delivery_status, "PENDING")
+        self.assertEqual(sale.items.get().quantity_delivered, 0)
+
+    def test_a_stock_keeper_may_not_cancel_one(self):
+        sale = self._sale(quantity=20)
+        delivery_id = self._deliver(sale, everything=True).json()["delivery"]["id"]
+        response = self.as_(self.keeper).post(
+            f"/api/deliveries/{delivery_id}/void/", {"reason": "x"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_a_sale_whose_goods_left_cannot_be_voided_on_paper(self):
+        sale = self._sale(quantity=20)
+        delivery_id = self._deliver(sale, everything=True).json()["delivery"]["id"]
+        admin = self.as_(self.admin)
+
+        refused = admin.post(
+            f"/api/sales/{sale.pk}/void/", {"reason": "Mistake"},
+            content_type="application/json",
+        )
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("handed over", refused.json()["detail"])
+
+        admin.post(f"/api/deliveries/{delivery_id}/void/", {"reason": "Came back"},
+                   content_type="application/json")
+        allowed = admin.post(
+            f"/api/sales/{sale.pk}/void/", {"reason": "Mistake"},
+            content_type="application/json",
+        )
+        self.assertEqual(allowed.status_code, 200, allowed.content)
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.stock_quantity, 2000, "stock back only once goods are")
+
+    def test_a_seller_sees_whether_their_customer_collected_but_cannot_hand_over(self):
+        sale = self._sale(user=self.sales, quantity=3)
+        self._deliver(sale, everything=True)
+        seller = self.as_(self.sales)
+        self.assertEqual(
+            seller.get(f"/api/deliveries/?sale={sale.pk}").json()["count"], 1
+        )
+        refused = self._deliver(sale, client=seller, everything=True)
+        self.assertEqual(refused.status_code, 403)
+
+    def test_waiting_goods_are_counted_per_product(self):
+        from sales.delivery import waiting_by_product
+
+        sale = self._sale(quantity=30)
+        self._deliver(sale, lines=[{"item": sale.items.get().pk, "quantity": 10}])
+        self.assertEqual(waiting_by_product([self.block.pk])[self.block.pk], 20)
+
+    def test_sales_from_before_tracking_count_as_collected(self):
+        """The migration closes old sales rather than flooding the queue."""
+        import importlib
+
+        from django.apps import apps as live_apps
+
+        sale = self._sale(quantity=9)
+        migration = importlib.import_module(
+            "sales.migrations.0007_existing_sales_collected"
+        )
+        migration.mark_collected(live_apps, None)
+        sale.refresh_from_db()
+        self.assertEqual(sale.delivery_status, "DELIVERED")
+        self.assertEqual(sale.items.get().quantity_waiting, 0)
+
+    def test_the_dashboard_counts_the_yard(self):
+        sale = self._sale(quantity=40)
+        self._deliver(sale, lines=[{"item": sale.items.get().pk, "quantity": 15}])
+        block = self.as_(self.keeper).get("/api/dashboard/").json()["deliveries"]
+        self.assertGreaterEqual(block["waiting_sales"], 1)
+        self.assertGreaterEqual(block["partial_sales"], 1)
+        self.assertEqual(block["today_units"], 15)
+        self.assertTrue(any(row["reference"] == sale.reference for row in block["oldest"])
+                        or block["waiting_sales"] > 5)
+
+
+class ExpenseTests(Round3Base):
+    """What the business spends, and what it pays its people."""
+
+    def _spend(self, user=None, **payload):
+        body = {"amount": "1500.00", "category_name": "Fuel", **payload}
+        return self.as_(user or self.manager).post(
+            "/api/expenses/", body, content_type="application/json"
+        )
+
+    def test_a_manager_records_an_expense(self):
+        response = self._spend(payee="Total station", notes="Loader diesel")
+        self.assertEqual(response.status_code, 201, response.content)
+        row = response.json()
+        self.assertTrue(row["reference"].startswith("EXP-"))
+        self.assertEqual(row["category_name"], "Fuel")
+        self.assertEqual(row["recorded_by_name"], self.manager.display_name)
+
+    def test_a_category_nobody_had_is_added_to_the_list(self):
+        self._spend(category_name="Generator hire")
+        from core.models import Option
+
+        self.assertTrue(
+            Option.objects.filter(group="EXPENSE_CATEGORY", label="Generator hire").exists()
+        )
+
+    def test_a_bank_payment_names_its_bank(self):
+        refused = self._spend(payment_method="BANK")
+        self.assertEqual(refused.status_code, 400)
+        accepted = self._spend(payment_method="BANK", payment_channel_name="Dashen Bank",
+                               payment_reference="FT123")
+        self.assertEqual(accepted.status_code, 201, accepted.content)
+        self.assertEqual(accepted.json()["payment_channel_name"], "Dashen Bank")
+
+    def test_the_month_summary_leaves_out_what_was_cancelled(self):
+        client = self.as_(self.manager)
+        self._spend(amount="1000.00", category_name="Rent")
+        self._spend(amount="200.00", category_name="Fuel")
+        mistake = self._spend(amount="999.00", category_name="Fuel").json()
+        client.post(f"/api/expenses/{mistake['id']}/void/", {"reason": "Typed twice"},
+                    content_type="application/json")
+
+        summary = client.get("/api/expenses/summary/").json()
+        self.assertEqual(Decimal(summary["total"]), Decimal("1200.00"))
+        by = {row["category"]: Decimal(row["total"]) for row in summary["by_category"]}
+        self.assertEqual(by["Rent"], Decimal("1000.00"))
+        self.assertEqual(by["Fuel"], Decimal("200.00"))
+
+    def test_one_manager_does_not_see_anothers_spending(self):
+        self._spend(user=self.manager, amount="50.00")
+        rows = self.as_(self.other_manager).get("/api/expenses/").json()["results"]
+        self.assertEqual(rows, [])
+        admin_rows = self.as_(self.admin).get("/api/expenses/").json()["results"]
+        self.assertEqual(len(admin_rows), 1)
+
+    def test_the_counter_has_no_expenses_page(self):
+        self.assertEqual(self.as_(self.sales).get("/api/expenses/").status_code, 403)
+
+    def test_paying_an_employee(self):
+        client = self.as_(self.manager)
+        employee = client.post(
+            "/api/employees/",
+            {"name": "Kebede Alemu", "job_name": "Loader", "phone": "0911223344",
+             "monthly_salary": "6000.00"},
+            content_type="application/json",
+        )
+        self.assertEqual(employee.status_code, 201, employee.content)
+        employee = employee.json()
+        self.assertEqual(employee["job_name"], "Loader")
+
+        paid = self._spend(amount="6000.00", category_name="", employee=employee["id"])
+        self.assertEqual(paid.status_code, 201, paid.content)
+        paid = paid.json()
+        self.assertEqual(paid["category_name"], "Salaries & wages")
+        self.assertEqual(paid["pay_type_name"], "Salary")
+        self.assertEqual(paid["payee"], "Kebede Alemu")
+        self.assertTrue(paid["pay_period"].endswith("-01"))
+
+        refreshed = client.get(f"/api/employees/{employee['id']}/").json()
+        self.assertEqual(Decimal(refreshed["paid_this_month"]), Decimal("6000.00"))
+        history = client.get(f"/api/employees/{employee['id']}/payments/").json()
+        self.assertEqual(len(history), 1)
+
+    def test_net_profit_takes_expenses_off(self):
+        self._spend(user=self.admin, amount="100.00")
+        report = self.as_(self.admin).get("/api/reports/profit/").json()
+        self.assertEqual(
+            Decimal(report["net_profit"]),
+            Decimal(report["gross_profit"]) - Decimal(report["expenses"]),
+        )
+        self.assertGreaterEqual(Decimal(report["expenses"]), Decimal("100.00"))
+
+    def test_the_managers_home_screen_shows_the_month(self):
+        self._spend(amount="700.00")
+        data = self.as_(self.manager).get("/api/dashboard/").json()
+        self.assertEqual(Decimal(data["expenses"]["month_total"]), Decimal("700.00"))
+
+
+class NoteColourTests(Round3Base):
+    """Red for bad, green for good, blue for normal - and editable."""
+
+    def _tags(self, user=None):
+        return self.as_(user or self.sales).get("/api/options/?group=NOTE_TAG").json()
+
+    def test_the_three_colours_ship(self):
+        tags = {row["label"]: row["color"] for row in self._tags()}
+        self.assertEqual(tags["Good"], "#16A34A")
+        self.assertEqual(tags["Normal"], "#2563EB")
+        self.assertEqual(tags["Bad"], "#DC2626")
+
+    def test_anybody_can_add_a_colour_and_change_what_it_means(self):
+        client = self.as_(self.sales)
+        created = client.post(
+            "/api/options/",
+            {"group": "NOTE_TAG", "label": "Follow up", "color": "#f59e0b"},
+            content_type="application/json",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertEqual(created.json()["color"], "#F59E0B")
+
+        tag_id = created.json()["id"]
+        renamed = client.patch(
+            f"/api/options/{tag_id}/",
+            {"label": "Call back", "color": "#7C3AED"},
+            content_type="application/json",
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.content)
+        self.assertEqual(renamed.json()["label"], "Call back")
+        self.assertEqual(renamed.json()["color"], "#7C3AED")
+
+    def test_a_colour_that_is_not_a_colour_is_refused(self):
+        response = self.as_(self.sales).post(
+            "/api/options/", {"group": "NOTE_TAG", "label": "Odd", "color": "blue"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_a_new_mark_without_a_colour_gets_one(self):
+        response = self.as_(self.sales).post(
+            "/api/options/", {"group": "NOTE_TAG", "label": "Plain"},
+            content_type="application/json",
+        )
+        self.assertRegex(response.json()["color"], r"^#[0-9A-F]{6}$")
+
+    def test_a_sale_carries_its_mark(self):
+        bad = next(row for row in self._tags() if row["label"] == "Bad")
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {"items": [{"product": self.block.pk, "quantity": 1, "unit_price": "32.00"}],
+             "amount_paid": "32.00", "payment_method": "CASH",
+             "notes": "Customer argued about the price", "note_tag": bad["id"]},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["note_tag_label"], "Bad")
+        self.assertEqual(response.json()["note_tag_color"], "#DC2626")
+
+    def test_a_mark_from_another_list_is_refused(self):
+        from core.models import Option
+
+        bank = Option.objects.filter(group="BANK").first()
+        response = self.as_(self.sales).post(
+            "/api/sales/",
+            {"items": [{"product": self.block.pk, "quantity": 1, "unit_price": "32.00"}],
+             "amount_paid": "32.00", "payment_method": "CASH", "note_tag": bank.pk},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_removing_a_colour_keeps_it_on_old_notes(self):
+        client = self.as_(self.sales)
+        tag = client.post(
+            "/api/options/", {"group": "NOTE_TAG", "label": "Temporary", "color": "#0EA5E9"},
+            content_type="application/json",
+        ).json()
+        customer = client.post(
+            "/api/customers/",
+            {"name": "Hana", "phone": "0933", "notes": "Pays on Fridays",
+             "note_tag": tag["id"]},
+            content_type="application/json",
+        ).json()
+        self.assertEqual(client.delete(f"/api/options/{tag['id']}/").status_code, 204)
+
+        labels = [row["label"] for row in self._tags()]
+        self.assertNotIn("Temporary", labels, "gone from the picker")
+        kept = client.get(f"/api/customers/{customer['id']}/").json()
+        self.assertEqual(kept["note_tag_label"], "Temporary", "still on the note")

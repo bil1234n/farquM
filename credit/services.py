@@ -96,6 +96,7 @@ def record_repayment(
     paid_at=None,
     external_reference: str = "",
     note: str = "",
+    note_tag=None,
     proof_files=None,
     allow_overpayment: bool = False,
 ) -> Repayment:
@@ -147,6 +148,7 @@ def record_repayment(
         balance_after=money(max(balance_before - amount, ZERO)),
         external_reference=external_reference,
         note=note,
+        note_tag=note_tag,
         received_by=user,
     )
 

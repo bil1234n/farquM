@@ -63,6 +63,10 @@ NAV_RULES: tuple[tuple[str, str, str], ...] = (
     ("sales", "transaction_", "transactions"),
     ("sales", "receipt_", "transactions"),
     ("sales", "customer_", "customers"),
+    ("sales", "delivery_", "deliveries"),
+
+    ("expenses", "expense_", "expenses"),
+    ("expenses", "employee_", "employees"),
 
     ("credit", "dashboard", "credit_dashboard"),
     ("credit", "borrower_", "borrowers"),
@@ -130,6 +134,7 @@ def sidebar_badges(request):
     from credit.models import DebtRecord
     from inventory.models import Product
     from production.models import RawMaterial
+    from sales.models import Transaction
 
     from core.scoping import scoped
 
@@ -145,6 +150,12 @@ def sidebar_badges(request):
     if user.has_access("credit.view"):
         badges["badge_overdue_debts"] = (
             scoped(DebtRecord.objects.all(), user).overdue().count()
+        )
+    # Sales with goods still in the yard - the stock keeper's to-do list, and
+    # a seller's reminder of whose goods are waiting.
+    if user.has_access("delivery.view"):
+        badges["badge_waiting_deliveries"] = (
+            scoped(Transaction.objects.awaiting_collection(), user).count()
         )
     # Requests waiting on THIS person for an answer. Not scoped by ownership
     # like the others - a request is addressed to somebody by name, and the

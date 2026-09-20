@@ -129,6 +129,7 @@ class ProductionRequestViewSet(viewsets.ModelViewSet):
                 reason_id=data.get("reason"),
                 reason_name=data.get("reason_name", ""),
                 note=data.get("note", ""),
+                note_tag=data.get("note_tag"),
                 needed_by=data.get("needed_by"),
             )
         except ValidationError as exc:

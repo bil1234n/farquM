@@ -1,7 +1,7 @@
 from django import forms
 
 from accounts.forms import StyledFormMixin
-from core.forms import unit_choices
+from core.forms import NoteTagFormMixin, unit_choices
 
 from .models import Category, Product, Supplier
 
@@ -13,12 +13,12 @@ class CategoryForm(StyledFormMixin, forms.ModelForm):
         widgets = {"description": forms.Textarea(attrs={"rows": 2})}
 
 
-class SupplierForm(StyledFormMixin, forms.ModelForm):
+class SupplierForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Supplier
         fields = [
             "name", "contact_person", "phone", "email",
-            "address", "is_active", "notes",
+            "address", "is_active", "notes", "note_tag",
         ]
         widgets = {
             "address": forms.Textarea(attrs={"rows": 2}),

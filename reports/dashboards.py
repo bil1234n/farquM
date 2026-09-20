@@ -9,12 +9,14 @@ what the viewer was allowed to see. It never broke, but it never felt built
 for anyone either - a sales assistant got the owner's layout with the
 interesting numbers swapped out for consolation prizes.
 
-So the layout is chosen instead. Four shapes:
+So the layout is chosen instead. Five shapes:
 
     owner    Sees the whole business and its margins. Wants money in, money
              made, money tied up in stock, money late.
     stock    Runs the shelf. Wants what is running out, what it is worth, and
              how the people reporting to them are doing.
+    keeper   Runs the yard gate. Wants the goods customers have paid for but
+             not yet taken, what went out today, and what is running low.
     counter  Sells. Wants today's takings, this month's takings, what their
              own customers still owe them, and a big button to sell again.
     viewer   Everyone else - a read-only auditor, a custom role nobody
@@ -54,6 +56,7 @@ def plural(count: int, word: str, suffix: str = "s") -> str:
 
 OWNER = "owner"
 STOCK = "stock"
+KEEPER = "keeper"
 COUNTER = "counter"
 VIEWER = "viewer"
 
@@ -101,6 +104,10 @@ BLURBS = {
         "Your counter: what you sold, what your customers owe you, and what "
         "you have collected. Nobody else's figures appear here."
     ),
+    KEEPER: (
+        "The yard: every sale with goods still waiting for the customer, what "
+        "went out of the gate today, and what is running low."
+    ),
     VIEWER: "The records you have been given access to.",
 }
 
@@ -108,6 +115,7 @@ TITLES = {
     OWNER: "Business overview",
     STOCK: "Stock and team",
     COUNTER: "My sales",
+    KEEPER: "Yard and hand-overs",
     VIEWER: "Overview",
 }
 
@@ -122,6 +130,14 @@ def profile_for(user) -> str:
     """
     if user.data_scope == "ALL" and user.can_view_profit:
         return OWNER
+    # Hands goods over but neither prices the shelf nor sells: the stock
+    # keeper. Checked before STOCK because a keeper also receives stock, and
+    # a manager - who also hands over on a quiet day - edits products, so
+    # still lands on STOCK below.
+    if user.has_access("delivery.record") and not user.has_any_access(
+        "product.edit", "sale.create"
+    ):
+        return KEEPER
     if user.has_any_access("stock.restock", "stock.adjust", "product.edit"):
         return STOCK
     if user.has_access("sale.create"):
@@ -246,6 +262,54 @@ def build_cards(user, ctx) -> list:
                 icon="bi-cash-stack",
                 url="credit:debt_list",
                 needs=("credit.view",),
+            ),
+        ]
+
+    elif profile == KEEPER:
+        queue = ctx.get("delivery_queue") or {}
+        cards = [
+            Card(
+                key="yard_units",
+                label="Waiting In The Yard",
+                value=queue.get("waiting_units", 0),
+                hint=plural(queue.get("waiting_sales", 0), "sale") + " to collect",
+                accent="warning",
+                icon="bi-hourglass-split",
+                url="sales:delivery_list",
+                is_money=False,
+                needs=("delivery.view",),
+            ),
+            Card(
+                key="part_collected",
+                label="Part Collected",
+                value=queue.get("partial_sales", 0),
+                hint="Customers coming back for the rest",
+                accent="info",
+                icon="bi-pie-chart",
+                url="sales:delivery_list",
+                is_money=False,
+                needs=("delivery.view",),
+            ),
+            Card(
+                key="out_today",
+                label="Out Today",
+                value=queue.get("today_units", 0),
+                hint=plural(queue.get("today_handovers", 0), "hand-over"),
+                accent="success",
+                icon="bi-truck",
+                is_money=False,
+                needs=("delivery.view",),
+            ),
+            Card(
+                key="low_stock",
+                label="Needs Restocking",
+                value=ctx["low_stock_count"],
+                hint=plural(ctx["product_count"], "product") + " in catalogue",
+                accent="danger",
+                icon="bi-arrow-repeat",
+                url="inventory:low_stock",
+                is_money=False,
+                needs=("product.view",),
             ),
         ]
 
@@ -402,12 +466,20 @@ PANEL_ORDER = {
               needs=("sale.view",)),
         Panel("overdue", "reports/panels/overdue.html", col=5,
               needs=("credit.view",)),
+        Panel("expenses", "reports/panels/expenses.html", col=6,
+              needs=("expense.view",)),
+        Panel("deliveries", "reports/panels/deliveries.html", col=6,
+              needs=("delivery.view",)),
         Panel("low_stock", "reports/panels/low_stock.html", col=12,
               needs=("product.view",)),
     ],
     STOCK: [
         Panel("low_stock", "reports/panels/low_stock.html", col=12,
               needs=("product.view",)),
+        Panel("deliveries", "reports/panels/deliveries.html", col=6,
+              needs=("delivery.view",)),
+        Panel("expenses", "reports/panels/expenses.html", col=6,
+              needs=("expense.view",)),
         Panel("chart", "reports/panels/chart.html", col=8, needs=("sale.view",)),
         Panel("aging", "reports/panels/aging.html", col=4, needs=("credit.view",)),
         Panel("team", "reports/panels/team.html", col=12),
@@ -425,6 +497,17 @@ PANEL_ORDER = {
               needs=("credit.view",)),
         Panel("my_customers", "reports/panels/my_customers.html", col=12,
               needs=("customer.view",)),
+        Panel("deliveries", "reports/panels/deliveries.html", col=12,
+              needs=("delivery.view",)),
+    ],
+    KEEPER: [
+        Panel("deliveries", "reports/panels/deliveries.html", col=8,
+              needs=("delivery.view",)),
+        Panel("keeper_actions", "reports/panels/keeper_actions.html", col=4),
+        Panel("low_stock", "reports/panels/low_stock.html", col=12,
+              needs=("product.view",)),
+        Panel("recent_sales", "reports/panels/recent_sales.html", col=12,
+              needs=("sale.view",)),
     ],
     VIEWER: [
         Panel("chart", "reports/panels/chart.html", col=8, needs=("sale.view",)),

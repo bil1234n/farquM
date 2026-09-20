@@ -12,7 +12,13 @@ from django.db import models
 from django.db.models import F, Sum
 from django.urls import reverse
 
-from core.models import AuthoredModel, OwnedModel, SoftDeleteModel, TimeStampedModel
+from core.models import (
+    AuthoredModel,
+    OwnedModel,
+    SoftDeleteModel,
+    TimeStampedModel,
+    note_tag_field,
+)
 
 
 class Category(TimeStampedModel):
@@ -51,6 +57,7 @@ class Supplier(TimeStampedModel):
     address = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
+    note_tag = note_tag_field()
 
     class Meta:
         ordering = ["name"]

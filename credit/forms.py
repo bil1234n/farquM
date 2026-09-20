@@ -4,7 +4,7 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
-from core.forms import ReceiptField
+from core.forms import NoteTagField, NoteTagFormMixin, ReceiptField
 
 from .models import CreditAccount, DebtRecord, Repayment
 
@@ -38,6 +38,7 @@ class RepaymentForm(StyledFormMixin, forms.Form):
     note = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 2}), label="Note"
     )
+    note_tag = NoteTagField(note_field="note")
     proof = ReceiptField(
         help_text="Image or PDF. You can attach more than one file.",
     )
@@ -115,12 +116,12 @@ class BulkRepaymentForm(StyledFormMixin, forms.Form):
         return amount
 
 
-class DebtAdjustForm(StyledFormMixin, forms.ModelForm):
+class DebtAdjustForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     """Managers may reschedule a due date and add notes - nothing financial."""
 
     class Meta:
         model = DebtRecord
-        fields = ["due_date", "notes"]
+        fields = ["due_date", "notes", "note_tag"]
         widgets = {
             "due_date": forms.DateInput(attrs={"type": "date"}),
             "notes": forms.Textarea(attrs={"rows": 3}),
@@ -150,13 +151,13 @@ class ReverseRepaymentForm(StyledFormMixin, forms.Form):
     )
 
 
-class CreditAccountForm(StyledFormMixin, forms.ModelForm):
+class CreditAccountForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     """Admin only - a credit limit is a financial decision."""
 
     class Meta:
         model = CreditAccount
         fields = ["credit_limit", "default_terms_days", "is_blocked",
-                  "block_reason", "notes"]
+                  "block_reason", "notes", "note_tag"]
         widgets = {"notes": forms.Textarea(attrs={"rows": 3})}
         help_texts = {"credit_limit": "Enter 0 for no enforced limit."}
 

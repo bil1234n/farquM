@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% load core_extras humanize %}
+{% comment %}
+  The stock keeper's queue: every sale whose goods are still (partly) in the
+  yard. Stock left the shelf at the moment of sale; this page is about the
+  other half - whether the customer has physically taken them yet.
+
+  Oldest first on the waiting tabs, because the customer who has waited
+  longest is the one at the gate. Newest first on "Handed over", which is a
+  history.
+{% endcomment %}
+
+{% block title %}Hand-overs{% endblock %}
+{% block page_title %}Hand-overs{% endblock %}
+{% block breadcrumb %}<div class="crumb">Goods sold and paid for, collected all at once or a part at a time</div>{% endblock %}
+
+{% block content %}
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-warning">
+      <div class="label"><i class="bi bi-hourglass-split me-1"></i>Sales waiting</div>
+      <div class="value">{{ summary.waiting_sales|intcomma }}</div>
+      <div class="hint">customers still to collect</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-danger">
+      <div class="label"><i class="bi bi-boxes me-1"></i>Units in the yard</div>
+      <div class="value">{{ summary.waiting_units|intcomma }}</div>
+      <div class="hint">sold, not yet taken</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-info">
+      <div class="label"><i class="bi bi-pie-chart me-1"></i>Part collected</div>
+      <div class="value">{{ summary.partial_sales|intcomma }}</div>
+      <div class="hint">coming back for the rest</div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="stat-card accent-success">
+      <div class="label"><i class="bi bi-truck me-1"></i>Out today</div>
+      <div class="value">{{ summary.today_units|intcomma }}</div>
+      <div class="hint">{{ summary.today_handovers }} hand-over{{ summary.today_handovers|pluralize }} recorded</div>
+    </div>
+  </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <ul class="nav settings-tabs border-0 p-0 m-0">
+    {% for key, label in tabs %}
+      <li class="nav-item">
+        <a class="nav-link {% if tab == key %}active{% endif %}"
+           href="?tab={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}">
+          {{ label }}
+          {% if key == "open" %}<span class="badge text-bg-warning ms-1">{{ count_open }}</span>
+          {% elif key == "partial" %}<span class="badge text-bg-info ms-1">{{ count_partial }}</span>{% endif %}
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+  <form method="get" class="ms-auto d-flex gap-2">
+    <input type="hidden" name="tab" value="{{ tab }}">
+    <input type="search" name="q" value="{{ q }}" class="form-control form-control-sm"
+           placeholder="Reference, customer or phone" data-i18n-placeholder="r3.ph_queue" style="min-width:240px">
+    <button class="btn btn-primary btn-sm"><i class="bi bi-search"></i></button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>Sale</th><th>Customer</th><th style="min-width:260px">Goods</th>
+          <th>Status</th><th class="text-end"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sales %}
+          <tr>
+            <td>
+              <a href="{% url 'sales:transaction_detail' s.pk %}" class="mono fw-semibold">{{ s.reference }}</a>
+              {% note_mark s.note_tag compact=True %}
+              <div class="text-muted-sm">{{ s.created_at|date:"d M Y, H:i" }}</div>
+              <div class="text-muted-sm">{{ s.created_at|timesince }} ago</div>
+            </td>
+            <td>
+              <div class="fw-semibold">{{ s.customer_display }}</div>
+              {% if s.customer %}
+                <div class="text-muted-sm"><i class="bi bi-telephone me-1"></i>{{ s.customer.phone }}</div>
+              {% elif s.customer_phone_snapshot %}
+                <div class="text-muted-sm"><i class="bi bi-telephone me-1"></i>{{ s.customer_phone_snapshot }}</div>
+              {% endif %}
+              <div class="text-muted-sm">sold by {{ s.sold_by.display_name|default:"-" }}</div>
+            </td>
+            <td>
+              {% for item in s.items.all %}
+                <div class="handover-line">
+                  <span class="text-truncate">{{ item.product_name }}</span>
+                  <span>
+                    {% if item.quantity_waiting %}
+                      <span class="waiting">{{ item.quantity_waiting|intcomma }}</span>
+                      <span class="text-muted">of {{ item.quantity|intcomma }} waiting</span>
+                    {% else %}
+                      <span class="done"><i class="bi bi-check2"></i> {{ item.quantity|intcomma }} taken</span>
+                    {% endif %}
+                  </span>
+                </div>
+              {% endfor %}
+              <div class="handover-bar mt-1" title="{{ s.collected_percent }}% collected">
+                <span style="width:{{ s.collected_percent }}%"></span>
+              </div>
+            </td>
+            <td>
+              <span class="badge text-bg-{{ s.delivery_status_class }}">{{ s.get_delivery_status_display }}</span>
+            </td>
+            <td class="text-end">
+              {% if can_deliver and s.units_waiting %}
+                <div class="d-flex gap-1 justify-content-end">
+                  <a href="{% url 'sales:transaction_detail' s.pk %}#handover"
+                     class="btn btn-sm btn-primary text-nowrap" title="Choose what goes out now">
+                    <i class="bi bi-box-arrow-right me-1"></i> Hand over
+                  </a>
+                  <form method="post" action="{% url 'sales:delivery_create' s.pk %}" class="m-0"
+                        onsubmit="return confirm('Hand over everything still waiting on {{ s.reference }}?');">
+                    {% csrf_token %}
+                    <button class="btn btn-sm btn-success text-nowrap" name="everything" value="1"
+                            title="Everything still waiting, in one go">
+                      <i class="bi bi-check2-all"></i> All
+                    </button>
+                  </form>
+                </div>
+              {% else %}
+                <a href="{% url 'sales:transaction_detail' s.pk %}#handover" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-eye"></i>
+                </a>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5">
+            <div class="empty-state">
+              <i class="bi bi-check2-circle text-success"></i>
+              {% if tab == "done" %}
+                Nothing has been collected yet.
+              {% elif q %}
+                No sale matches "{{ q }}".
+              {% else %}
+                Nothing is waiting. Every customer has taken what they paid for.
+              {% endif %}
+            </div>
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</div>
+{% endblock %}

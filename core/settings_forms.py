@@ -56,7 +56,7 @@ class UserAccessForm(StyledMixin, forms.ModelForm):
                       "from this role, not a change to it.",
         )
 
-        managers = User.objects.filter(is_active=True).exclude(role=RoleCode.SALES)
+        managers = User.objects.filter(is_active=True).exclude(role__in=[RoleCode.SALES, RoleCode.STOCK_KEEPER])
         if self.instance.pk:
             managers = managers.exclude(pk=self.instance.pk)
         self.fields["manager"].queryset = managers.order_by("username")

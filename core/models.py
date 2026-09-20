@@ -302,6 +302,31 @@ def coded_label(group: str, code: str, builtin=None) -> str:
     return code.replace("_", " ").title()
 
 
+def note_tag_field():
+    """
+    A coloured mark on a record's notes - Good, Normal, Bad, or whatever the
+    business has added to the NOTE_TAG list - so what a note says shows
+    before anybody reads it.
+
+    WHY NO LABEL SNAPSHOT HERE, UNLIKE EVERY OTHER OPTION REFERENCE
+    ---------------------------------------------------------------
+    A bank on a sale is a fact about that sale, so it keeps its own copy of
+    the name. A note colour is shared vocabulary: when somebody decides red
+    now means "Urgent" rather than "Bad", every red note should say so. The
+    entries of a coloured list are therefore never deleted, only switched off
+    (see api/option_views.py), so a mark cannot vanish from an old note.
+    """
+    return models.ForeignKey(
+        "core.Option",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        limit_choices_to={"group": "NOTE_TAG"},
+        help_text="A coloured mark on the notes, so their meaning shows first.",
+    )
+
+
 class Option(TimeStampedModel):
     """
     One entry in a managed pick-list. The groups live in core/options.py.
@@ -336,6 +361,13 @@ class Option(TimeStampedModel):
         blank=True,
         db_index=True,
         help_text="Stable identifier for lists other tables store by code.",
+    )
+    #: For lists drawn as coloured marks rather than words - the note
+    #: colours. "#16A34A", or blank for every other list.
+    color = models.CharField(
+        max_length=7,
+        blank=True,
+        help_text="#RRGGBB for lists shown as a coloured mark.",
     )
     sort_order = models.PositiveSmallIntegerField(
         default=100, help_text="Lower sorts first. Ties fall back to the label."

@@ -16,6 +16,10 @@ urlpatterns = [
     path("<int:pk>/", views.TransactionDetailView.as_view(), name="transaction_detail"),
     path("<int:pk>/void/", views.transaction_void, name="transaction_void"),
     path("<int:pk>/print/", views.transaction_print, name="transaction_print"),
+    # Hand-overs
+    path("deliveries/", views.DeliveryQueueView.as_view(), name="delivery_list"),
+    path("<int:pk>/deliver/", views.delivery_create, name="delivery_create"),
+    path("deliveries/<int:pk>/void/", views.delivery_void, name="delivery_void"),
     # Receipts
     path("<int:pk>/receipt/upload/", views.receipt_upload, name="receipt_upload"),
     path("receipts/<int:pk>/delete/", views.receipt_delete, name="receipt_delete"),

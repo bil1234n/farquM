@@ -1,0 +1,46 @@
+{% load core_extras humanize %}
+{% comment %}
+  Goods customers have paid for but not yet taken, oldest first - the
+  customer who has waited longest is the one at the gate. From
+  sales.delivery.queue_summary, scoped to the viewer.
+{% endcomment %}
+<div class="col-lg-{{ col|default:6 }}">
+  <div class="card h-100 handover-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-truck me-1"></i> Waiting for collection</span>
+      <a href="{% url 'sales:delivery_list' %}" class="btn btn-sm btn-outline-info">Open the queue</a>
+    </div>
+    <div class="card-body pb-2">
+      <div class="d-flex flex-wrap gap-3 mb-3 small">
+        <span><span class="text-muted">Sales waiting</span> <strong>{{ delivery_queue.waiting_sales|intcomma }}</strong></span>
+        <span><span class="text-muted">Units in the yard</span> <strong class="text-warning-emphasis">{{ delivery_queue.waiting_units|intcomma }}</strong></span>
+        <span><span class="text-muted">Out today</span> <strong class="text-success">{{ delivery_queue.today_units|intcomma }}</strong></span>
+      </div>
+      {% for row in delivery_queue.oldest %}
+        <div class="d-flex align-items-center gap-2 py-2 border-top">
+          <div class="flex-grow-1 min-w-0">
+            <a href="{% url 'sales:transaction_detail' row.id %}#handover" class="mono fw-semibold">{{ row.reference }}</a>
+            <span class="badge text-bg-{% if row.status == 'PARTIAL' %}info{% else %}warning{% endif %} ms-1">
+              {% if row.status == 'PARTIAL' %}Part collected{% else %}Waiting for collection{% endif %}
+            </span>
+            <div class="text-muted-sm text-truncate">{{ row.customer }} &middot; {{ row.created_at|timesince }} ago</div>
+          </div>
+          <div class="text-end">
+            <div class="fw-semibold">{{ row.waiting_units|intcomma }}</div>
+            <div class="text-muted-sm">waiting</div>
+          </div>
+          {% if user|can:"delivery.record" %}
+            <a href="{% url 'sales:transaction_detail' row.id %}#handover" class="btn btn-sm btn-primary" title="Hand over">
+              <i class="bi bi-box-arrow-right"></i>
+            </a>
+          {% endif %}
+        </div>
+      {% empty %}
+        <div class="empty-state py-4">
+          <i class="bi bi-check2-circle text-success"></i>
+          Nothing is waiting. Every customer has taken what they paid for.
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>

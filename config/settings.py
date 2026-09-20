@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "production.apps.ProductionConfig",
     "sales.apps.SalesConfig",
     "credit.apps.CreditConfig",
+    "expenses.apps.ExpensesConfig",
     "reports.apps.ReportsConfig",
     "api.apps.ApiConfig",
 ]

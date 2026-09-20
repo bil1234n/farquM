@@ -1,5 +1,5 @@
 """
-The three built-in roles, and how to (re)install them.
+The built-in roles, and how to (re)install them.
 
 These blueprints are the DEFAULTS, not the law. Once seeded, a role lives in
 the database and an administrator may edit it - that is the whole point of
@@ -11,8 +11,8 @@ customer's own tuning.
 way it shipped", triggered by a button in the role editor rather than by a
 migration.
 
-WHY THESE THREE
----------------
+WHY THESE FOUR
+--------------
 ADMIN    The owner. Full access, sees the whole business. There is always at
          least one, and the system refuses to let the last one be demoted or
          deactivated.
@@ -21,6 +21,13 @@ MANAGER  Runs the shelf. Owns products and stock, buys them in, prices them,
          counts them. Sells too. Sees their own records plus those of the
          sales staff assigned to them, so they can supervise without being
          shown another manager's books.
+
+STOCK_KEEPER
+         Keeps the yard and hands sold goods over. Sees every sale - a sale
+         nobody in the yard can see is a customer turned away at the gate -
+         and records what each customer took, all at once or a part at a
+         time. Receives stock and materials. Never changes a price, never
+         sees a cost, and never touches a customer's debt.
 
 SALES    Sells what the manager stocked. Cannot add, edit, price or count
          products, and never sees a cost price. Can register their own
@@ -90,6 +97,16 @@ BLUEPRINTS: dict[str, dict] = {
             # collecting debt are the counter's job and somebody else's
             # figures. Grant any of them per person in Access Control when a
             # particular manager also works the till.
+            # Goods leaving the yard are the shelf's business too, and on a
+            # day with no stock keeper somebody still has to hand them over.
+            "delivery.view",
+            "delivery.record",
+            # The costs of running the place, and the people who do.
+            "expense.view",
+            "expense.record",
+            "expense.void",
+            "employee.view",
+            "employee.manage",
             "report.inventory",
             "report.export",
         ],
@@ -120,7 +137,39 @@ BLUEPRINTS: dict[str, dict] = {
             # about it are different things. Without this the seller can only
             # hope somebody reads the automatic low-stock alert.
             "production.request",
+            # Whether their customer has collected yet. OWN scope keeps it to
+            # their own sales.
+            "delivery.view",
             "report.sales",
+        ],
+    },
+    "STOCK_KEEPER": {
+        "name": "Stock keeper",
+        "rank": 40,
+        # ALL, because "sees every sale" is the job: goods are collected from
+        # the yard whoever sold them. The permissions below are what keep
+        # that wide view to sales and stock - with no customer.*, credit.* or
+        # expense.* codes, the scope reaches nothing else.
+        "data_scope": "ALL",
+        "description": (
+            "Keeps the yard and hands sold goods over to customers - all at "
+            "once or a part at a time - and receives stock and materials. "
+            "Sees every sale, but never a cost price, a customer's debt or an "
+            "expense."
+        ),
+        "permissions": [
+            "dashboard.view",
+            "product.view",
+            "stock.view_movements",
+            "stock.restock",
+            "material.view",
+            "material.receive",
+            "sale.view",
+            "delivery.view",
+            "delivery.record",
+            # Watching the shelf run down while customers queue for it is
+            # exactly when somebody should be asked to make more.
+            "production.request",
         ],
     },
 }

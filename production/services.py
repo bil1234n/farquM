@@ -360,6 +360,7 @@ def record_production(
     damages=None,
     produced_on=None,
     notes: str = "",
+    note_tag=None,
     update_product_cost: bool = True,
     fulfils=None,
 ) -> ProductionRun:
@@ -438,6 +439,7 @@ def record_production(
         quantity_rejected=quantity_rejected,
         produced_on=produced_on,
         notes=notes,
+        note_tag=note_tag,
         # The run belongs to whoever owns the shelf it fills, not to whoever
         # typed it in. That keeps a batch and the blocks it made on the same
         # side of every scoping rule.
@@ -642,6 +644,7 @@ def request_production(
     reason_id=None,
     reason_name: str = "",
     note: str = "",
+    note_tag=None,
     needed_by=None,
 ) -> ProductionRequest:
     """
@@ -695,6 +698,7 @@ def request_production(
         reason=option,
         reason_name=label,
         note=(note or "").strip()[:255],
+        note_tag=note_tag,
         needed_by=needed_by,
         stock_at_request=product.stock_quantity,
     )

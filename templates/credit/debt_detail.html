@@ -111,7 +111,11 @@
                   {% if p.external_reference %}
                     <div class="text-muted-sm">Ref: <span class="mono">{{ p.external_reference }}</span></div>
                   {% endif %}
-                  {% if p.note %}<div class="text-muted-sm fst-italic">{{ p.note }}</div>{% endif %}
+                  {% if p.note or p.note_tag %}
+                    <div class="text-muted-sm fst-italic mt-1">
+                      {% note_mark p.note_tag %} {{ p.note }}
+                    </div>
+                  {% endif %}
 
                   {% if p.is_reversed %}
                     <div class="alert alert-danger py-1 px-2 small mt-2 mb-1">
@@ -242,10 +246,9 @@
             {% if debt.customer.credit_limit > 0 %}{{ debt.customer.credit_limit|money }}{% else %}Not set{% endif %}
           </span>
         </div>
-        {% if debt.notes %}
+        {% if debt.notes or debt.note_tag %}
           <hr class="my-2">
-          <div class="text-muted mb-1">Notes</div>
-          <div>{{ debt.notes|linebreaksbr }}</div>
+          {% note_block debt.notes debt.note_tag %}
         {% endif %}
       </div>
     </div>

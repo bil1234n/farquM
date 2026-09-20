@@ -2,6 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from . import (
+    delivery_views,
+    expense_views,
     option_views,
     parity_views,
     production_views,
@@ -41,6 +43,11 @@ router.register("debts", views.DebtViewSet, basename="debt")
 router.register("notifications", views.NotificationViewSet, basename="notification")
 router.register("users", views.UserViewSet, basename="user")
 router.register("roles", views.RoleViewSet, basename="role")
+# Goods leaving the yard, a sale at a time and a part at a time.
+router.register("deliveries", delivery_views.DeliveryViewSet, basename="delivery")
+# Money going out, and the people it goes to.
+router.register("expenses", expense_views.ExpenseViewSet, basename="expense")
+router.register("employees", expense_views.EmployeeViewSet, basename="employee")
 
 urlpatterns = [
     # Auth

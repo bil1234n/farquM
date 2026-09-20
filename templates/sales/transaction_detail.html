@@ -23,6 +23,11 @@
       <i class="bi bi-cash-coin me-1"></i> Record Payment
     </a>
   {% endif %}
+  {% if can_deliver %}
+    <a href="#handover" class="btn btn-primary btn-sm">
+      <i class="bi bi-truck me-1"></i> Hand over
+    </a>
+  {% endif %}
   {% if user|can:"sale.void" and not txn.is_voided %}
     <a href="{% url 'sales:transaction_void' txn.pk %}" class="btn btn-outline-danger btn-sm">
       <i class="bi bi-x-octagon me-1"></i> Void
@@ -97,6 +102,163 @@
         </div>
       {% endif %}
     </div>
+
+    {# ---------------- Hand-over ---------------- #}
+    {% comment %}
+      Stock left the shelf when this sale was recorded. This box is about the
+      other half: whether the customer has physically taken the goods - all at
+      once, or a part now and the rest later. See sales/delivery.py.
+    {% endcomment %}
+    {% if show_handover %}
+      <div class="card mb-3 handover-card{% if not items_waiting %} is-done{% endif %}" id="handover">
+        <div class="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
+          <span><i class="bi bi-truck me-1"></i> Hand-over to the customer</span>
+          <span class="d-flex align-items-center gap-2">
+            <span class="text-muted-sm">{{ items_sold|subtract:items_waiting }} of {{ items_sold }} collected</span>
+            <span class="badge text-bg-{{ txn.delivery_status_class }}">{{ txn.get_delivery_status_display }}</span>
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="handover-bar mb-3" title="{{ txn.collected_percent }}% collected">
+            <span style="width:{{ txn.collected_percent }}%"></span>
+          </div>
+
+          {% if txn.is_voided %}
+            <div class="text-muted small">This sale was voided, so there is nothing to hand over.</div>
+          {% elif can_deliver %}
+            <form method="post" action="{% url 'sales:delivery_create' txn.pk %}" id="handoverForm">
+              {% csrf_token %}
+              <div class="table-responsive">
+                <table class="table table-sm mb-3">
+                  <thead>
+                    <tr>
+                      <th>Product</th><th class="num">Sold</th><th class="num">Taken</th>
+                      <th class="num">Waiting</th><th class="num">Going out now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for item in txn.items.all %}
+                      <tr>
+                        <td>{{ item.product_name }}</td>
+                        <td class="num">{{ item.quantity }}</td>
+                        <td class="num text-success">{{ item.quantity_delivered }}</td>
+                        <td class="num fw-semibold{% if item.quantity_waiting %} text-warning-emphasis{% endif %}">{{ item.quantity_waiting }}</td>
+                        <td class="num">
+                          {% if item.quantity_waiting %}
+                            <div class="d-flex gap-1 justify-content-end">
+                              <input type="number" name="qty_{{ item.pk }}" min="0" max="{{ item.quantity_waiting }}"
+                                     step="1" inputmode="numeric" placeholder="0"
+                                     class="form-control form-control-sm qty-now" aria-label="How many of {{ item.product_name }} go out now">
+                              <button type="button" class="btn btn-sm btn-outline-secondary"
+                                      data-fill="qty_{{ item.pk }}" data-value="{{ item.quantity_waiting }}"
+                                      title="All {{ item.quantity_waiting }} of this line">All</button>
+                            </div>
+                          {% else %}
+                            <span class="text-success"><i class="bi bi-check2-circle"></i> Done</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="row g-2 mb-3">
+                <div class="col-md-4">
+                  <label class="form-label small mb-1" for="dlvName">Collected by</label>
+                  <input type="text" id="dlvName" name="received_by_name" maxlength="160"
+                         class="form-control form-control-sm" placeholder="{{ txn.customer_display }}">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-1" for="dlvPhone">Their phone</label>
+                  <input type="tel" id="dlvPhone" name="received_by_phone" maxlength="30"
+                         class="form-control form-control-sm">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-1" for="dlvVehicle">Vehicle / plate</label>
+                  <input type="text" id="dlvVehicle" name="vehicle" maxlength="40"
+                         class="form-control form-control-sm" placeholder="e.g. Isuzu 3-12345">
+                </div>
+                <div class="col-12">
+                  <label class="form-label small mb-1" for="dlvNotes">Note</label>
+                  <textarea id="dlvNotes" name="notes" rows="2" class="form-control form-control-sm"
+                            placeholder="Anything worth remembering about this trip" data-i18n-placeholder="r3.ph_trip"></textarea>
+                  <div class="mt-2">{% note_tag_select "note_tag" %}</div>
+                </div>
+              </div>
+
+              <div class="d-flex flex-wrap gap-2 justify-content-end">
+                <button type="submit" class="btn btn-primary">
+                  <i class="bi bi-box-arrow-right me-1"></i> Hand over these
+                </button>
+                <button type="submit" name="everything" value="1" class="btn btn-success">
+                  <i class="bi bi-check2-all me-1"></i> Hand over everything waiting
+                </button>
+              </div>
+            </form>
+          {% elif items_waiting %}
+            <div class="text-muted small">
+              <i class="bi bi-hourglass-split me-1"></i>
+              {{ items_waiting }} unit{{ items_waiting|pluralize }} still waiting for the customer.
+            </div>
+          {% else %}
+            <div class="text-success small">
+              <i class="bi bi-check2-circle me-1"></i> Everything on this sale has been collected.
+            </div>
+          {% endif %}
+
+          {% if deliveries %}
+            <hr>
+            <div class="note-box-title mb-2">History</div>
+            <div class="handover-history">
+              {% for d in deliveries %}
+                <div class="dlv{% if d.is_voided %} is-void{% endif %}">
+                  <div class="d-flex flex-wrap justify-content-between gap-2">
+                    <div>
+                      <span class="mono fw-semibold dlv-ref">{{ d.reference }}</span>
+                      {% if d.is_voided %}<span class="badge text-bg-secondary ms-1">Cancelled</span>{% endif %}
+                      <div class="text-muted-sm">
+                        {{ d.delivered_at|date:"d M Y, H:i" }} &middot; by {{ d.delivered_by.display_name }}
+                        {% if d.received_by_name %}
+                          &middot; collected by {{ d.received_by_name }}{% if d.received_by_phone %} ({{ d.received_by_phone }}){% endif %}
+                        {% endif %}
+                        {% if d.vehicle %}&middot; <i class="bi bi-truck"></i> {{ d.vehicle }}{% endif %}
+                      </div>
+                    </div>
+                    <div class="fw-semibold text-nowrap">{{ d.total_quantity }} unit{{ d.total_quantity|pluralize }}</div>
+                  </div>
+                  <div class="small mt-1">
+                    {% for line in d.lines.all %}
+                      <span class="me-3 text-nowrap">{{ line.item.product_name }} &times; {{ line.quantity }}</span>
+                    {% endfor %}
+                  </div>
+                  {% if d.notes or d.note_tag %}
+                    <div class="mt-2">{% note_block d.notes d.note_tag "Note" %}</div>
+                  {% endif %}
+                  {% if d.is_voided %}
+                    <div class="text-danger small mt-1">
+                      Cancelled by {{ d.voided_by.display_name|default:"unknown" }}
+                      on {{ d.voided_at|date:"d M Y, H:i" }}: {{ d.void_reason }}
+                    </div>
+                  {% elif can_void_delivery %}
+                    <details class="mt-2">
+                      <summary class="small text-danger">Cancel this hand-over</summary>
+                      <form method="post" action="{% url 'sales:delivery_void' d.pk %}" class="d-flex gap-2 mt-2">
+                        {% csrf_token %}
+                        <input type="text" name="reason" required maxlength="255"
+                               class="form-control form-control-sm"
+                               placeholder="Why? Recorded by mistake, the goods came back..." data-i18n-placeholder="r3.ph_void_trip">
+                        <button class="btn btn-sm btn-outline-danger text-nowrap">Cancel it</button>
+                      </form>
+                    </details>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
 
     {# ---------------- Receipts ---------------- #}
     <div class="card">
@@ -236,13 +398,24 @@
             <span class="text-muted">Due date</span><span>{{ txn.due_date|date:"d M Y" }}</span>
           </div>
         {% endif %}
-        {% if txn.notes %}
+        {% if txn.notes or txn.note_tag %}
           <hr class="my-2">
-          <div class="text-muted mb-1">Notes</div>
-          <div>{{ txn.notes|linebreaksbr }}</div>
+          {% note_block txn.notes txn.note_tag %}
         {% endif %}
       </div>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // "All" beside a line fills in everything still waiting on that line.
+  document.querySelectorAll('[data-fill]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var input = document.querySelector('input[name="' + btn.dataset.fill + '"]');
+      if (input) { input.value = btn.dataset.value; input.focus(); }
+    });
+  });
+</script>
 {% endblock %}

@@ -341,6 +341,7 @@ def repayment_create(request, pk):
                 paid_at=form.cleaned_data.get("paid_at"),
                 external_reference=form.cleaned_data.get("external_reference", ""),
                 note=form.cleaned_data.get("note", ""),
+                note_tag=form.cleaned_data.get("note_tag"),
                 # cleaned_data, not request.FILES: the field has already
                 # checked size and extension, so an oversized upload is a
                 # form error next to the input rather than a 500 during save.

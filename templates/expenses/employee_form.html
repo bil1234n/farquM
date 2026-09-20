@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}{% if person %}Edit {{ person.name }}{% else %}Add employee{% endif %}{% endblock %}
+{% block page_title %}{% if person %}Edit {{ person.name }}{% else %}Add an employee{% endif %}{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'expenses:employee_list' %}">Employees</a> &middot; <span>no sign-in needed, just who they are and what they are paid</span></div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-person-vcard me-1"></i> Employee</div>
+        <div class="card-body">
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger py-2 px-3 small">
+              {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}
+            </div>
+          {% endif %}
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.name.id_for_label }}">{{ form.name.label }} <span class="required-mark">*</span></label>
+              {{ form.name }}
+              {% for e in form.name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Job</label>
+              <div class="option-select"
+                   data-group="EMPLOYEE_JOB"
+                   data-id-field="job"
+                   data-name-field="job_name"
+                   data-value="{{ form.job.value|default_if_none:'' }}"
+                   data-value-name="{{ form.job_name.value|default_if_none:'' }}"
+                   data-placeholder="Choose a job"></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.phone.id_for_label }}">{{ form.phone.label }}</label>
+              {{ form.phone }}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.monthly_salary.id_for_label }}">{{ form.monthly_salary.label }}</label>
+              <div class="input-group">
+                <span class="input-group-text">{{ CURRENCY }}</span>
+                {{ form.monthly_salary }}
+              </div>
+              <div class="form-text">{{ form.monthly_salary.help_text }}</div>
+              {% for e in form.monthly_salary.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.hired_on.id_for_label }}">Started on</label>
+              {{ form.hired_on }}
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                {{ form.is_active }}
+                <label class="form-check-label" for="{{ form.is_active.id_for_label }}">On the payroll</label>
+                <div class="form-text">{{ form.is_active.help_text }}</div>
+              </div>
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="{{ form.notes.id_for_label }}">Notes</label>
+              {{ form.notes }}
+              <div class="mt-2">
+                <div class="form-label small text-muted mb-1">Mark</div>
+                {{ form.note_tag }}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% if person %}{% url 'expenses:employee_detail' person.pk %}{% else %}{% url 'expenses:employee_list' %}{% endif %}"
+             class="btn btn-outline-secondary">Cancel</a>
+          <button class="btn btn-primary"><i class="bi bi-check2 me-1"></i> {% if person %}Save{% else %}Add to the payroll{% endif %}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

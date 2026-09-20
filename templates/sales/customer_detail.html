@@ -86,10 +86,9 @@
           <div class="text-muted mb-1">Address</div>
           <div>{{ customer.address|linebreaksbr }}</div>
         {% endif %}
-        {% if customer.notes %}
+        {% if customer.notes or customer.note_tag %}
           <hr class="my-2">
-          <div class="text-muted mb-1">Notes</div>
-          <div>{{ customer.notes|linebreaksbr }}</div>
+          {% note_block customer.notes customer.note_tag %}
         {% endif %}
       </div>
     </div>

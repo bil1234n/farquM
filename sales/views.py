@@ -27,7 +27,15 @@ from .forms import (
     TransactionFilterForm,
     VoidTransactionForm,
 )
-from .models import Customer, PaymentStatus, Receipt, Transaction
+from .delivery import DeliveryError, queue_summary, record_delivery, void_delivery
+from .models import (
+    Customer,
+    Delivery,
+    DeliveryStatus,
+    PaymentStatus,
+    Receipt,
+    Transaction,
+)
 from .services import SaleError, create_sale, void_transaction
 
 
@@ -42,7 +50,7 @@ class CustomerListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
     paginate_by = 25
 
     def get_queryset(self):
-        qs = super().get_queryset().select_related("credit_account", "owner")
+        qs = super().get_queryset().select_related("credit_account", "owner", "note_tag")
         q = self.request.GET.get("q", "").strip()
         flt = self.request.GET.get("filter", "").strip()
         if q:
@@ -75,7 +83,9 @@ class CustomerDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
     context_object_name = "customer"
 
     def get_queryset(self):
-        return super().get_queryset().select_related("credit_account", "owner")
+        return super().get_queryset().select_related(
+            "credit_account", "owner", "note_tag", "credit_account__note_tag"
+        )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -156,7 +166,7 @@ class TransactionListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
         qs = (
             super()
             .get_queryset()
-            .select_related("customer", "sold_by", "owner")
+            .select_related("customer", "sold_by", "owner", "note_tag")
             .annotate(line_count=Count("items"))
         )
         form = TransactionFilterForm(
@@ -214,7 +224,7 @@ class TransactionDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailVie
         return (
             super()
             .get_queryset()
-            .select_related("customer", "sold_by", "voided_by", "owner")
+            .select_related("customer", "sold_by", "voided_by", "owner", "note_tag")
             .prefetch_related("items", "receipts")
         )
 
@@ -222,6 +232,27 @@ class TransactionDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailVie
         ctx = super().get_context_data(**kwargs)
         ctx["receipt_form"] = ReceiptUploadForm()
         ctx["debt"] = getattr(self.object, "debt_record", None)
+
+        # -- Hand-overs -------------------------------------------------------
+        user = self.request.user
+        ctx["show_handover"] = user.has_access("delivery.view")
+        if ctx["show_handover"]:
+            ctx["deliveries"] = (
+                self.object.deliveries.select_related(
+                    "delivered_by", "voided_by", "note_tag"
+                ).prefetch_related("lines__item")
+            )
+            ctx["items_waiting"] = sum(
+                item.quantity_waiting for item in self.object.items.all()
+            )
+            ctx["items_sold"] = sum(item.quantity for item in self.object.items.all())
+            ctx["can_deliver"] = (
+                user.has_access("delivery.record")
+                and not self.object.is_voided
+                and ctx["items_waiting"] > 0
+            )
+            ctx["can_void_delivery"] = user.has_access("delivery.void")
+            ctx["note_tags"] = note_tag_choices()
         return ctx
 
 
@@ -277,6 +308,7 @@ def sale_create(request):
                     walk_in_phone=form.cleaned_data.get("walk_in_phone", ""),
                     due_date=form.cleaned_data.get("due_date"),
                     notes=form.cleaned_data.get("notes", ""),
+                    note_tag=form.cleaned_data.get("note_tag"),
                 )
             except (SaleError, ValidationError) as exc:
                 for msg in getattr(exc, "messages", [str(exc)]):
@@ -520,3 +552,171 @@ def transaction_print(request, pk):
         pk=pk,
     )
     return render(request, "sales/transaction_print.html", {"txn": txn})
+
+
+
+# ---------------------------------------------------------------------------
+# Hand-overs
+# ---------------------------------------------------------------------------
+def note_tag_choices():
+    """The active note colours, for a hand-written form."""
+    from core.models import Option
+
+    return Option.objects.in_group("NOTE_TAG").active().order_by("sort_order", "label")
+
+
+class DeliveryQueueView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
+    """
+    Every sale with goods still in the yard for the customer.
+
+    Oldest first, because the customer who has waited longest is the one at
+    the gate. The tabs are the questions a stock keeper actually asks: who is
+    waiting, who has taken part, and what went out already.
+    """
+
+    required_permission = "delivery.view"
+    model = Transaction
+    template_name = "sales/delivery_list.html"
+    context_object_name = "sales"
+    paginate_by = 30
+
+    TABS = {
+        "open": ([DeliveryStatus.PENDING, DeliveryStatus.PARTIAL], "Waiting"),
+        "partial": ([DeliveryStatus.PARTIAL], "Part collected"),
+        "done": ([DeliveryStatus.DELIVERED], "Handed over"),
+    }
+
+    def get_queryset(self):
+        self.tab = self.request.GET.get("tab", "open")
+        if self.tab not in self.TABS:
+            self.tab = "open"
+        statuses, _ = self.TABS[self.tab]
+        qs = (
+            super()
+            .get_queryset()
+            .filter(is_voided=False, delivery_status__in=statuses)
+            .select_related("customer", "sold_by", "note_tag")
+            .prefetch_related("items")
+        )
+        q = (self.request.GET.get("q") or "").strip()
+        if q:
+            qs = qs.filter(
+                Q(reference__icontains=q)
+                | Q(customer__name__icontains=q)
+                | Q(customer__phone__icontains=q)
+                | Q(customer_name_snapshot__icontains=q)
+            )
+        return qs.order_by("-created_at" if self.tab == "done" else "created_at")
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["tab"] = self.tab
+        ctx["tabs"] = [(key, label) for key, (_, label) in self.TABS.items()]
+        ctx["q"] = self.request.GET.get("q", "")
+        base = scoped(Transaction.objects.active(), self.request.user)
+        ctx["count_open"] = base.exclude(delivery_status=DeliveryStatus.DELIVERED).count()
+        ctx["count_partial"] = base.filter(delivery_status=DeliveryStatus.PARTIAL).count()
+        ctx["summary"] = queue_summary(self.request.user)
+        ctx["can_deliver"] = self.request.user.has_access("delivery.record")
+        return ctx
+
+
+def delivery_create(request, pk):
+    """
+    Record a hand-over from the sale page.
+
+    Every line of the sale is posted as qty_<item id>; a line left at zero is
+    "none of this today". The "everything" button skips the arithmetic.
+    """
+    blocked = require(
+        request, "delivery.record",
+        message="You do not have permission to hand goods over.",
+    )
+    if blocked:
+        return blocked
+    txn = get_owned_or_404(Transaction, request.user, pk=pk)
+    if request.method != "POST":
+        return redirect("sales:transaction_detail", pk=txn.pk)
+
+    everything = "everything" in request.POST
+    lines = []
+    if not everything:
+        for item in txn.items.all():
+            raw = (request.POST.get(f"qty_{item.pk}") or "").strip()
+            if raw:
+                lines.append({"item": item.pk, "quantity": raw})
+
+    from core.models import Option
+
+    tag_id = (request.POST.get("note_tag") or "").strip()
+    note_tag = (
+        Option.objects.in_group("NOTE_TAG").filter(pk=tag_id).first()
+        if tag_id.isdigit() else None
+    )
+    try:
+        delivery = record_delivery(
+            txn,
+            user=request.user,
+            lines=lines,
+            everything=everything,
+            received_by_name=request.POST.get("received_by_name", ""),
+            received_by_phone=request.POST.get("received_by_phone", ""),
+            vehicle=request.POST.get("vehicle", ""),
+            notes=request.POST.get("notes", ""),
+            note_tag=note_tag,
+        )
+    except (DeliveryError, ValidationError) as exc:
+        for msg in getattr(exc, "messages", [str(exc)]):
+            messages.error(request, msg)
+    else:
+        units = sum(line.quantity for line in delivery.lines.all())
+        log_action(
+            AuditAction.CREATE, instance=delivery,
+            description=f"Handed over {units} unit{'' if units == 1 else 's'} of {txn.reference}.",
+        )
+        txn.refresh_from_db()
+        messages.success(
+            request,
+            f"{delivery.reference}: {units} unit{'' if units == 1 else 's'} handed over. "
+            + (
+                "Everything on this sale has now been collected."
+                if txn.delivery_status == DeliveryStatus.DELIVERED
+                else "The rest is still waiting for the customer."
+            ),
+        )
+    return redirect(reverse("sales:transaction_detail", args=[txn.pk]) + "#handover")
+
+
+def delivery_void(request, pk):
+    """Take a hand-over back: recorded by mistake, or the goods came back."""
+    blocked = require(
+        request, "delivery.void",
+        message="You do not have permission to cancel a hand-over.",
+    )
+    if blocked:
+        return blocked
+    delivery = get_owned_or_404(Delivery, request.user, pk=pk)
+    if request.method == "POST":
+        try:
+            void_delivery(
+                delivery, user=request.user, reason=request.POST.get("reason", "")
+            )
+        except (DeliveryError, ValidationError) as exc:
+            for msg in getattr(exc, "messages", [str(exc)]):
+                messages.error(request, msg)
+        else:
+            log_action(
+                AuditAction.VOID, instance=delivery,
+                description=(
+                    f"Cancelled hand-over {delivery.reference}: "
+                    f"{request.POST.get('reason', '')}"
+                ),
+            )
+            messages.success(
+                request,
+                f"{delivery.reference} cancelled. Those goods are waiting for "
+                "the customer again.",
+            )
+    return redirect(
+        reverse("sales:transaction_detail", args=[delivery.transaction_id]) + "#handover"
+    )

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% load core_extras %}
+
+{% block title %}Cancel {{ expense.reference }}{% endblock %}
+{% block page_title %}Cancel an expense{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'expenses:expense_list' %}">Expenses</a> &middot; <span class="mono">{{ expense.reference }}</span></div>{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white">
+        <i class="bi bi-x-octagon-fill me-1"></i> Cancel {{ expense.reference }}
+      </div>
+      <div class="card-body">
+        <dl class="kv mb-3">
+          <dt>Date</dt><dd>{{ expense.spent_on|date:"d M Y" }}</dd>
+          <dt>Category</dt><dd>{{ expense.category_name }}</dd>
+          {% if expense.employee %}<dt>Employee</dt><dd>{{ expense.employee.name }}</dd>{% endif %}
+          {% if expense.payee %}<dt>Paid to</dt><dd>{{ expense.payee }}</dd>{% endif %}
+          <dt>Amount</dt><dd class="money text-danger">{{ expense.amount|money }}</dd>
+          <dt>Paid by</dt><dd>{{ expense.get_payment_method_display }}{% if expense.payment_channel_name %} &middot; {{ expense.payment_channel_name }}{% endif %}</dd>
+        </dl>
+
+        <div class="alert alert-warning small">
+          The expense leaves every total but is never deleted: it stays on the list,
+          crossed out, with your reason beside it.
+        </div>
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger py-2 px-3 small">
+            {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}
+          </div>
+        {% endif %}
+
+        <form method="post" novalidate>
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label" for="{{ form.reason.id_for_label }}">
+              {{ form.reason.label }} <span class="required-mark">*</span>
+            </label>
+            {{ form.reason }}
+            <div class="form-text">{{ form.reason.help_text }}</div>
+            {% for e in form.reason.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'expenses:expense_list' %}?month={{ expense.spent_on|date:'Y-m' }}" class="btn btn-outline-secondary">Keep it</a>
+            <button class="btn btn-danger"><i class="bi bi-x-circle me-1"></i> Cancel this expense</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

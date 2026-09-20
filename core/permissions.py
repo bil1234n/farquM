@@ -178,6 +178,24 @@ CATALOG: tuple[PermGroup, ...] = (
         ),
     ),
     PermGroup(
+        key="deliveries",
+        label="Deliveries",
+        icon="bi-truck",
+        blurb="Handing sold goods over - all at once, or a part at a time.",
+        perms=(
+            Perm("delivery.view", "See what is waiting to be handed over",
+                 "Every sale, with how much the customer has taken and how "
+                 "much is still in the yard for them."),
+            Perm("delivery.record", "Hand goods over to customers",
+                 "Records what left the yard against a sale, in full or in "
+                 "part, and who took it."),
+            Perm("delivery.void", "Cancel a recorded hand-over",
+                 "Puts the goods back as waiting for the customer. For a "
+                 "hand-over recorded by mistake, or goods brought back.",
+                 sensitive=True),
+        ),
+    ),
+    PermGroup(
         key="customers",
         label="Customers",
         icon="bi-people",
@@ -206,6 +224,26 @@ CATALOG: tuple[PermGroup, ...] = (
             Perm("credit.reverse_payment", "Reverse a recorded payment",
                  "Un-does a receipt. The other way cash goes missing on paper.",
                  sensitive=True),
+        ),
+    ),
+    PermGroup(
+        key="expenses",
+        label="Expenses & staff",
+        icon="bi-wallet2",
+        blurb="What the business spends, and what it pays the people who "
+              "work in it.",
+        perms=(
+            Perm("expense.view", "See expenses",
+                 "Every cost recorded, with totals by category and month."),
+            Perm("expense.record", "Record and edit expenses"),
+            Perm("expense.void", "Cancel an expense",
+                 "Takes a cost out of the totals. Kept on the record, with "
+                 "the reason, rather than deleted.",
+                 sensitive=True),
+            Perm("employee.view", "See employees and their pay history"),
+            Perm("employee.manage", "Add and edit employees",
+                 "Employees are the people on the payroll. They do not need "
+                 "an account to be paid."),
         ),
     ),
     PermGroup(
@@ -381,6 +419,11 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "sales:transaction_detail": "sale.view",
     "sales:customer_list": "customer.view",
     "sales:customer_detail": "customer.view",
+    "sales:delivery_list": "delivery.view",
+    "expenses:expense_list": "expense.view",
+    "expenses:expense_create": "expense.record",
+    "expenses:employee_list": "employee.view",
+    "expenses:employee_detail": "employee.view",
     "credit:dashboard": "credit.view",
     "credit:borrower_list": "credit.view",
     "credit:debt_list": "credit.view",

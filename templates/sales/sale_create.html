@@ -276,6 +276,10 @@
           <div class="mb-3">
             <label class="form-label" for="{{ form.notes.id_for_label }}">Notes</label>
             {{ form.notes }}
+            <div class="mt-2">
+              <div class="form-label small text-muted mb-1">Mark</div>
+              {{ form.note_tag }}
+            </div>
           </div>
 
           <button type="submit" class="btn btn-primary w-100 py-2" id="submitBtn">

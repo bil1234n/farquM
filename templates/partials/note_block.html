@@ -1,0 +1,14 @@
+{% comment %}
+  One note, boxed in the colour of its mark. See core_extras.note_block.
+  The colour is on the box itself, so a reader scanning a page of notes can
+  pick out the red ones without reading any of them.
+{% endcomment %}
+{% if text or tag %}
+  <div class="note-box{% if tag %} is-marked{% endif %}"{% if color %} style="--mark:{{ color }}"{% endif %}>
+    <div class="note-box-head">
+      <span class="note-box-title"><i class="bi bi-sticky me-1"></i>{{ title }}</span>
+      {% if tag %}<span class="note-mark"><span class="note-dot"></span>{{ tag.label }}</span>{% endif %}
+    </div>
+    {% if text %}<div class="note-box-text">{{ text|linebreaksbr }}</div>{% endif %}
+  </div>
+{% endif %}

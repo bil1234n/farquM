@@ -2,6 +2,8 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.password_validation import validate_password
 
+from core.forms import NoteTagFormMixin
+
 from .models import DataScope, RoleCode, RoleDefinition, User
 from .registration import available_roles
 
@@ -67,7 +69,7 @@ class ManagerFieldMixin:
     def _install_manager_choices(self):
         if "manager" not in self.fields:
             return
-        qs = User.objects.filter(is_active=True).exclude(role=RoleCode.SALES)
+        qs = User.objects.filter(is_active=True).exclude(role__in=[RoleCode.SALES, RoleCode.STOCK_KEEPER])
         if self.instance and self.instance.pk:
             # Somebody cannot report to themselves, and letting them try just
             # produces a scoping loop nobody can debug from the UI.
@@ -127,7 +129,9 @@ class LoginForm(StyledFormMixin, AuthenticationForm):
     }
 
 
-class UserCreateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCreationForm):
+class UserCreateForm(
+    NoteTagFormMixin, RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCreationForm
+):
     class Meta:
         model = User
         fields = [
@@ -141,6 +145,7 @@ class UserCreateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCre
             "manager",
             "is_active",
             "notes",
+            "note_tag",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 2})}
 
@@ -150,7 +155,9 @@ class UserCreateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCre
         self._install_manager_choices()
 
 
-class UserUpdateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, forms.ModelForm):
+class UserUpdateForm(
+    NoteTagFormMixin, RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, forms.ModelForm
+):
     """Password is changed separately - never on the profile edit form."""
 
     class Meta:
@@ -166,6 +173,7 @@ class UserUpdateForm(RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, forms.M
             "manager",
             "is_active",
             "notes",
+            "note_tag",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 2})}
 
@@ -324,7 +332,7 @@ class RegisterForm(StyledFormMixin, forms.Form):
         # report to another produces a scoping chain nobody asked for.
         self.fields["manager"].queryset = (
             User.objects.filter(is_active=True)
-            .exclude(role=RoleCode.SALES)
+            .exclude(role__in=[RoleCode.SALES, RoleCode.STOCK_KEEPER])
             .order_by("first_name", "username")
         )
         self.fields["manager"].empty_label = "Nobody - I work independently"
