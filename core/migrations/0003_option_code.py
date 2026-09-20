@@ -12,52 +12,22 @@ column, and the whole point of making the list editable is that renaming "Piece"
 to "Each" should re-word every product at once. That needs a stable identifier
 underneath the wording, which is what `code` is.
 
-The seed below is re-runnable: it matches on (group, label) before creating, and
-backfills the code onto rows a previous migration created without one.
+WHY THE SEED IS NOT IN HERE
+---------------------------
+This migration only adds the column. Filling it in is core/0004, on its own.
+
+They used to be one migration, and on PostgreSQL that cannot work: the seed
+inserts rows into core_option, whose foreign key to the user table is checked
+at COMMIT, so those checks are still queued when Django creates this column's
+index at the end of the same migration - and PostgreSQL refuses:
+
+    cannot CREATE INDEX "core_option" because it has pending trigger events
+
+Each migration runs in its own transaction, so splitting them means the index
+is built and committed before a single row is written. SQLite, which the test
+suite used to run on, has no such rule, which is how it got through.
 """
 from django.db import migrations, models
-
-
-def seed_and_backfill(apps, schema_editor):
-    Option = apps.get_model("core", "Option")
-
-    # Imported rather than copied: core/options.py is the single catalogue, and
-    # a migration holding a second copy is a second list that goes stale.
-    from core.options import seed_pairs
-
-    by_key = {
-        (row["group"], row["label"].lower()): row["id"]
-        for row in Option.objects.values("id", "group", "label")
-    }
-
-    missing = []
-    for group, code, label, order in seed_pairs():
-        existing = by_key.get((group, label.lower()))
-        if existing is None:
-            missing.append(
-                Option(
-                    group=group,
-                    code=code,
-                    label=label,
-                    sort_order=order,
-                    is_active=True,
-                    is_seeded=True,
-                )
-            )
-        elif code:
-            # A row core.0002 created before codes existed. Give it the one it
-            # should have had, so products already pointing at PIECE resolve.
-            Option.objects.filter(id=existing, code="").update(code=code)
-
-    Option.objects.bulk_create(missing)
-
-
-def unseed(apps, schema_editor):
-    """Remove only the unit rows this migration added. Typed-in entries stay."""
-    Option = apps.get_model("core", "Option")
-    Option.objects.filter(
-        group__in=["PRODUCT_UNIT", "MATERIAL_UNIT"], is_seeded=True
-    ).delete()
 
 
 class Migration(migrations.Migration):
@@ -78,5 +48,4 @@ class Migration(migrations.Migration):
                 max_length=32,
             ),
         ),
-        migrations.RunPython(seed_and_backfill, unseed),
     ]

@@ -1296,3 +1296,87 @@ class WebWalkInSaleTests(AccessTestBase):
         txn = Transaction.objects.latest("id")
         self.assertEqual(txn.customer_id, self.customer.pk)
         self.assertEqual(txn.customer_name_snapshot, "Abebe")
+
+
+class MigrationHygieneTests(SimpleTestCase):
+    """
+    No migration may change a table's schema AND run Python in one go.
+
+    WHY
+    ---
+    Django runs each migration in one transaction, and PostgreSQL checks
+    foreign keys at COMMIT. So rows a RunPython writes leave checks queued on
+    their table, and any schema change Django makes afterwards in the same
+    migration - an index it defers to the end, say - is refused:
+
+        cannot CREATE INDEX "core_option" because it has pending trigger events
+
+    That is exactly how core/0003 failed on the real database while passing
+    every test here: SQLite has no such rule. Django's own documentation
+    gives the fix - keep schema changes and RunPython in separate migrations -
+    and this makes it a rule rather than something to remember.
+    """
+
+    #: Written before this rule, already applied on every database, and each
+    #: happens not to trip it (their Python only updates columns no queued
+    #: check covers). Rewriting applied history would be worse than listing
+    #: them. Nothing new goes on this list - split the migration instead.
+    GRANDFATHERED = {
+        ("accounts", "0005_registration_passcode"),
+        ("core", "0002_option"),
+        ("credit", "0002_debtrecord_owner"),
+        ("inventory", "0002_product_owner"),
+        ("sales", "0002_owner_scoping"),
+    }
+
+    PROJECT_APPS = {
+        "accounts", "api", "core", "credit", "inventory", "production",
+        "reports", "sales",
+    }
+
+    @staticmethod
+    def mixes(operations) -> bool:
+        """Whether a migration's operations change schema AND run Python."""
+        from django.db import migrations as ops
+
+        data_ops = (ops.RunPython, ops.RunSQL)
+        has_data = any(isinstance(op, data_ops) for op in operations)
+        has_schema = any(
+            not isinstance(op, data_ops + (ops.SeparateDatabaseAndState,))
+            for op in operations
+        )
+        return has_data and has_schema
+
+    def test_no_migration_mixes_schema_changes_with_python(self):
+        from django.db.migrations.loader import MigrationLoader
+
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        offenders = [
+            f"{app}/{name}"
+            for (app, name), migration in sorted(loader.disk_migrations.items())
+            if app in self.PROJECT_APPS
+            and (app, name) not in self.GRANDFATHERED
+            and self.mixes(migration.operations)
+        ]
+        self.assertEqual(
+            offenders, [],
+            "These migrations change a table and run Python in the same "
+            "transaction, which PostgreSQL refuses once the Python has "
+            "written rows. Move the RunPython into a migration of its own.",
+        )
+
+    def test_the_rule_catches_the_shape_that_failed(self):
+        """A guard is only worth having if it fails on the real mistake."""
+        from django.db import migrations as ops
+        from django.db import models
+
+        add_code = ops.AddField(
+            "option", "code",
+            models.CharField(max_length=32, blank=True, db_index=True),
+        )
+        seed = ops.RunPython(ops.RunPython.noop)
+        # The original core/0003: both in one migration.
+        self.assertTrue(self.mixes([add_code, seed]))
+        # The fix: one of each, in migrations of their own.
+        self.assertFalse(self.mixes([add_code]))
+        self.assertFalse(self.mixes([seed]))

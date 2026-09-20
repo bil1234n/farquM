@@ -530,8 +530,10 @@ class RescheduleSerializer(serializers.Serializer):
 class CreditLimitSerializer(serializers.Serializer):
     """How much this customer may owe at once."""
 
+    # Decimal("0"), not 0: DRF compares against a Decimal and warns on every
+    # start-up - every `manage.py` command - when handed an int.
     credit_limit = serializers.DecimalField(
-        max_digits=14, decimal_places=2, min_value=0
+        max_digits=14, decimal_places=2, min_value=Decimal("0")
     )
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
