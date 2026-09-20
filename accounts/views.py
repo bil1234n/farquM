@@ -385,6 +385,12 @@ def profile(request):
     for form in (password_form,):
         for field in form.fields.values():
             field.widget.attrs.setdefault("class", "form-control")
+            # Django's form puts the cursor in "old password" by itself, and the
+            # browser scrolls to it: the profile opened half-way down, at the
+            # last card - on a phone, a screen and a half past the top. Only
+            # somebody sent here to change their password should land there.
+            if not request.user.must_change_password:
+                field.widget.attrs.pop("autofocus", None)
 
     return render(
         request,

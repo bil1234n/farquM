@@ -23,10 +23,14 @@
 
   <div class="sidebar-brand">
     <div class="logo"><img src="{% static 'img/logo.png' %}" alt="{{ BUSINESS_NAME }}"></div>
-    <div>
+    <div class="min-w-0 flex-grow-1">
       <div class="name">{{ BUSINESS_NAME }}</div>
       <div class="sub">{{ user.get_role_display }}</div>
     </div>
+    <button class="sidebar-close" type="button" data-sidebar-close
+            aria-label="Close menu" data-i18n-title="r4.close_menu" title="Close menu">
+      <i class="bi bi-x-lg"></i>
+    </button>
   </div>
 
   <nav class="nav flex-column pb-3">
@@ -39,7 +43,7 @@
       </a>
     {% endif %}
 
-    {% if user|can:"sale.view,sale.create,customer.view,delivery.view" %}
+    {% if user|can:"sale.view,sale.create,customer.view" %}
       <div class="nav-section">Sales</div>
       {% if user|can:"sale.create" %}
         <a class="nav-link {% if NAV == 'new_sale' %}active{% endif %}"
@@ -53,7 +57,13 @@
           <i class="bi bi-receipt"></i> Transactions
         </a>
       {% endif %}
-      {% if user|can:"delivery.view" %}
+      {% comment %}
+        Hand-overs need the sales as well as the queue: the list shows who
+        bought what and links to each sale. A manager runs the yard's
+        production and expenses but does not see sales, so the link would
+        only lead them to a refusal.
+      {% endcomment %}
+      {% if user|can_all:"delivery.view,sale.view" %}
         <a class="nav-link {% if NAV == 'deliveries' %}active{% endif %}"
            href="{% url 'sales:delivery_list' %}">
           <i class="bi bi-truck"></i> Hand-overs

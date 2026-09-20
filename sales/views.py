@@ -16,6 +16,7 @@ from core.mixins import (
     get_owned_or_404,
     require,
 )
+from core.permissions import HANDOVER_QUEUE
 from core.scoping import scoped, sees_everything, visible_users
 from core.utils import ZERO, money
 from inventory.models import Product
@@ -574,7 +575,8 @@ class DeliveryQueueView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
     waiting, who has taken part, and what went out already.
     """
 
-    required_permission = "delivery.view"
+    # The queue is a list of sales - see core.permissions.HANDOVER_QUEUE.
+    required_permissions = list(HANDOVER_QUEUE)
     model = Transaction
     template_name = "sales/delivery_list.html"
     context_object_name = "sales"

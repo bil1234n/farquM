@@ -29,10 +29,13 @@
 <div class="app-shell">
 
   {% include "partials/sidebar.html" %}
+  {# Dims the page behind the side menu on a phone; a tap on it closes the menu. #}
+  <div class="sidebar-backdrop no-print" data-sidebar-close></div>
 
   <div class="main-area">
     <header class="topbar no-print">
-      <button class="btn btn-sm btn-light d-lg-none" onclick="document.querySelector('.sidebar').classList.toggle('open')">
+      <button class="btn btn-light menu-toggle d-lg-none" type="button" data-sidebar-toggle
+              aria-label="Menu" data-i18n-title="r4.menu" title="Menu" aria-expanded="false">
         <i class="bi bi-list"></i>
       </button>
 
@@ -74,6 +77,11 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="{% static 'js/ethiopian-date.js' %}"></script>
 <script src="{% static 'js/i18n.js' %}"></script>
+{% comment %}
+  Password eyes, the phone side menu, tables drawn as cards on a narrow
+  screen and the folding filter panel - see the header of app-ui.js.
+{% endcomment %}
+<script src="{% static 'js/app-ui.js' %}"></script>
 {% comment %}
   Managed pick-lists: a select you can add to and take back from, without
   leaving the form. Loaded globally because it enhances any element carrying

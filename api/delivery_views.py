@@ -133,9 +133,18 @@ class DeliveryViewSet(
         out today, and the oldest sales still standing there. The same figures
         the hand-over page's header shows in the browser, from the same
         function, so the phone and the web can never disagree about them.
+
+        The oldest rows name buyers and sales, so this asks what the page
+        asks - the hand-overs AND the sales (core.permissions.HANDOVER_QUEUE).
+        Checked here because a list in action_permissions means "either".
         """
+        from rest_framework.exceptions import PermissionDenied
+
+        from core.permissions import HANDOVER_QUEUE
         from sales.delivery import queue_summary
 
+        if not request.user.has_access(*HANDOVER_QUEUE):
+            raise PermissionDenied("You do not have permission to perform this action.")
         queue = queue_summary(request.user)
         for row in queue["oldest"]:
             row["created_at"] = row["created_at"].isoformat()

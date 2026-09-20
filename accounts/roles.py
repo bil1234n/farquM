@@ -99,6 +99,10 @@ BLUEPRINTS: dict[str, dict] = {
             # particular manager also works the till.
             # Goods leaving the yard are the shelf's business too, and on a
             # day with no stock keeper somebody still has to hand them over.
+            # The hand-over screens are made of sales, though, so these two
+            # come into play only for a manager also given sale.view - see
+            # core.permissions.HANDOVER_QUEUE. Out of the box a manager's
+            # daily screen is production, not the gate.
             "delivery.view",
             "delivery.record",
             # The costs of running the place, and the people who do.

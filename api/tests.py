@@ -1879,6 +1879,27 @@ class DeliveryTests(Round3Base):
             self.as_(barred).get("/api/deliveries/summary/").status_code, 403
         )
 
+    def test_a_manager_is_not_given_the_queue(self):
+        """
+        A manager holds delivery.view but not sale.view, and the queue is made
+        of sales: its numbers name buyers. No numbers, and no queue block on
+        the dashboard for the phone to draw a card from.
+        """
+        self._sale(quantity=10)
+        manager = self.as_(self.manager)
+        self.assertEqual(manager.get("/api/deliveries/summary/").status_code, 403)
+        self.assertNotIn("deliveries", manager.get("/api/dashboard/").json())
+
+        # Given the sales too - a manager who also works the till - the gate
+        # is theirs again.
+        seller = User.objects.create_user(
+            "mona", password="pw", role="MANAGER", extra_permissions=["sale.view"],
+        )
+        self.assertEqual(
+            self.as_(seller).get("/api/deliveries/summary/").status_code, 200
+        )
+        self.assertIn("deliveries", self.as_(seller).get("/api/dashboard/").json())
+
     def test_a_stock_keeper_may_not_cancel_one(self):
         sale = self._sale(quantity=20)
         delivery_id = self._deliver(sale, everything=True).json()["delivery"]["id"]

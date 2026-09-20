@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from django import forms
 from django.utils import timezone
 
+from accounts.forms import StyledFormMixin
 from core.forms import NoteTagFormMixin, unit_choices
 from core.models import Option
 from core.scoping import scoped
@@ -18,7 +19,7 @@ from .models import (
 )
 
 
-class RawMaterialForm(forms.ModelForm):
+class RawMaterialForm(StyledFormMixin, forms.ModelForm):
     # DECLARED, NOT GENERATED.
     #
     # The model field no longer carries `choices` - a unit added since deploy
@@ -100,7 +101,7 @@ class RawMaterialForm(forms.ModelForm):
         return code
 
 
-class MaterialReceiveForm(forms.Form):
+class MaterialReceiveForm(StyledFormMixin, forms.Form):
     """A delivery arriving at the gate."""
 
     quantity = forms.DecimalField(
@@ -118,7 +119,7 @@ class MaterialReceiveForm(forms.Form):
     reason = forms.CharField(max_length=255, required=False, label="Note")
 
 
-class MaterialAdjustForm(forms.Form):
+class MaterialAdjustForm(StyledFormMixin, forms.Form):
     """
     Waste, a return, or a counted figure.
 
@@ -151,7 +152,7 @@ class MaterialAdjustForm(forms.Form):
         return cleaned
 
 
-class RecipeForm(forms.ModelForm):
+class RecipeForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Recipe
         fields = ["output_quantity", "notes", "is_active"]
@@ -169,7 +170,7 @@ class RecipeForm(forms.ModelForm):
         return value
 
 
-class ProductionRunForm(NoteTagFormMixin, forms.ModelForm):
+class ProductionRunForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     """
     The header. Material lines arrive as parallel arrays and are parsed by the
     view, the same way the till parses a cart.
@@ -228,7 +229,7 @@ class ProductionRunForm(NoteTagFormMixin, forms.ModelForm):
         return value
 
 
-class ReversalForm(forms.Form):
+class ReversalForm(StyledFormMixin, forms.Form):
     reason = forms.CharField(
         max_length=255,
         label="Why is this run being reversed?",
@@ -242,7 +243,7 @@ class ReversalForm(forms.Form):
         return reason
 
 
-class ProductionRequestForm(NoteTagFormMixin, forms.ModelForm):
+class ProductionRequestForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     """
     The counter's half: how many, from whom, and why.
 
@@ -311,7 +312,7 @@ class ProductionRequestForm(NoteTagFormMixin, forms.ModelForm):
         return value
 
 
-class RequestResponseForm(forms.Form):
+class RequestResponseForm(StyledFormMixin, forms.Form):
     note = forms.CharField(
         max_length=255,
         required=False,

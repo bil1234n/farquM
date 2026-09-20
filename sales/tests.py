@@ -162,6 +162,33 @@ class HandOverPageTests(WebRound3Base):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_a_manager_is_not_sent_to_the_gate(self):
+        """
+        Out of the box a manager may not see sales, and the queue is a list of
+        sales - so no menu link, no badge, no dashboard block, and the page
+        itself refuses, rather than a list of buyers with a refusal behind
+        every row. Production, the manager's everyday work, stays in reach.
+        """
+        self.sale(blocks=10, slabs=0)
+        client = self.client_for(self.manager)
+        self.assertRedirects(
+            client.get("/sales/deliveries/"), "/system/forbidden/",
+            fetch_redirect_response=False,
+        )
+        html = client.get("/reports/").content.decode()
+        self.assertNotIn("/sales/deliveries/", html)
+        self.assertNotIn("Waiting for collection", html)
+        self.assertNotIn('<div class="nav-section">Sales</div>', html)
+        self.assertIn("/production/runs/", html)
+
+    def test_a_manager_who_also_sells_gets_the_gate_back(self):
+        seller = User.objects.create_user(
+            "mona", password="pw", role="MANAGER", extra_permissions=["sale.view"],
+        )
+        client = self.client_for(seller)
+        self.assertEqual(client.get("/sales/deliveries/").status_code, 200)
+        self.assertIn("/sales/deliveries/", client.get("/reports/").content.decode())
+
     def test_the_sidebar_counts_what_is_waiting(self):
         self.sale(blocks=10, slabs=0)
         html = self.client_for(self.keeper).get("/sales/deliveries/").content.decode()

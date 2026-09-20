@@ -1481,5 +1481,10 @@
   "r3.ph_expense": "Paid to, reference, note",
   "r3.ph_employee": "Name, phone or job",
   "r3.ph_trip": "Anything worth remembering about this trip",
-  "r3.ph_void_trip": "Why? Recorded by mistake, the goods came back..."
+  "r3.ph_void_trip": "Why? Recorded by mistake, the goods came back...",
+  "r4.filters": "Filters",
+  "r4.menu": "Menu",
+  "r4.close_menu": "Close menu",
+  "r4.show_password": "Show password",
+  "r4.hide_password": "Hide password"
 }

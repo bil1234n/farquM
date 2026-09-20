@@ -9,6 +9,7 @@ from django.views.generic import TemplateView
 from accounts.models import AuditAction
 from accounts.services import log_action
 from core.mixins import PermissionRequiredMixin, require
+from core.permissions import HANDOVER_QUEUE
 from core.scoping import scoped, sees_everything
 from credit.models import DebtRecord
 from inventory.models import Product, StockMovement
@@ -131,7 +132,7 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
         # ---- The yard: goods sold but not yet collected --------------------
         # Scoped like everything else: the stock keeper, who sees every sale,
         # sees the whole yard; a seller sees their own customers' goods.
-        if user.has_access("delivery.view"):
+        if user.has_access(*HANDOVER_QUEUE):
             from sales.delivery import queue_summary
 
             ctx["delivery_queue"] = queue_summary(user)

@@ -454,6 +454,13 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "core:role_list": "role.manage",
 }
 
+#: What it takes to work the hand-over queue: the queue itself AND the sales it
+#: is made of. Every row names a buyer and opens their sale, so somebody who
+#: may not see sales - a manager, out of the box - would get a list of names
+#: and a refusal behind each one. The web page, its menu link, its badge, the
+#: dashboard cards and the API's queue numbers all ask this same question.
+HANDOVER_QUEUE: tuple[str, ...] = ("delivery.view", "sale.view")
+
 
 def catalog_as_dict(lang: str = "") -> list[dict]:
     """

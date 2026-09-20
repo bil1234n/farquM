@@ -39,6 +39,7 @@ figure by being added to the wrong list.
 """
 from dataclasses import dataclass, field
 
+from core.permissions import HANDOVER_QUEUE
 from core.templatetags.core_extras import money as fmt_money
 
 
@@ -277,7 +278,7 @@ def build_cards(user, ctx) -> list:
                 icon="bi-hourglass-split",
                 url="sales:delivery_list",
                 is_money=False,
-                needs=("delivery.view",),
+                needs=HANDOVER_QUEUE,
             ),
             Card(
                 key="part_collected",
@@ -288,7 +289,7 @@ def build_cards(user, ctx) -> list:
                 icon="bi-pie-chart",
                 url="sales:delivery_list",
                 is_money=False,
-                needs=("delivery.view",),
+                needs=HANDOVER_QUEUE,
             ),
             Card(
                 key="out_today",
@@ -298,7 +299,7 @@ def build_cards(user, ctx) -> list:
                 accent="success",
                 icon="bi-truck",
                 is_money=False,
-                needs=("delivery.view",),
+                needs=HANDOVER_QUEUE,
             ),
             Card(
                 key="low_stock",
@@ -469,7 +470,7 @@ PANEL_ORDER = {
         Panel("expenses", "reports/panels/expenses.html", col=6,
               needs=("expense.view",)),
         Panel("deliveries", "reports/panels/deliveries.html", col=6,
-              needs=("delivery.view",)),
+              needs=HANDOVER_QUEUE),
         Panel("low_stock", "reports/panels/low_stock.html", col=12,
               needs=("product.view",)),
     ],
@@ -477,7 +478,7 @@ PANEL_ORDER = {
         Panel("low_stock", "reports/panels/low_stock.html", col=12,
               needs=("product.view",)),
         Panel("deliveries", "reports/panels/deliveries.html", col=6,
-              needs=("delivery.view",)),
+              needs=HANDOVER_QUEUE),
         Panel("expenses", "reports/panels/expenses.html", col=6,
               needs=("expense.view",)),
         Panel("chart", "reports/panels/chart.html", col=8, needs=("sale.view",)),
@@ -498,11 +499,11 @@ PANEL_ORDER = {
         Panel("my_customers", "reports/panels/my_customers.html", col=12,
               needs=("customer.view",)),
         Panel("deliveries", "reports/panels/deliveries.html", col=12,
-              needs=("delivery.view",)),
+              needs=HANDOVER_QUEUE),
     ],
     KEEPER: [
         Panel("deliveries", "reports/panels/deliveries.html", col=8,
-              needs=("delivery.view",)),
+              needs=HANDOVER_QUEUE),
         Panel("keeper_actions", "reports/panels/keeper_actions.html", col=4),
         Panel("low_stock", "reports/panels/low_stock.html", col=12,
               needs=("product.view",)),

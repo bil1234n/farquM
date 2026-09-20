@@ -80,7 +80,7 @@ from core.access import (
     reset_user_to_role,
 )
 from core.models import SystemSetting
-from core.permissions import ALL_CODES, catalog_as_dict
+from core.permissions import ALL_CODES, HANDOVER_QUEUE, catalog_as_dict
 
 from .models import DeviceToken, NotificationLog
 from .permissions import ActionPermission, HasPermission, IsStaff, requires
@@ -1765,7 +1765,7 @@ def dashboard(request):
     # -- The yard: goods sold but not yet collected ---------------------------
     # The stock keeper's whole day, and a line on everybody else's who may see
     # it. Counts, not money: this is about blocks standing in a yard.
-    if user.has_access("delivery.view"):
+    if user.has_access(*HANDOVER_QUEUE):
         from sales.delivery import queue_summary
 
         queue = queue_summary(user)

@@ -12,7 +12,13 @@
       <div class="card">
         <div class="card-header">The batch</div>
         <div class="card-body">
-          {% include "partials/form_fields.html" with form=form wide_fields="notes,note_tag" %}
+          {% comment %}
+            One field per line: this card is a third of the screen wide, and
+            two boxes across it cut "Select a product" in half. (A hash
+            comment spread over two lines is not a comment at all - it prints
+            itself onto the page.)
+          {% endcomment %}
+          {% include "partials/form_fields.html" with form=form wide_fields="produced_on,product,quantity_produced,notes,note_tag" %}
         </div>
       </div>
       <div class="card mt-3" id="planCard" hidden>

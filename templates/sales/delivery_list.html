@@ -47,7 +47,7 @@
   </div>
 </div>
 
-<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3 queue-bar">
   <ul class="nav settings-tabs border-0 p-0 m-0">
     {% for key, label in tabs %}
       <li class="nav-item">
@@ -60,7 +60,7 @@
       </li>
     {% endfor %}
   </ul>
-  <form method="get" class="ms-auto d-flex gap-2">
+  <form method="get" class="ms-auto d-flex gap-2 queue-search">
     <input type="hidden" name="tab" value="{{ tab }}">
     <input type="search" name="q" value="{{ q }}" class="form-control form-control-sm"
            placeholder="Reference, customer or phone" data-i18n-placeholder="r3.ph_queue" style="min-width:240px">

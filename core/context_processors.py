@@ -136,6 +136,7 @@ def sidebar_badges(request):
     from production.models import RawMaterial
     from sales.models import Transaction
 
+    from core.permissions import HANDOVER_QUEUE
     from core.scoping import scoped
 
     badges = {}
@@ -153,7 +154,7 @@ def sidebar_badges(request):
         )
     # Sales with goods still in the yard - the stock keeper's to-do list, and
     # a seller's reminder of whose goods are waiting.
-    if user.has_access("delivery.view"):
+    if user.has_access(*HANDOVER_QUEUE):
         badges["badge_waiting_deliveries"] = (
             scoped(Transaction.objects.awaiting_collection(), user).count()
         )
