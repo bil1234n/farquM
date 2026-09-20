@@ -220,6 +220,9 @@ class EmployeeViewSet(
         "PUT": "employee.manage",
     }
     action_permissions = {"payments": ("employee.view",)}
+    # The payroll is short but not always 25 long: the phone asks for the
+    # whole list in one page (page_size), up to the usual ceiling.
+    pagination_class = StandardPagination
 
     def get_queryset(self):
         qs = Employee.objects.select_related("job", "note_tag")

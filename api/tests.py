@@ -1843,6 +1843,42 @@ class DeliveryTests(Round3Base):
         self.assertEqual(sale.delivery_status, "PENDING")
         self.assertEqual(sale.items.get().quantity_delivered, 0)
 
+    def test_the_yard_in_numbers(self):
+        keeper = self.as_(self.keeper)
+        before = keeper.get("/api/deliveries/summary/").json()
+
+        waiting = self._sale(quantity=12)
+        part = self._sale(quantity=10)
+        self._deliver(part, lines=[{"item": part.items.get().pk, "quantity": 4}])
+
+        data = keeper.get("/api/deliveries/summary/").json()
+        self.assertEqual(data["waiting_sales"], before["waiting_sales"] + 2)
+        self.assertEqual(data["partial_sales"], before["partial_sales"] + 1)
+        self.assertEqual(data["waiting_units"], before["waiting_units"] + 18)
+        self.assertEqual(data["today_handovers"], before["today_handovers"] + 1)
+        self.assertEqual(data["today_units"], before["today_units"] + 4)
+        refs = [row["reference"] for row in data["oldest"]]
+        self.assertLess(refs.index(waiting.reference), refs.index(part.reference),
+                        "oldest first")
+        self.assertIsInstance(data["oldest"][0]["created_at"], str)
+
+    def test_the_queue_finds_a_walk_in_buyer_by_name(self):
+        sale = self._sale(quantity=4, walk_in_name="Almaz Tesfaye", walk_in_phone="0911223344")
+        for q in ("almaz", "0911223344"):
+            rows = self.as_(self.keeper).get(
+                f"/api/sales/?delivery=open&q={q}"
+            ).json()["results"]
+            self.assertIn(sale.reference, [row["reference"] for row in rows], q)
+
+    def test_the_numbers_need_the_hand_over_permission(self):
+        barred = User.objects.create_user(
+            "barred", password="pw", role="SALES", manager=self.manager,
+            denied_permissions=["delivery.view"],
+        )
+        self.assertEqual(
+            self.as_(barred).get("/api/deliveries/summary/").status_code, 403
+        )
+
     def test_a_stock_keeper_may_not_cancel_one(self):
         sale = self._sale(quantity=20)
         delivery_id = self._deliver(sale, everything=True).json()["delivery"]["id"]

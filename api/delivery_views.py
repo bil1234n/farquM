@@ -3,6 +3,7 @@ Hand-overs, for the phone and for anything else that talks to the API.
 
     GET  /api/deliveries/?sale=12        every hand-over of one sale
     GET  /api/deliveries/?today=true     what went out of the gate today
+    GET  /api/deliveries/summary/        the yard in numbers (the web page's header)
     POST /api/deliveries/                hand over (all, or some lines)
     POST /api/deliveries/<id>/void/      take one back
 
@@ -47,7 +48,7 @@ class DeliveryViewSet(
     serializer_class = DeliverySerializer
     permission_classes = [ActionPermission]
     permission_map = {"GET": "delivery.view", "POST": "delivery.record"}
-    action_permissions = {"void": "delivery.void"}
+    action_permissions = {"void": "delivery.void", "summary": "delivery.view"}
     pagination_class = StandardPagination
 
     def get_queryset(self):
@@ -124,6 +125,21 @@ class DeliveryViewSet(
             },
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """
+        The yard in numbers - what is waiting, what is part taken, what went
+        out today, and the oldest sales still standing there. The same figures
+        the hand-over page's header shows in the browser, from the same
+        function, so the phone and the web can never disagree about them.
+        """
+        from sales.delivery import queue_summary
+
+        queue = queue_summary(request.user)
+        for row in queue["oldest"]:
+            row["created_at"] = row["created_at"].isoformat()
+        return Response(queue)
 
     @action(detail=True, methods=["post"])
     def void(self, request, pk=None):

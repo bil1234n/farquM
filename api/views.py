@@ -1086,7 +1086,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         qs = scoped(
             Transaction.objects.select_related(
-                "customer", "sold_by", "owner", "debt_record"
+                "customer", "sold_by", "owner", "debt_record", "note_tag"
             )
             .prefetch_related("items", "receipts")
             .annotate(line_count=Count("items")),
@@ -1095,8 +1095,12 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         params = self.request.query_params
         q = params.get("q", "").strip()
         if q:
+            # The one-off buyer's name and number too: a walk-in customer at
+            # the yard gate is found the same way as a registered one.
             qs = qs.filter(Q(reference__icontains=q) | Q(customer__name__icontains=q)
-                           | Q(customer__phone__icontains=q))
+                           | Q(customer__phone__icontains=q)
+                           | Q(customer_name_snapshot__icontains=q)
+                           | Q(customer_phone_snapshot__icontains=q))
         if params.get("status"):
             qs = qs.filter(payment_status=params["status"], is_voided=False)
         if params.get("today") == "true":
