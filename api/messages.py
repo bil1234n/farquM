@@ -436,6 +436,13 @@ _PATTERNS_AM: list[tuple[str, str]] = [
         r"^Expected available quantity, got (.+)$",
         "የሚገኝ ብዛት ተጠብቆ ነበር፤ የተገኘው {0}",
     ),
+    # api/exceptions.py - the last-resort answer to an unexpected error.
+    (
+        r"^Something went wrong on the server\. Please try again - if it keeps "
+        r"happening, tell your administrator and quote reference ([0-9A-F]+)\.$",
+        "በሥርዓቱ ላይ ያልተጠበቀ ችግር ተፈጥሯል። እባክዎ እንደገና ይሞክሩ፤ ችግሩ ከቀጠለ "
+        "ለአስተዳዳሪዎ ይንገሩና ይህን መለያ ይጥቀሱ፦ {0}።",
+    ),
 ]
 
 PATTERNS: dict[str, list[tuple[re.Pattern, str]]] = {

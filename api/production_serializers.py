@@ -23,6 +23,7 @@ from production.models import (
 
 from .serializers import (
     NOTE_TAG_FIELDS,
+    DerivedDecimal,
     FinancialFieldsMixin,
     NoteTagField,
     NoteTagMixin,
@@ -41,9 +42,7 @@ class RawMaterialSerializer(
     supplier_name = serializers.CharField(
         source="supplier.name", default=None, read_only=True
     )
-    stock_value = serializers.DecimalField(
-        max_digits=18, decimal_places=2, read_only=True
-    )
+    stock_value = DerivedDecimal()
     stock_status = serializers.CharField(read_only=True)
     stock_status_label = serializers.CharField(read_only=True)
     owner_name = serializers.SerializerMethodField()
@@ -181,10 +180,7 @@ class RecipeItemSerializer(serializers.ModelSerializer):
     unit_display = serializers.CharField(
         source="material.get_unit_display", read_only=True
     )
-    available = serializers.DecimalField(
-        source="material.quantity_in_stock", max_digits=14, decimal_places=3,
-        read_only=True,
-    )
+    available = DerivedDecimal(source="material.quantity_in_stock", decimal_places=3)
 
     class Meta:
         model = RecipeItem
@@ -199,12 +195,8 @@ class RecipeSerializer(FinancialFieldsMixin, serializers.ModelSerializer):
 
     items = RecipeItemSerializer(many=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
-    material_cost = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
-    cost_per_unit = serializers.DecimalField(
-        max_digits=12, decimal_places=2, read_only=True
-    )
+    material_cost = DerivedDecimal()
+    cost_per_unit = DerivedDecimal()
 
     class Meta:
         model = Recipe
@@ -278,12 +270,8 @@ class ProductionMaterialSerializer(FinancialFieldsMixin,
     unit_display = serializers.CharField(
         source="material.get_unit_display", read_only=True
     )
-    line_cost = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
-    variance = serializers.DecimalField(
-        max_digits=14, decimal_places=3, read_only=True
-    )
+    line_cost = DerivedDecimal()
+    variance = DerivedDecimal(decimal_places=3)
 
     class Meta:
         model = ProductionMaterial
@@ -298,12 +286,8 @@ class ProductionDamageSerializer(FinancialFieldsMixin, serializers.ModelSerializ
 
     financial_fields = ("unit_cost", "line_cost")
 
-    unit_cost = serializers.DecimalField(
-        max_digits=12, decimal_places=2, read_only=True
-    )
-    line_cost = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
+    unit_cost = DerivedDecimal()
+    line_cost = DerivedDecimal()
 
     class Meta:
         model = ProductionDamage
@@ -369,20 +353,12 @@ class ProductionRunSerializer(
         source="get_status_display", read_only=True
     )
     materials = ProductionMaterialSerializer(many=True, read_only=True)
-    yield_percent = serializers.DecimalField(
-        max_digits=6, decimal_places=2, read_only=True
-    )
-    rejected_cost = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
+    yield_percent = DerivedDecimal()
+    rejected_cost = DerivedDecimal()
     # The same breakage priced the old way, sent so the run screen can show
     # both figures side by side and make the rule obvious to whoever reads it.
-    naive_rejected_cost = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
-    damage_loss_gap = serializers.DecimalField(
-        max_digits=14, decimal_places=2, read_only=True
-    )
+    naive_rejected_cost = DerivedDecimal()
+    damage_loss_gap = DerivedDecimal()
     damages = ProductionDamageSerializer(many=True, read_only=True)
     damage_summary = serializers.CharField(read_only=True)
     total_attempted = serializers.IntegerField(read_only=True)

@@ -2160,3 +2160,109 @@ class NoteColourTests(Round3Base):
         self.assertNotIn("Temporary", labels, "gone from the picker")
         kept = client.get(f"/api/customers/{customer['id']}/").json()
         self.assertEqual(kept["note_tag_label"], "Temporary", "still on the note")
+
+
+class OddFiguresTests(ApiTestBase):
+    """
+    One mistyped row must never take a screen down.
+
+    A product priced at 0.01 with a cost of 18,000 has a margin of
+    -179,999,900%. The margin field was declared six digits wide, DRF raised
+    decimal.InvalidOperation rendering it, and /api/products/ - and the home
+    screen, which lists five low-stock products - answered 500 on every
+    request until the row was found.
+    """
+
+    def _mistyped(self, **extra):
+        values = dict(
+            name="Mistyped block", sku="MT1", category=self.category,
+            cost_price=Decimal("18000.00"), selling_price=Decimal("0.01"),
+            stock_quantity=0, low_stock_threshold=5, owner=self.manager,
+        )
+        values.update(extra)
+        return Product.objects.create(**values)
+
+    def test_the_product_list_still_answers(self):
+        odd = self._mistyped()
+        response = self.as_(self.admin).get("/api/products/?page_size=50")
+        self.assertEqual(response.status_code, 200)
+        row = next(p for p in response.json()["results"] if p["id"] == odd.pk)
+        # The figure is absurd, and shown as it is: that is how the owner
+        # finds the typo.
+        self.assertEqual(row["margin_percent"], "-179999900.00")
+        self.assertEqual(row["profit_per_unit"], "-17999.99")
+
+    def test_the_home_screen_still_answers(self):
+        odd = self._mistyped()
+        response = self.as_(self.admin).get("/api/dashboard/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(odd.pk, [p["id"] for p in response.json()["low_stock"]])
+
+    def test_a_huge_stock_value_still_answers(self):
+        odd = self._mistyped(
+            cost_price=Decimal("9999999999.99"), selling_price=Decimal("1.00"),
+            stock_quantity=2_000_000_000,
+        )
+        response = self.as_(self.admin).get(f"/api/products/{odd.pk}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["stock_value"], "19999999999980000000.00")
+
+    def test_a_sale_below_cost_still_answers(self):
+        cheap = self._mistyped(stock_quantity=10)
+        sale = create_sale(
+            user=self.sales,
+            cart=[{"product": cheap, "quantity": 1, "unit_price": Decimal("0.01")}],
+            amount_paid=Decimal("0.01"),
+            payment_method="CASH",
+        )
+        response = self.as_(self.admin).get(f"/api/sales/{sale.pk}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["profit_margin"], "-179999900.00")
+
+    def test_a_figure_that_is_not_a_number_is_sent_as_zero(self):
+        from api.serializers import DerivedDecimal
+
+        field = DerivedDecimal()
+        for value in (Decimal("NaN"), Decimal("Infinity"), float("nan"), "abc"):
+            with self.subTest(value=value):
+                self.assertEqual(field.to_representation(value), "0.00")
+        self.assertEqual(field.to_representation(Decimal("12.345")), "12.34")
+        self.assertEqual(field.to_representation(Decimal("1E+20")),
+                         "100000000000000000000.00")
+
+
+class UnexpectedErrorTests(ApiTestBase):
+    """A bug nobody planned for still answers in JSON, never an HTML page."""
+
+    def _break_the_dashboard(self):
+        from unittest import mock
+
+        return mock.patch(
+            "api.views.sales_summary", side_effect=RuntimeError("boom")
+        )
+
+    def test_the_phone_gets_one_sentence_and_a_reference(self):
+        with self._break_the_dashboard(), self.assertLogs("api.exceptions", "ERROR"):
+            response = self.as_(self.admin).get("/api/dashboard/")
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response["Content-Type"], "application/json")
+        body = response.json()
+        self.assertRegex(body["reference"], r"^[0-9A-F]{8}$")
+        self.assertIn(body["reference"], body["detail"])
+        self.assertNotIn("Traceback", body["detail"])
+        self.assertNotIn("boom", body["detail"])
+
+    def test_in_amharic_too(self):
+        with self._break_the_dashboard(), self.assertLogs("api.exceptions", "ERROR"):
+            response = self.as_(self.admin).get(
+                "/api/dashboard/", HTTP_ACCEPT_LANGUAGE="am"
+            )
+        body = response.json()
+        self.assertIn("ያልተጠበቀ ችግር", body["detail"])
+        self.assertIn(body["reference"], body["detail"])
+
+    def test_the_known_errors_are_left_alone(self):
+        # A refusal is DRF's to word, and stays a 403.
+        response = self.as_(self.sales).get("/api/users/")
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("reference", response.json())

@@ -164,19 +164,30 @@ STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# The manifest storage requires `collectstatic` to have been run first and
-# raises "Missing staticfiles manifest entry" if it hasn't. Dev uses plain
-# storage; production gets compression + cache-busting hashes.
+# The manifest storage (compression + cache-busting hashes) needs
+# `collectstatic` to have been run, and without it raises "Missing staticfiles
+# manifest entry" on EVERY page. Vercel's Python builder runs no build step,
+# so there is no collected copy there - which tied production to DEBUG=True,
+# since turning DEBUG off would have taken the whole site down.
+#
+# So the hashed copy is opt-in, not tied to DEBUG: STATIC_MANIFEST=True on a
+# host that runs `collectstatic` on every deploy. Everywhere else WhiteNoise
+# serves straight from the static/ folders, which works with DEBUG on or off.
+# (Opt-in rather than "use it if a manifest exists": a manifest left over
+# from an old collectstatic lacks every file added since, and each page that
+# links one of those would fail.)
+STATIC_MANIFEST = config("STATIC_MANIFEST", default=False, cast=bool)
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
         "BACKEND": (
-            "django.contrib.staticfiles.storage.StaticFilesStorage"
-            if DEBUG
-            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+            "whitenoise.storage.CompressedManifestStaticFilesStorage"
+            if STATIC_MANIFEST and not DEBUG
+            else "django.contrib.staticfiles.storage.StaticFilesStorage"
         )
     },
 }
+WHITENOISE_USE_FINDERS = DEBUG or not STATIC_MANIFEST
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
@@ -260,6 +271,10 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
+    # An error nobody planned for still answers in JSON - one sentence and a
+    # reference - never an HTML page the phone would print whole. See
+    # api/exceptions.py.
+    "EXCEPTION_HANDLER": "api.exceptions.handle",
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.ScopedRateThrottle",
     ],

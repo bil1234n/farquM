@@ -8,6 +8,7 @@ Manager. Not hidden by the client - removed by the server, before the JSON
 leaves the building. A client can be decompiled, patched, or replaced with
 curl; the only place a permission means anything is on the server.
 """
+import decimal
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
@@ -28,6 +29,58 @@ from sales.models import (
 )
 
 from .models import DeviceToken, NotificationLog
+
+
+class DerivedDecimal(serializers.DecimalField):
+    """
+    A number the SERVER works out, on its way to the phone.
+
+    DRF renders a DecimalField by quantizing it inside a context of
+    `max_digits` significant digits, and a value needing more raises
+    decimal.InvalidOperation - caught nowhere, so the whole endpoint answers
+    500. A figure that is merely surprising then takes down a screen: a
+    product priced at 0.01 with a cost of 18,000 has a margin of
+    -179,999,900%, and one such row - ten seconds of mistyping - made both
+    /api/products/ and the home screen that lists five low-stock products
+    fail on every single request until somebody found it.
+
+    These fields are read-only, so the width was never a rule about what may
+    be stored, only a hint about what usually fits. When a value does not
+    fit, send it whole rather than refuse to answer; when it is not a number
+    at all - a NaN, which a PostgreSQL numeric column can hold - send zero.
+    Both beat a dead screen, and the figure shown is still the truth.
+    """
+
+    def __init__(self, max_digits=16, decimal_places=2, **kwargs):
+        kwargs.setdefault("read_only", True)
+        super().__init__(
+            max_digits=max_digits, decimal_places=decimal_places, **kwargs
+        )
+
+    def to_representation(self, value):
+        if value is None:
+            return super().to_representation(value)
+        try:
+            number = value if isinstance(value, Decimal) else Decimal(str(value).strip())
+        except (decimal.DecimalException, TypeError, ValueError):
+            number = Decimal("NaN")
+        quantum = Decimal(1).scaleb(-self.decimal_places)
+        if not number.is_finite():
+            # Not a figure anybody can be shown. DRF would pass a quiet NaN
+            # straight through as the string "NaN".
+            number = Decimal(0).quantize(quantum)
+        else:
+            try:
+                return super().to_representation(number)
+            except decimal.InvalidOperation:
+                number = number.quantize(
+                    quantum,
+                    rounding=decimal.ROUND_HALF_UP,
+                    context=decimal.Context(
+                        prec=max(28, number.adjusted() + self.decimal_places + 3)
+                    ),
+                )
+        return f"{number:f}" if getattr(self, "coerce_to_string", True) else number
 
 
 class FinancialFieldsMixin:
@@ -397,9 +450,9 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
     unit_display = serializers.CharField(source="get_unit_display", read_only=True)
     stock_status = serializers.CharField(read_only=True)
     stock_status_label = serializers.CharField(read_only=True)
-    margin_percent = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
-    stock_value = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    profit_per_unit = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    margin_percent = DerivedDecimal()
+    stock_value = DerivedDecimal()
+    profit_per_unit = DerivedDecimal()
     image_url = serializers.SerializerMethodField()
     owner_name = serializers.SerializerMethodField()
 
@@ -587,8 +640,8 @@ class CreditLimitSerializer(serializers.Serializer):
 class CreditAccountSerializer(serializers.ModelSerializer):
     risk_level = serializers.CharField(read_only=True)
     risk_label = serializers.CharField(read_only=True)
-    available_credit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    utilisation_percent = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    available_credit = DerivedDecimal()
+    utilisation_percent = DerivedDecimal()
     is_over_limit = serializers.BooleanField(read_only=True)
 
     class Meta:
@@ -607,9 +660,9 @@ class CreditAccountSerializer(serializers.ModelSerializer):
 
 
 class CustomerSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializer):
-    outstanding_balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    credit_limit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    available_credit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    outstanding_balance = DerivedDecimal()
+    credit_limit = DerivedDecimal()
+    available_credit = DerivedDecimal()
     customer_type_display = serializers.CharField(source="get_customer_type_display", read_only=True)
     credit_account = CreditAccountSerializer(read_only=True)
     owner_name = serializers.SerializerMethodField()
@@ -642,8 +695,8 @@ class TransactionItemSerializer(FinancialFieldsMixin, serializers.ModelSerialize
     financial_fields = ("unit_cost", "line_cost")
     profit_fields = ("line_profit",)
 
-    line_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    line_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    line_cost = DerivedDecimal()
+    line_profit = DerivedDecimal()
     quantity_waiting = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -698,9 +751,9 @@ class TransactionSerializer(
     payment_method_display = serializers.CharField(source="get_payment_method_display", read_only=True)
     payment_display = serializers.CharField(read_only=True)
     sold_by_name = serializers.CharField(source="sold_by.display_name", default=None, read_only=True)
-    total_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    gross_profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    profit_margin = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    total_cost = DerivedDecimal()
+    gross_profit = DerivedDecimal()
+    profit_margin = DerivedDecimal()
     is_overdue = serializers.BooleanField(read_only=True)
     item_count = serializers.IntegerField(read_only=True)
     owner_name = serializers.SerializerMethodField()
@@ -874,7 +927,7 @@ class DebtSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializer):
     display_status = serializers.CharField(read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
     days_overdue = serializers.IntegerField(read_only=True)
-    repayment_percent = serializers.DecimalField(max_digits=6, decimal_places=2, read_only=True)
+    repayment_percent = DerivedDecimal()
     aging_bucket = serializers.CharField(read_only=True)
     owner_name = serializers.SerializerMethodField()
 
