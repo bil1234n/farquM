@@ -1116,6 +1116,20 @@ class FriendlyErrorTests(TestCase):
         self.assertNotIn("relation does not exist", text)
         self.assertIn("nothing was changed", text)
 
+    def test_the_debug_page_cannot_print_the_database_password(self):
+        """
+        Django's own error page lists the settings and hides only names with
+        PASS, KEY, SECRET or TOKEN in them. A DATABASE_URL setting would be
+        printed whole - password and all - so the URL must not be a setting.
+        """
+        from django.views.debug import get_default_exception_reporter_filter
+
+        shown = get_default_exception_reporter_filter().get_safe_settings()
+        self.assertNotIn("DATABASE_URL", shown)
+        for name, value in shown.items():
+            self.assertNotIn("postgres://", str(value), name)
+            self.assertNotIn("postgresql://", str(value), name)
+
 
 class WebFormPickListTests(AccessTestBase):
     """

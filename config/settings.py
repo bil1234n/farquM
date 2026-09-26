@@ -103,13 +103,18 @@ ASGI_APPLICATION = "config.asgi.application"
 # ---------------------------------------------------------------------------
 # Database - PostgreSQL
 # ---------------------------------------------------------------------------
-DATABASE_URL = os.environ.get('DATABASE_URL')
-IS_PRODUCTION = bool(DATABASE_URL)
+# Lower-case on purpose. Every UPPER-CASE name in this file becomes a setting,
+# and Django's error page lists the settings. It hides the ones with PASS, KEY,
+# SECRET or TOKEN in their names - DATABASE_URL has none of those, so as a
+# setting the whole connection string, password included, would be printed on
+# any error page shown while DEBUG is on. A plain variable never reaches it.
+database_url = os.environ.get("DATABASE_URL")
+IS_PRODUCTION = bool(database_url)
 
-if DATABASE_URL:
+if database_url:
     DATABASES = {
         'default': dj_database_url.config(
-            default=DATABASE_URL,
+            default=database_url,
             conn_max_age=600,
             ssl_require=True,  # Neon requires SSL
         )
