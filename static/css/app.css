@@ -396,6 +396,8 @@ dl.kv dd{margin:0;text-align:right;font-weight:600;word-break:break-word}
 .pay-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:650;
   padding:.16rem .5rem;border-radius:99px;background:#eef2ff;color:#4338ca;white-space:nowrap}
 .pay-chip.staff{background:#ecfdf5;color:#047857;white-space:normal}
+.pay-chip.batch{background:#fff7ed;color:#c2410c}
+a.pay-chip.batch:hover{background:#ffedd5}
 
 /* A short list inside a narrow card (the roles on the settings page): the
    name on a line of its own and the facts in a row under it. Four columns

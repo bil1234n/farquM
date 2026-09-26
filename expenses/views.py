@@ -39,11 +39,18 @@ from core.models import resolve_option
 from core.scoping import scoped
 from core.utils import ZERO
 
-from .forms import EmployeeForm, ExpenseForm, VoidExpenseForm
+from .forms import (
+    EmployeeForm,
+    ExpenseForm,
+    ExpenseLinesForm,
+    VoidExpenseForm,
+    parse_expense_lines,
+)
 from .models import Employee, Expense
 from .services import (
     ExpenseError,
     record_expense,
+    record_expense_lines,
     summarize,
     update_expense,
     void_expense,
@@ -98,7 +105,9 @@ class ExpenseListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
             super()
             .get_queryset()
             .filter(spent_on__gte=self.start, spent_on__lte=self.end)
-            .select_related("employee", "recorded_by", "voided_by", "note_tag")
+            .select_related(
+                "employee", "recorded_by", "voided_by", "note_tag", "production_run"
+            )
         )
         params = self.request.GET
         self.q = (params.get("q") or "").strip()
@@ -175,6 +184,14 @@ def _expense_form_context(form, expense=None):
 
 
 def expense_create(request):
+    """
+    Record one payment - of one line or of several.
+
+    Several lines are several expenses paid together: three workers out of
+    one envelope, fuel and oil on one receipt. Each line is its own row (so
+    the payroll and the category totals keep working), sharing the date, the
+    way it was paid, the receipt and the note.
+    """
     blocked = require(
         request, "expense.record",
         message="You do not have permission to record expenses.",
@@ -183,49 +200,80 @@ def expense_create(request):
         return blocked
 
     initial = {}
+    lines = [{}]
     employee_id = request.GET.get("employee")
     if request.method == "GET" and employee_id and employee_id.isdigit():
         person = Employee.objects.filter(pk=employee_id, is_active=True).first()
         if person is not None:
-            initial.update({
+            initial["pay_period"] = timezone.localdate().replace(day=1)
+            lines = [{
                 "employee": person.pk,
-                "amount": person.monthly_salary or None,
-                "payee": person.name,
-                "pay_period": timezone.localdate().replace(day=1),
-            })
+                "amount": str(person.monthly_salary) if person.monthly_salary else "",
+            }]
 
-    form = ExpenseForm(request.POST or None, request.FILES or None, initial=initial)
+    form = ExpenseLinesForm(request.POST or None, request.FILES or None, initial=initial)
+    if request.method == "POST":
+        lines = parse_expense_lines(request.POST) or [{}]
     if request.method == "POST" and form.is_valid():
         try:
-            expense = record_expense(
+            expenses = record_expense_lines(
                 user=request.user,
                 data=form.service_data(),
+                lines=lines,
                 receipt=form.cleaned_data.get("receipt"),
             )
         except (ExpenseError, ValidationError) as exc:
             for msg in _messages_of(exc):
                 form.add_error(None, msg)
         else:
-            log_action(
-                AuditAction.CREATE, instance=expense,
-                description=(
-                    f"Recorded expense {expense.reference}: {expense.amount} "
-                    f"for {expense.category_name}"
-                    + (f" ({expense.employee.name})" if expense.employee_id else "")
-                ),
-            )
-            messages.success(
-                request,
-                f"{expense.reference} recorded: {expense.amount} for "
-                f"{expense.category_name}.",
-            )
+            for expense in expenses:
+                log_action(
+                    AuditAction.CREATE, instance=expense,
+                    description=(
+                        f"Recorded expense {expense.reference}: {expense.amount} "
+                        f"for {expense.category_name}"
+                        + (f" ({expense.employee.name})" if expense.employee_id else "")
+                    ),
+                )
+            first = expenses[0]
+            if len(expenses) == 1:
+                messages.success(
+                    request,
+                    f"{first.reference} recorded: {first.amount} for "
+                    f"{first.category_name}.",
+                )
+            else:
+                total = sum((e.amount for e in expenses), ZERO)
+                messages.success(
+                    request,
+                    f"{first.reference} recorded: {len(expenses)} lines, "
+                    f"{total} in all.",
+                )
             if "another" in request.POST:
                 return redirect("expenses:expense_create")
             return redirect(
-                f"{_list_url()}?month={expense.spent_on:%Y-%m}"
+                f"{_list_url()}?month={first.spent_on:%Y-%m}"
             )
+
+    employees = form.employees
     return render(
-        request, "expenses/expense_form.html", _expense_form_context(form)
+        request,
+        "expenses/expense_form.html",
+        {
+            "form": form,
+            "expense": None,
+            "employees": employees,
+            "salaries": {str(e.pk): str(e.monthly_salary) for e in employees},
+            "lines": [
+                {
+                    "amount": str(line.get("amount") or ""),
+                    "category": line.get("category") or "",
+                    "category_name": line.get("category_name") or "",
+                    "employee": line.get("employee") or "",
+                }
+                for line in lines
+            ],
+        },
     )
 
 

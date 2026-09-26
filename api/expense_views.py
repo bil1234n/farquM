@@ -12,11 +12,14 @@ Expenses and employees.
     PATCH /api/employees/<id>/                  edit
     GET   /api/employees/<id>/payments/         what they were paid
 """
+from decimal import Decimal
+
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
@@ -28,6 +31,7 @@ from expenses.models import Employee, Expense
 from expenses.services import (
     ExpenseError,
     record_expense,
+    record_expense_lines,
     summarize,
     update_expense,
     void_expense,
@@ -81,6 +85,7 @@ class ExpenseViewSet(
         qs = scoped(
             Expense.objects.select_related(
                 "employee", "recorded_by", "voided_by", "owner", "note_tag",
+                "production_run",
             ),
             self.request.user,
         )
@@ -96,6 +101,12 @@ class ExpenseViewSet(
             qs = qs.filter(employee_id=params["employee"])
         if params.get("staff") == "true":
             qs = qs.filter(employee__isnull=False)
+        if params.get("batch"):
+            # The costs of one production batch, for its page.
+            qs = qs.filter(production_run_id=params["batch"])
+        if params.get("group"):
+            # Every line of one payment.
+            qs = qs.filter(group_reference=params["group"])
         q = (params.get("q") or "").strip()
         if q:
             qs = qs.filter(
@@ -110,12 +121,30 @@ class ExpenseViewSet(
         return qs.order_by("-spent_on", "-id")
 
     def _write_data(self, request):
-        serializer = ExpenseWriteSerializer(data=request.data)
+        payload = request.data
+        raw_lines = payload.get("lines") if hasattr(payload, "get") else None
+        if isinstance(raw_lines, str):
+            # A multipart form (a receipt photo is attached) carries the lines
+            # as one JSON text field - form fields cannot nest.
+            import json
+
+            try:
+                parsed = json.loads(raw_lines or "[]")
+            except ValueError:
+                parsed = None
+            if not isinstance(parsed, list):
+                raise DRFValidationError({"lines": ["Send the lines as a list."]})
+            payload = {key: payload.get(key) for key in payload.keys()}
+            payload["lines"] = parsed
+        serializer = ExpenseWriteSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
         return dict(serializer.validated_data)
 
     def create(self, request):
         data = self._write_data(request)
+        lines = data.pop("lines", None)
+        if lines:
+            return self._create_lines(request, data, lines)
         try:
             expense = record_expense(
                 user=request.user, data=data, receipt=request.FILES.get("receipt")
@@ -136,9 +165,45 @@ class ExpenseViewSet(
             status=status.HTTP_201_CREATED,
         )
 
+    def _create_lines(self, request, data, lines):
+        """One payment, several lines - answered with every line recorded."""
+        try:
+            expenses = record_expense_lines(
+                user=request.user,
+                data=data,
+                lines=[dict(line) for line in lines],
+                receipt=request.FILES.get("receipt"),
+            )
+        except (ExpenseError, ValidationError) as exc:
+            return _error(exc)
+        for expense in expenses:
+            log_action(
+                AuditAction.CREATE,
+                instance=expense,
+                description=(
+                    f"Recorded expense {expense.reference}: {expense.amount} "
+                    f"for {expense.category_name}"
+                    + (f" ({expense.employee.name})" if expense.employee_id else "")
+                    + (f", paid with {expense.group_reference}"
+                       if expense.group_reference and expense.group_reference != expense.reference
+                       else "")
+                ),
+            )
+        context = {"request": request}
+        return Response(
+            {
+                "results": ExpenseSerializer(expenses, many=True, context=context).data,
+                "count": len(expenses),
+                "total": str(sum((e.amount for e in expenses), Decimal("0.00"))),
+                "group_reference": expenses[0].group_reference or expenses[0].reference,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     def partial_update(self, request, pk=None):
         expense = self.get_object()
         data = self._write_data(request)
+        data.pop("lines", None)  # a correction is to one line
         try:
             expense = update_expense(
                 expense, user=request.user, data=data,
@@ -193,6 +258,7 @@ class ExpenseViewSet(
             "total": str(result["total"]),
             "count": result["count"],
             "staff_total": str(result["staff_total"]),
+            "in_product_cost": str(result["in_product_cost"]),
             "by_category": [
                 {
                     "category": row["category"],

@@ -1787,6 +1787,7 @@ def dashboard(request):
             "month_total": str(month_spent["total"]),
             "month_count": month_spent["count"],
             "staff_total": str(month_spent["staff_total"]),
+            "in_product_cost": str(month_spent["in_product_cost"]),
             "today_total": str(today_spent["total"]),
             "by_category": [
                 {"category": row["category"], "total": str(row["total"])}
@@ -1818,7 +1819,7 @@ def profit_report(request):
     # fuel and wages. Taken off here, from the same scoped rows the expenses
     # page shows, so the two screens can never tell a different story.
     from expenses.models import Expense
-    from expenses.services import summarize
+    from expenses.services import running_costs, summarize
 
     spent = summarize(
         scoped(Expense.objects.all(), user).filter(
@@ -1832,7 +1833,10 @@ def profit_report(request):
         "gross_profit": str(data["gross_profit"]),
         "margin_percent": str(data["margin_percent"]),
         "expenses": str(spent["total"]),
-        "net_profit": str(data["gross_profit"] - spent["total"]),
+        # Batch costs are inside the cost of the goods already (see
+        # expenses.services.running_costs), so profit takes them off once.
+        "expenses_in_product_cost": str(spent["in_product_cost"]),
+        "net_profit": str(data["gross_profit"] - running_costs(spent)),
         "count": data["count"],
         "valuation": {k: str(v) for k, v in inventory_valuation(user=user).items()},
     })

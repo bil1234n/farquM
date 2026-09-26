@@ -2266,3 +2266,77 @@ class UnexpectedErrorTests(ApiTestBase):
         response = self.as_(self.sales).get("/api/users/")
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("reference", response.json())
+
+
+class ExpenseLinesApiTests(Round3Base):
+    """One payment, several lines, from the phone."""
+
+    def test_several_lines_in_one_payment(self):
+        response = self.as_(self.manager).post(
+            "/api/expenses/",
+            {
+                "payment_method": "CASH", "payee": "Total station",
+                "lines": [
+                    {"category_name": "Fuel", "amount": "1200.00"},
+                    {"category_name": "Oil", "amount": "300.00"},
+                ],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(body["total"], "1500.00")
+        refs = {row["group_reference"] for row in body["results"]}
+        self.assertEqual(refs, {body["group_reference"]})
+        rows = self.as_(self.manager).get(
+            f"/api/expenses/?group={body['group_reference']}"
+        ).json()["results"]
+        self.assertEqual(len(rows), 2)
+
+    def test_several_people_paid_at_once_with_a_receipt(self):
+        import json
+
+        from expenses.models import Employee
+
+        guard = Employee.objects.create(name="Tesfaye", monthly_salary=Decimal("4500"))
+        loader = Employee.objects.create(name="Almaz", monthly_salary=Decimal("3000"))
+        photo = SimpleUploadedFile(
+            "envelope.jpg", b"\xff\xd8\xff\xe0fakejpeg", content_type="image/jpeg"
+        )
+        response = self.as_(self.manager).post(
+            "/api/expenses/",
+            {
+                "payment_method": "CASH",
+                "pay_period": "2026-08-01",
+                "lines": json.dumps([
+                    {"employee": guard.pk, "amount": "4500.00"},
+                    {"employee": loader.pk, "amount": "500.00", "pay_type_name": "Advance"},
+                ]),
+                "receipt": photo,
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        rows = response.json()["results"]
+        self.assertEqual([r["employee_name"] for r in rows], ["Tesfaye", "Almaz"])
+        self.assertEqual([r["payee"] for r in rows], ["Tesfaye", "Almaz"])
+        self.assertEqual(rows[1]["pay_type_name"], "Advance")
+        # One photo, shown on every line.
+        self.assertTrue(rows[0]["receipt_url"])
+        self.assertEqual(rows[0]["receipt_url"], rows[1]["receipt_url"])
+
+    def test_a_bad_line_is_named(self):
+        response = self.as_(self.manager).post(
+            "/api/expenses/",
+            {"lines": [{"category_name": "Fuel", "amount": "100"},
+                       {"category_name": "", "amount": "50"}]},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Line 2", response.content.decode())
+
+    def test_nothing_at_all_is_refused(self):
+        response = self.as_(self.manager).post(
+            "/api/expenses/", {"payment_method": "CASH"}, content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 400)

@@ -23,6 +23,7 @@ from core.mixins import (
 from core.errors import describe
 from core.models import Option
 from core.scoping import scoped
+from expenses.models import ExpenseMethod
 from inventory.models import Product
 
 from .forms import (
@@ -34,6 +35,7 @@ from .forms import (
     RecipeForm,
     RequestResponseForm,
     ReversalForm,
+    parse_cost_lines,
     parse_damage_lines,
     parse_material_lines,
 )
@@ -431,7 +433,8 @@ class RunListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
         ctx["total_produced"] = totals["produced"] or 0
         ctx["total_rejected"] = totals["rejected"] or 0
         if self.request.user.can_view_financials:
-            ctx["total_cost"] = mine.aggregate(c=Sum("material_cost"))["c"] or 0
+            totals = mine.aggregate(m=Sum("material_cost"), o=Sum("other_cost"))
+            ctx["total_cost"] = (totals["m"] or 0) + (totals["o"] or 0)
         return ctx
 
 
@@ -445,12 +448,14 @@ class RunDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
         return (
             super().get_queryset()
             .select_related("product", "owner", "created_by", "reversed_by")
-            .prefetch_related("materials__material")
+            .prefetch_related("materials__material", "expenses")
         )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["can_reverse"] = self.request.user.has_access("production.reverse")
+        ctx["cost_lines"] = sorted(self.object.expenses.all(), key=lambda e: e.pk)
+        ctx["can_see_expenses"] = self.request.user.has_access("expense.view")
         ctx["reversal_form"] = ReversalForm()
         return ctx
 
@@ -465,6 +470,8 @@ def run_create(request):
 
     form = ProductionRunForm(request.POST or None, user=request.user)
     store = scoped(RawMaterial.objects.active(), request.user).order_by("name")
+    can_record_costs = request.user.has_access("expense.record")
+    costs, payment = parse_cost_lines(request) if request.method == "POST" else ([], {})
 
     if request.method == "POST" and form.is_valid():
         lines, errors = parse_material_lines(request, request.user)
@@ -487,6 +494,8 @@ def run_create(request):
                     note_tag=form.cleaned_data.get("note_tag"),
                     materials=lines,
                     user=request.user,
+                    expenses=costs if can_record_costs else None,
+                    expense_payment=payment,
                 )
             except (ValidationError, DatabaseError) as exc:
                 for message in _messages_of(exc):
@@ -497,6 +506,7 @@ def run_create(request):
                     description=(
                         f"Recorded {run.reference}: {run.quantity_produced} x "
                         f"{run.product.name}."
+                        + (f" Other costs {run.other_cost}." if run.other_cost else "")
                     ),
                 )
                 messages.success(
@@ -521,6 +531,11 @@ def run_create(request):
             .filter(assigned_to=request.user)
             .select_related("product", "requested_by")
             .order_by("-created_at"),
+            # The batch's other costs, for somebody allowed to record expenses.
+            "can_record_costs": can_record_costs,
+            "payment_methods": ExpenseMethod.choices,
+            "posted_costs": [line for line in costs if any(line.values())],
+            "posted_payment": payment,
         },
     )
 

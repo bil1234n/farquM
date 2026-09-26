@@ -26,6 +26,7 @@
   <div class="row g-3">
     {# ---------------- What was paid ---------------- #}
     <div class="col-lg-7">
+      {% if expense %}
       <div class="card mb-3">
         <div class="card-header"><i class="bi bi-receipt me-1"></i> What was paid</div>
         <div class="card-body">
@@ -105,6 +106,80 @@
           </div>
         </div>
       </div>
+      {% else %}
+        {% comment %}
+          One payment, as many lines as it had: three workers paid out of one
+          envelope, fuel and oil on one receipt. Each line becomes its own
+          expense - so the payroll and the category totals still add up line
+          by line - and they share the date, how it was paid and the receipt.
+        {% endcomment %}
+        <div class="card mb-3">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-receipt me-1"></i> What was paid</span>
+            <span class="text-muted-sm">one line per thing, or per person</span>
+          </div>
+          <div class="card-body">
+            <div class="row g-3 mb-2">
+              <div class="col-sm-6">
+                <label class="form-label" for="{{ form.spent_on.id_for_label }}">Date <span class="required-mark">*</span></label>
+                {{ form.spent_on }}
+                {% for e in form.spent_on.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label" for="{{ form.payee.id_for_label }}">Paid to</label>
+                {{ form.payee }}
+                <div class="form-text">{{ form.payee.help_text }} <span>Staff lines are paid to their person.</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle mb-0 table-stackable" id="lineTable">
+              <thead>
+                <tr>
+                  <th style="min-width:200px">What for</th>
+                  {% if employees %}<th style="min-width:170px">Employee <span class="text-muted fw-normal">(staff pay)</span></th>{% endif %}
+                  <th style="width:200px" class="text-end">Amount</th>
+                  <th style="width:44px"></th>
+                </tr>
+              </thead>
+              <tbody id="lineRows"></tbody>
+            </table>
+          </div>
+          <div class="card-footer bg-light d-flex flex-wrap gap-2 justify-content-between align-items-center">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="addLine">
+              <i class="bi bi-plus-lg me-1"></i> Add another line
+            </button>
+            <strong>Total <span class="money" id="lineTotal">0.00</span></strong>
+          </div>
+        </div>
+
+        {# ---------------- Staff lines ---------------- #}
+        <div class="card mb-3 d-none" id="staffCard">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-person-vcard me-1"></i> Staff pay</span>
+            <span class="text-muted-sm">for every line with a person</span>
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Kind of payment</label>
+                <div class="option-select"
+                     data-group="EMPLOYEE_PAY_TYPE"
+                     data-id-field="pay_type"
+                     data-name-field="pay_type_name"
+                     data-value="{{ form.pay_type.value|default_if_none:'' }}"
+                     data-value-name="{{ form.pay_type_name.value|default_if_none:'' }}"
+                     data-placeholder="Salary"></div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="{{ form.pay_period.id_for_label }}">{{ form.pay_period.label }}</label>
+                {{ form.pay_period }}
+                <div class="form-text">{{ form.pay_period.help_text }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
     </div>
 
     {# ---------------- How it was paid ---------------- #}
@@ -171,6 +246,42 @@
   </div>
 </form>
 {{ salaries|json_script:"salaries" }}
+{% if not expense %}
+  {{ lines|json_script:"initialLines" }}
+  <template id="lineTemplate">
+    <tr class="line-row">
+      <td>
+        <div class="option-select"
+             data-group="EXPENSE_CATEGORY"
+             data-id-field="line_category[]"
+             data-name-field="line_category_name[]"
+             data-placeholder="Choose what it was for"></div>
+      </td>
+      {% if employees %}
+        <td>
+          <select name="line_employee[]" class="form-select line-employee">
+            <option value="">Not staff pay</option>
+            {% for e in employees %}
+              <option value="{{ e.pk }}">{{ e.name }}{% if e.job_name %} - {{ e.job_name }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </td>
+      {% endif %}
+      <td>
+        <div class="input-group">
+          <span class="input-group-text">{{ CURRENCY }}</span>
+          <input type="number" name="line_amount[]" step="0.01" min="0.01"
+                 class="form-control text-end line-amount" placeholder="0.00">
+        </div>
+      </td>
+      <td class="text-end">
+        <button type="button" class="btn btn-outline-danger btn-sm drop-line" title="Remove this line">
+          <i class="bi bi-x"></i>
+        </button>
+      </td>
+    </tr>
+  </template>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -179,9 +290,6 @@
   const $ = (id) => document.getElementById(id);
   const salaries = JSON.parse($('salaries').textContent || '{}');
   const method = $('id_payment_method');
-  const employee = $('id_employee');
-  const amount = $('id_amount');
-  const payee = $('id_payee');
 
   // ---- Which bank / which wallet: the same swap as the sale screen. ----
   const CHANNEL_GROUPS = {
@@ -206,25 +314,88 @@
   method.addEventListener('change', updateChannel);
   updateChannel();
 
-  // ---- Staff payment: only asks the staff questions for a staff payment. ----
-  function updateStaff() {
-    const on = !!employee.value;
-    document.querySelectorAll('.staff-only').forEach(el => el.classList.toggle('d-none', !on));
-    if (on && !payee.value) {
-      payee.value = employee.options[employee.selectedIndex].text.split(' - ')[0];
+  // ---- Correcting one expense: the staff questions for a staff payment. ----
+  const employee = $('id_employee');
+  if (employee) {
+    const amount = $('id_amount');
+    const payee = $('id_payee');
+    function updateStaff() {
+      const on = !!employee.value;
+      document.querySelectorAll('.staff-only').forEach(el => el.classList.toggle('d-none', !on));
+      if (on && !payee.value) {
+        payee.value = employee.options[employee.selectedIndex].text.split(' - ')[0];
+      }
     }
-  }
-  employee.addEventListener('change', function () {
-    if (employee.value && !amount.value && salaries[employee.value] && Number(salaries[employee.value]) > 0) {
-      amount.value = salaries[employee.value];
-    }
+    employee.addEventListener('change', function () {
+      if (employee.value && !amount.value && salaries[employee.value] && Number(salaries[employee.value]) > 0) {
+        amount.value = salaries[employee.value];
+      }
+      updateStaff();
+    });
+    $('useSalary').addEventListener('click', function () {
+      const pay = salaries[employee.value];
+      if (pay && Number(pay) > 0) { amount.value = pay; amount.focus(); }
+    });
     updateStaff();
+  }
+
+  // ---- Recording: one payment, as many lines as it had. ----
+  const rows = $('lineRows');
+  if (!rows) return;
+  const template = $('lineTemplate');
+  const initial = JSON.parse(($('initialLines') || {}).textContent || '[]');
+
+  function addRow(line) {
+    line = line || {};
+    rows.appendChild(template.content.cloneNode(true));
+    const row = rows.lastElementChild;
+    const pick = row.querySelector('.option-select');
+    pick.dataset.value = line.category || '';
+    pick.dataset.valueName = line.category_name || '';
+    if (window.OptionSelect) window.OptionSelect.scan(row);
+    const who = row.querySelector('.line-employee');
+    if (who && line.employee) who.value = String(line.employee);
+    row.querySelector('.line-amount').value = line.amount || '';
+    return row;
+  }
+
+  function refresh() {
+    let total = 0, staff = false;
+    rows.querySelectorAll('.line-row').forEach(function (row) {
+      total += parseFloat(row.querySelector('.line-amount').value) || 0;
+      const who = row.querySelector('.line-employee');
+      if (who && who.value) staff = true;
+    });
+    $('lineTotal').textContent = total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    $('staffCard').classList.toggle('d-none', !staff);
+    // The last line cannot be removed - a payment has at least one.
+    const only = rows.querySelectorAll('.line-row').length === 1;
+    rows.querySelectorAll('.drop-line').forEach(b => b.disabled = only);
+    if (window.AppUI) window.AppUI.stackTables();
+  }
+
+  $('addLine').addEventListener('click', function () {
+    const row = addRow();
+    refresh();
+    row.querySelector('.line-amount').focus();
   });
-  $('useSalary').addEventListener('click', function () {
-    const pay = salaries[employee.value];
-    if (pay && Number(pay) > 0) { amount.value = pay; amount.focus(); }
+  rows.addEventListener('click', function (event) {
+    const button = event.target.closest('.drop-line');
+    if (button && !button.disabled) { button.closest('tr').remove(); refresh(); }
   });
-  updateStaff();
+  rows.addEventListener('input', refresh);
+  rows.addEventListener('change', function (event) {
+    // Choosing a person fills in their monthly salary if the amount is empty.
+    if (event.target.classList.contains('line-employee')) {
+      const amount = event.target.closest('tr').querySelector('.line-amount');
+      const pay = salaries[event.target.value];
+      if (event.target.value && !amount.value && pay && Number(pay) > 0) amount.value = pay;
+    }
+    refresh();
+  });
+
+  (initial.length ? initial : [{}]).forEach(addRow);
+  refresh();
 })();
 </script>
 {% endblock %}

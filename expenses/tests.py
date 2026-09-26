@@ -83,8 +83,10 @@ class ExpensePageTests(ExpenseWebBase):
         html = self.client_for(self.manager).get(
             f"/expenses/new/?employee={self.guard.pk}"
         ).content.decode()
-        self.assertIn('value="4500.00"', html)
-        self.assertIn(f'<option value="{self.guard.pk}" selected>', html)
+        # The first line arrives filled in: this person, their usual salary.
+        # (The rows are drawn by the page's script from this list.)
+        self.assertIn('"amount": "4500.00"', html)
+        self.assertIn(f'"employee": {self.guard.pk}', html)
 
     def test_a_bank_payment_must_say_which_bank(self):
         response = self.post_expense(self.manager, payment_method="BANK")
@@ -202,3 +204,125 @@ class EmployeePageTests(ExpenseWebBase):
         self.assertIn('href="/expenses/employees/"', manager_html)
         seller_html = self.client_for(self.sales).get("/reports/").content.decode()
         self.assertNotIn('href="/expenses/"', seller_html)
+
+
+class ExpenseLineTests(ExpenseWebBase):
+    """One payment, several lines - each its own expense, paid together."""
+
+    def test_running_costs_paid_together(self):
+        from .services import record_expense_lines
+
+        lines = record_expense_lines(
+            user=self.manager,
+            data={"payment_method": "BANK", "payment_channel_name": "CBE",
+                  "payee": "Total station", "notes": "Weekly run"},
+            lines=[
+                {"category_name": "Fuel", "amount": "1200"},
+                {"category_name": "Oil", "amount": "350.50"},
+                {"category_name": "", "amount": ""},  # the empty row left behind
+            ],
+        )
+        self.assertEqual(len(lines), 2)
+        first, second = lines
+        self.assertEqual(first.group_reference, first.reference)
+        self.assertEqual(second.group_reference, first.reference)
+        for line in lines:
+            line.refresh_from_db()
+            self.assertEqual(line.payment_method, "BANK")
+            self.assertEqual(line.payment_channel_name, "CBE")
+            self.assertEqual(line.payee, "Total station")
+            self.assertEqual(line.notes, "Weekly run")
+        self.assertEqual(second.category_name, "Oil")
+        self.assertEqual(second.amount, Decimal("350.50"))
+
+    def test_several_people_paid_at_once(self):
+        from .services import record_expense_lines
+
+        loader = Employee.objects.create(name="Almaz Loader", monthly_salary=Decimal("3000"))
+        lines = record_expense_lines(
+            user=self.manager,
+            data={"pay_period": "2026-08-01"},
+            lines=[
+                {"employee": self.guard.pk, "amount": "4500"},
+                {"employee": loader.pk, "amount": "500", "pay_type_name": "Advance"},
+            ],
+        )
+        guard, advance = lines
+        self.assertEqual((guard.payee, guard.pay_type_name), ("Tesfaye Guard", "Salary"))
+        self.assertEqual((advance.payee, advance.pay_type_name), ("Almaz Loader", "Advance"))
+        for line in lines:
+            self.assertEqual(line.category_name, "Salaries & wages")
+            self.assertEqual(line.pay_period, dt.date(2026, 8, 1))
+        self.assertEqual(self.guard.paid_between(dt.date(2000, 1, 1), timezone.localdate()),
+                         Decimal("4500.00"))
+
+    def test_a_bad_line_says_which_and_saves_nothing(self):
+        from .services import ExpenseError, record_expense_lines
+
+        with self.assertRaisesMessage(ExpenseError, "Line 2: The amount must be more than zero."):
+            record_expense_lines(
+                user=self.manager, data={},
+                lines=[
+                    {"category_name": "Fuel", "amount": "100"},
+                    {"category_name": "Oil", "amount": "-5"},
+                ],
+            )
+        self.assertFalse(Expense.objects.exists())
+
+    def test_nothing_to_record(self):
+        from .services import ExpenseError, record_expense_lines
+
+        with self.assertRaisesMessage(ExpenseError, "at least one line"):
+            record_expense_lines(user=self.manager, data={}, lines=[{"amount": ""}])
+
+
+class ExpenseLinesPageTests(ExpenseWebBase):
+    """The browser records one payment of several lines."""
+
+    def test_two_lines_one_payment(self):
+        response = self.client_for(self.manager).post("/expenses/new/", {
+            "spent_on": timezone.localdate().isoformat(),
+            "payment_method": "CASH",
+            "payee": "Total station",
+            "line_category_name[]": ["Fuel", "Oil"],
+            "line_category[]": ["", ""],
+            "line_amount[]": ["1200", "300"],
+            "line_employee[]": ["", ""],
+        })
+        self.assertEqual(response.status_code, 302, response.content[:500])
+        first, second = Expense.objects.order_by("id")
+        self.assertEqual((first.category_name, second.category_name), ("Fuel", "Oil"))
+        self.assertEqual(second.group_reference, first.reference)
+        self.assertEqual(second.payee, "Total station")
+
+    def test_people_and_a_cost_in_one_payment(self):
+        response = self.client_for(self.manager).post("/expenses/new/", {
+            "spent_on": timezone.localdate().isoformat(),
+            "payment_method": "CASH",
+            "pay_type_name": "Salary",
+            "line_category_name[]": ["", "Tea for the shift"],
+            "line_category[]": ["", ""],
+            "line_amount[]": ["4500", "120"],
+            "line_employee[]": [str(self.guard.pk), ""],
+        })
+        self.assertEqual(response.status_code, 302, response.content[:500])
+        pay, tea = Expense.objects.order_by("id")
+        self.assertEqual(pay.employee, self.guard)
+        self.assertEqual(pay.category_name, "Salaries & wages")
+        self.assertEqual(pay.payee, "Tesfaye Guard")
+        self.assertIsNone(tea.employee)
+        self.assertEqual(tea.category_name, "Tea for the shift")
+
+    def test_a_bad_line_keeps_what_was_typed(self):
+        response = self.client_for(self.manager).post("/expenses/new/", {
+            "spent_on": timezone.localdate().isoformat(),
+            "payment_method": "CASH",
+            "line_category_name[]": ["Fuel", ""],
+            "line_category[]": ["", ""],
+            "line_amount[]": ["1200", "300"],
+            "line_employee[]": ["", ""],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Line 2: Choose what the money was spent on.")
+        self.assertContains(response, '"amount": "1200"')
+        self.assertFalse(Expense.objects.exists())

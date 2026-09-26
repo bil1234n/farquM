@@ -18,6 +18,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 from core.models import resolve_option
@@ -363,6 +364,8 @@ def record_production(
     note_tag=None,
     update_product_cost: bool = True,
     fulfils=None,
+    expenses=None,
+    expense_payment=None,
 ) -> ProductionRun:
     """
     Record one finished batch.
@@ -373,8 +376,17 @@ def record_production(
     to the expected one is the whole reason a yard can find out where its
     cement goes.
 
+    `expenses` are the batch's OTHER costs - labour, power, transport - as
+    expense lines ({"category" or "category_name", "amount", "payee"}), paid
+    the way `expense_payment` says (payment_method and, for a bank or wallet,
+    payment_channel / payment_channel_name / payment_reference). Each becomes
+    a real Expense row, dated the day of the batch and pointing at it, so it
+    is counted with every other expense; and their sum goes into the batch's
+    cost per unit - and from there into the product's cost price - next to
+    the materials. That is the figure a selling price has to cover.
+
     Every write is inside one transaction. If the last material is short, the
-    blocks are not created either.
+    blocks are not created either - and neither are the expenses.
     """
     if quantity_produced <= 0:
         raise ValidationError("A run must produce at least one unit.")
@@ -393,6 +405,12 @@ def record_production(
 
     if not can_touch(product, user):
         raise ValidationError(f"'{product.name}' is not in your product list.")
+
+    from expenses.services import _blank_line
+
+    cost_lines = [line for line in (expenses or []) if not _blank_line(line)]
+    if cost_lines and not getattr(user, "has_access", lambda *a: False)("expense.record"):
+        raise ValidationError("You do not have permission to record expenses.")
 
     produced_on = produced_on or timezone.localdate()
 
@@ -473,16 +491,50 @@ def record_production(
         )
         total_cost += (quantity * unit_cost).quantize(MONEY)
 
+    # The other costs of the batch, recorded as expenses in the same breath:
+    # real money out, listed with everything else the business paid, and
+    # pointing back here so the batch can show what it was made of.
+    other_cost = Decimal("0.00")
+    if cost_lines:
+        from expenses.services import record_expense_lines
+
+        payment = {
+            key: value
+            for key, value in (expense_payment or {}).items()
+            if key in (
+                "payment_method", "payment_channel",
+                "payment_channel_name", "payment_reference",
+            )
+        }
+        paid = record_expense_lines(
+            user=user,
+            data={
+                **payment,
+                "spent_on": produced_on,
+                # Names, not words: the note is data, shown as typed in any
+                # language, and the reference is what finds the batch.
+                "notes": f"{run.reference} · {product.name}",
+            },
+            lines=cost_lines,
+            production_run=run,
+        )
+        other_cost = sum((expense.amount for expense in paid), Decimal("0.00"))
+
     # Divided by the GOOD units, not by everything attempted. The whole batch
     # was paid for out of the units that can actually be sold, so 8,000 of
     # cement across 80 survivors is 100 each - and the 20 that broke therefore
     # cost 2,000 of sellable product, which is what `rejected_cost` reports.
     # See ProductionRun.rejected_cost for why the other sum loses money.
-    unit_cost = (total_cost / quantity_produced).quantize(MONEY)
+    # The other costs are shared out the same way: the labour that made the
+    # broken blocks was paid for too.
+    unit_cost = ((total_cost + other_cost) / quantity_produced).quantize(MONEY)
     ProductionRun.objects.filter(pk=run.pk).update(
-        material_cost=total_cost.quantize(MONEY), unit_cost=unit_cost
+        material_cost=total_cost.quantize(MONEY),
+        other_cost=other_cost.quantize(MONEY),
+        unit_cost=unit_cost,
     )
     run.material_cost = total_cost.quantize(MONEY)
+    run.other_cost = other_cost.quantize(MONEY)
     run.unit_cost = unit_cost
 
     # What broke, and how. Written after the costing so the lines can be read
@@ -528,16 +580,58 @@ def record_production(
         _close_requests(fulfils, run=run, user=user)
 
     logger.info(
-        "Production %s: %s x%d (rejected %d) cost=%s unit=%s by %s",
+        "Production %s: %s x%d (rejected %d) cost=%s+%s unit=%s by %s",
         run.reference,
         product.sku,
         quantity_produced,
         quantity_rejected,
         total_cost,
+        other_cost,
         unit_cost,
         getattr(user, "username", "?"),
     )
     return run
+
+
+@transaction.atomic
+def recost_run(run) -> ProductionRun:
+    """
+    Add a batch's costs up again after one of its expense lines changed.
+
+    A cost line corrected or cancelled from the Expenses screen changes what
+    the batch cost, so the batch follows - and so does the product's cost
+    price, when this is the product's latest batch, exactly as it did when
+    the batch was first recorded.
+    """
+    locked = ProductionRun.objects.select_for_update().get(pk=run.pk)
+    other = (
+        locked.expenses.filter(is_voided=False).aggregate(t=Sum("amount"))["t"]
+        or Decimal("0.00")
+    )
+    unit = (
+        ((locked.material_cost + other) / locked.quantity_produced).quantize(MONEY)
+        if locked.quantity_produced
+        else Decimal("0.00")
+    )
+    ProductionRun.objects.filter(pk=locked.pk).update(
+        other_cost=other.quantize(MONEY), unit_cost=unit
+    )
+    locked.other_cost, locked.unit_cost = other.quantize(MONEY), unit
+
+    if locked.status == ProductionStatus.COMPLETED and unit > 0:
+        latest = (
+            ProductionRun.objects.completed()
+            .filter(product_id=locked.product_id)
+            .order_by("-produced_on", "-created_at", "-id")
+            .values_list("pk", flat=True)
+            .first()
+        )
+        if latest == locked.pk:
+            Product.objects.filter(pk=locked.product_id).update(cost_price=unit)
+    logger.info(
+        "Production %s recosted: other=%s unit=%s", locked.reference, other, unit
+    )
+    return locked
 
 
 @transaction.atomic
@@ -580,6 +674,18 @@ def reverse_production(run, *, user, reason: str = "") -> ProductionRun:
             reason=f"Returned by reversal of {locked.reference}",
             unit_cost=line.unit_cost,
         )
+
+    # A batch that never happened was not paid for either: its cost lines are
+    # cancelled with it, with the reason on each, rather than left to count
+    # in this month's spending for a batch that is gone.
+    now = timezone.now()
+    locked.expenses.filter(is_voided=False).update(
+        is_voided=True,
+        voided_at=now,
+        voided_by=user,
+        void_reason=f"Batch {locked.reference} was reversed: {reason.strip()}",
+        updated_at=now,
+    )
 
     locked.status = ProductionStatus.REVERSED
     locked.reversed_at = timezone.now()

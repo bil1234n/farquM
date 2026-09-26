@@ -330,7 +330,7 @@ class ProductionRunViewSet(viewsets.ReadOnlyModelViewSet):
         qs = scoped(
             ProductionRun.objects.select_related(
                 "product", "owner", "created_by", "reversed_by"
-            ).prefetch_related("materials__material", "damages"),
+            ).prefetch_related("materials__material", "damages", "expenses"),
             self.request.user,
         )
         params = self.request.query_params
@@ -378,6 +378,8 @@ class ProductionRunViewSet(viewsets.ReadOnlyModelViewSet):
                 ],
                 user=request.user,
                 update_product_cost=data.get("update_product_cost", True),
+                expenses=[dict(line) for line in data.get("expenses") or []],
+                expense_payment=dict(data.get("expense_payment") or {}),
             )
         except ValidationError as exc:
             return _error(exc)
@@ -494,6 +496,7 @@ def production_summary(request):
         produced=Sum("quantity_produced"),
         rejected=Sum("quantity_rejected"),
         cost=Sum("material_cost"),
+        other=Sum("other_cost"),
     )
     produced = totals["produced"] or 0
     rejected = totals["rejected"] or 0
@@ -514,6 +517,7 @@ def production_summary(request):
     }
     if request.user.can_view_costs:
         payload["material_cost"] = str(totals["cost"] or Decimal("0.00"))
+        payload["other_cost"] = str(totals["other"] or Decimal("0.00"))
         payload["store_value"] = str(
             sum((m.stock_value for m in materials), Decimal("0.00"))
         )

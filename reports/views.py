@@ -140,7 +140,7 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
         # ---- What the business spent this month ---------------------------
         if user.has_access("expense.view"):
             from expenses.models import Expense
-            from expenses.services import summarize
+            from expenses.services import running_costs, summarize
 
             spent = summarize(
                 scoped(Expense.objects.all(), user).filter(
@@ -156,7 +156,12 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
             if month_profit is not None:
                 # Gross profit less what it cost to run the place: the number
                 # an owner actually means by "did we make money this month".
-                ctx["month_net_profit"] = month_profit["gross_profit"] - spent["total"]
+                # A batch's own costs are already inside the cost of the goods
+                # sold (they went into its cost per unit), so they are taken
+                # off once, there - see expenses.services.running_costs.
+                ctx["month_net_profit"] = (
+                    month_profit["gross_profit"] - running_costs(spent)
+                )
 
         # ---- Which dashboard is this? -------------------------------------
         profile = profile_for(user)

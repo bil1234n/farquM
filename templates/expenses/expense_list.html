@@ -158,6 +158,17 @@
                   {% elif e.payee %}
                     <div class="text-muted-sm"><i class="bi bi-arrow-right-short"></i>{{ e.payee }}</div>
                   {% endif %}
+                  {% if e.production_run_id %}
+                    {% if user|can:"production.view" %}
+                      <a class="pay-chip batch mt-1" href="{% url 'production:run_detail' e.production_run_id %}">
+                        <i class="bi bi-bricks"></i>{{ e.production_run.reference }}
+                      </a>
+                    {% else %}
+                      <span class="pay-chip batch mt-1"><i class="bi bi-bricks"></i>{{ e.production_run.reference }}</span>
+                    {% endif %}
+                  {% elif e.group_reference and e.group_reference != e.reference %}
+                    <div class="text-muted-sm"><i class="bi bi-link-45deg"></i> paid with <span class="mono">{{ e.group_reference }}</span></div>
+                  {% endif %}
                   {% if e.notes %}<div class="text-muted-sm text-truncate" style="max-width:320px">{{ e.notes }}</div>{% endif %}
                   {% if e.is_voided %}
                     <div class="text-danger small">Cancelled: {{ e.void_reason }}</div>

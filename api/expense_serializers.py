@@ -100,6 +100,10 @@ class ExpenseSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerialize
     )
     receipt_url = serializers.SerializerMethodField()
     owner_name = serializers.SerializerMethodField()
+    #: The batch this was paid for, when it is one of a batch's costs.
+    production_run_reference = serializers.CharField(
+        source="production_run.reference", read_only=True, default=None
+    )
 
     class Meta:
         model = Expense
@@ -111,7 +115,8 @@ class ExpenseSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerialize
             "pay_period", "notes", *NOTE_TAG_FIELDS, "receipt_url",
             "recorded_by_name", "created_at",
             "is_voided", "voided_at", "voided_by_name", "void_reason",
-            "owner_name",
+            "owner_name", "group_reference",
+            "production_run", "production_run_reference",
         ]
         read_only_fields = fields
 
@@ -126,16 +131,41 @@ class ExpenseSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerialize
         return request.build_absolute_uri(url) if request else url
 
 
-class ExpenseWriteSerializer(serializers.Serializer):
+class ExpenseLineSerializer(serializers.Serializer):
     """
-    What the phone sends to record or correct an expense. A list entry can
-    arrive as the id somebody picked or the name somebody typed; the service
-    resolves either, and adds a typed one to the list for next time.
+    One line of a payment with several: what differs from line to line. The
+    date, how it was paid, the receipt and the note are the payment's.
     """
 
     amount = serializers.DecimalField(
         max_digits=14, decimal_places=2, min_value=Decimal("0.01")
     )
+    category = serializers.IntegerField(required=False, allow_null=True)
+    category_name = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    employee = serializers.IntegerField(required=False, allow_null=True)
+    pay_type = serializers.IntegerField(required=False, allow_null=True)
+    pay_type_name = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    payee = serializers.CharField(max_length=160, required=False, allow_blank=True)
+
+
+class ExpenseWriteSerializer(serializers.Serializer):
+    """
+    What the phone sends to record or correct an expense. A list entry can
+    arrive as the id somebody picked or the name somebody typed; the service
+    resolves either, and adds a typed one to the list for next time.
+
+    A payment of several lines - three workers paid at once, fuel and oil on
+    one receipt - sends `lines`, and the fields here are the shared part.
+    """
+
+    amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal("0.01"), required=False
+    )
+    lines = ExpenseLineSerializer(many=True, required=False)
     spent_on = serializers.DateField(required=False, allow_null=True)
     category = serializers.IntegerField(required=False, allow_null=True)
     category_name = serializers.CharField(
@@ -167,6 +197,11 @@ class ExpenseWriteSerializer(serializers.Serializer):
         if value and value > timezone.localdate():
             raise serializers.ValidationError("An expense cannot be dated in the future.")
         return value
+
+    def validate(self, attrs):
+        if not attrs.get("lines") and attrs.get("amount") is None:
+            raise serializers.ValidationError({"amount": "Enter the amount."})
+        return attrs
 
 
 def month_bounds(text: str):

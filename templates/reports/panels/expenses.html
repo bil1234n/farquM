@@ -20,6 +20,13 @@
       <div class="d-flex flex-wrap gap-4 mb-3">
         <div class="mini-stat">Total<span class="money text-danger">{{ month_expenses.total|money }}</span></div>
         <div class="mini-stat">Staff pay<span class="money">{{ month_expenses.staff_total|money }}</span></div>
+        {% if month_expenses.in_product_cost %}
+          {% comment %}
+            Paid to make batches, so already inside the products' cost - the
+            profit below takes it off once, through the cost of the goods sold.
+          {% endcomment %}
+          <div class="mini-stat">In product cost<span class="money">{{ month_expenses.in_product_cost|money }}</span></div>
+        {% endif %}
         {% if show_profit %}
           <div class="mini-stat">Profit after expenses
             <span class="money {% if month_net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ month_net_profit|money }}</span>

@@ -340,8 +340,9 @@ class ProductionRunSerializer(
     NoteTagMixin, OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
 ):
     financial_fields = (
-        "material_cost", "unit_cost", "rejected_cost",
-        "naive_rejected_cost", "damage_loss_gap",
+        "material_cost", "other_cost", "total_cost", "costs", "unit_cost",
+        "rejected_cost", "naive_rejected_cost", "damage_loss_gap",
+        "selling_price",
     )
 
     product_name = serializers.CharField(source="product.name", read_only=True)
@@ -362,6 +363,13 @@ class ProductionRunSerializer(
     damages = ProductionDamageSerializer(many=True, read_only=True)
     damage_summary = serializers.CharField(read_only=True)
     total_attempted = serializers.IntegerField(read_only=True)
+    #: Materials plus the other costs - what the batch cost in all.
+    total_cost = DerivedDecimal()
+    #: The other costs line by line: the expenses recorded with the batch.
+    costs = serializers.SerializerMethodField()
+    #: What the product sells for now, so the screen can set the cost per unit
+    #: against it without a second request.
+    selling_price = DerivedDecimal(source="product.selling_price")
     created_by_name = serializers.CharField(
         source="created_by.display_name", default=None, read_only=True
     )
@@ -377,7 +385,8 @@ class ProductionRunSerializer(
             "unit_display",
             "quantity_produced", "quantity_rejected", "total_attempted",
             "yield_percent", "produced_on",
-            "material_cost", "unit_cost", "rejected_cost",
+            "material_cost", "other_cost", "total_cost", "costs", "unit_cost",
+            "selling_price", "rejected_cost",
             "naive_rejected_cost", "damage_loss_gap",
             "damages", "damage_summary",
             "status", "status_display", "notes", *NOTE_TAG_FIELDS,
@@ -385,6 +394,48 @@ class ProductionRunSerializer(
             "materials", "created_by_name", "owner_name", "created_at",
         ]
         read_only_fields = fields
+
+    def get_costs(self, obj):
+        return [
+            {
+                "id": expense.pk,
+                "reference": expense.reference,
+                "category_name": expense.category_name,
+                "payee": expense.payee,
+                "amount": str(expense.amount),
+                "is_voided": expense.is_voided,
+            }
+            # In the order they were entered, as on the form.
+            for expense in sorted(obj.expenses.all(), key=lambda e: e.pk)
+        ]
+
+
+class ProductionCostLineSerializer(serializers.Serializer):
+    """One of a batch's other costs: what it was for, and how much."""
+
+    category = serializers.IntegerField(required=False, allow_null=True)
+    category_name = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal("0.01")
+    )
+    payee = serializers.CharField(max_length=160, required=False, allow_blank=True)
+
+
+class ExpensePaymentSerializer(serializers.Serializer):
+    """How a batch's other costs were paid - the same for all its lines."""
+
+    payment_method = serializers.ChoiceField(
+        choices=("CASH", "BANK", "MOBILE", "CHEQUE"), required=False, default="CASH"
+    )
+    payment_channel = serializers.IntegerField(required=False, allow_null=True)
+    payment_channel_name = serializers.CharField(
+        max_length=120, required=False, allow_blank=True, default=""
+    )
+    payment_reference = serializers.CharField(
+        max_length=80, required=False, allow_blank=True, default=""
+    )
 
 
 class ProductionRunCreateSerializer(serializers.Serializer):
@@ -414,6 +465,10 @@ class ProductionRunCreateSerializer(serializers.Serializer):
         child=serializers.IntegerField(), required=False, allow_empty=True
     )
     update_product_cost = serializers.BooleanField(required=False, default=True)
+    #: The batch's other costs - labour, power, transport. Recorded as
+    #: expenses and added into the cost per unit.
+    expenses = ProductionCostLineSerializer(many=True, required=False)
+    expense_payment = ExpensePaymentSerializer(required=False)
 
     def validate_materials(self, value):
         if not value:

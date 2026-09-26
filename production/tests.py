@@ -912,3 +912,298 @@ class YardLanguageTests(YardTestBase):
         ).json()
         self.assertEqual(row["status_display"], EXACT_AM["Completed"])
         self.assertEqual(row["reference"], run.reference)
+
+
+class BatchCostTests(YardTestBase):
+    """
+    The other costs of a batch - labour, power, transport - recorded with it.
+
+    They are real expenses (listed and totalled with everything else the
+    business paid) AND part of what the batch cost, so they go into its cost
+    per unit and the product's cost price, next to the materials.
+    """
+
+    COSTS = [
+        {"category_name": "Labour", "amount": "300.00", "payee": "Day workers"},
+        {"category_name": "Electricity", "amount": "60.00"},
+    ]
+
+    def _run(self, costs=None, produced=60, user=None, damages=None, **extra):
+        return services.record_production(
+            product=self.block,
+            quantity_produced=produced,
+            materials=[
+                {"material": self.cement, "quantity": D("50")},
+                {"material": self.sand, "quantity": D("0.180")},
+            ],
+            user=user or self.manager,
+            expenses=self.COSTS if costs is None else costs,
+            damages=damages,
+            **extra,
+        )
+
+    def test_the_costs_are_expenses_of_the_batch(self):
+        from expenses.models import Expense
+
+        run = self._run()
+        lines = Expense.objects.filter(production_run=run).order_by("id")
+        self.assertEqual(
+            [(e.category_name, e.amount) for e in lines],
+            [("Labour", D("300.00")), ("Electricity", D("60.00"))],
+        )
+        for expense in lines:
+            self.assertEqual(expense.spent_on, run.produced_on)
+            self.assertEqual(expense.owner, self.manager)
+            self.assertEqual(expense.payment_method, "CASH")
+            self.assertIn(run.reference, expense.notes)
+        self.assertEqual(lines[0].payee, "Day workers")
+        # Paid together, so found together.
+        self.assertEqual({e.group_reference for e in lines}, {lines[0].reference})
+
+    def test_they_go_into_the_cost_per_unit_and_the_product_cost(self):
+        run = self._run()
+        # Materials 1,062 + other costs 360 = 1,422 over 60 good blocks.
+        self.assertEqual(run.material_cost, D("1062.00"))
+        self.assertEqual(run.other_cost, D("360.00"))
+        self.assertEqual(run.total_cost, D("1422.00"))
+        self.assertEqual(run.unit_cost, D("23.70"))
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.cost_price, D("23.70"))
+
+    def test_broken_units_carry_the_other_costs_too(self):
+        damage, _ = Option.objects.get_or_create(group="DAMAGE_TYPE", label="Cracked")
+        run = self._run(damages=[{"damage_type": damage.pk, "quantity": 12}])
+        run.refresh_from_db()
+        # Each broken block cost what a good one did - materials AND labour.
+        self.assertEqual(run.rejected_cost, D("284.40"))  # 23.70 x 12
+
+    def test_they_count_as_money_out_but_profit_takes_them_off_once(self):
+        from core.scoping import scoped
+        from expenses.models import Expense
+        from expenses.services import record_expense, running_costs, summarize
+
+        self._run()
+        record_expense(user=self.manager, data={
+            "amount": "100.00", "category_name": "Rent",
+        })
+        month = summarize(scoped(Expense.objects.all(), self.manager))
+        self.assertEqual(month["total"], D("460.00"))
+        self.assertEqual(month["in_product_cost"], D("360.00"))
+        self.assertEqual(running_costs(month), D("100.00"))
+
+    def test_the_costs_are_paid_the_way_the_form_says(self):
+        from expenses.models import Expense
+
+        run = self._run(expense_payment={
+            "payment_method": "MOBILE", "payment_channel_name": "Telebirr",
+            "payment_reference": "TB-1",
+        })
+        for expense in Expense.objects.filter(production_run=run):
+            self.assertEqual(expense.payment_method, "MOBILE")
+            # The wallet already on the list, spelt the way the list spells it.
+            self.assertEqual(expense.payment_channel_name.lower(), "telebirr")
+            self.assertEqual(expense.payment_reference, "TB-1")
+
+    def test_somebody_who_may_not_record_expenses_cannot_add_them(self):
+        barred = User.objects.create_user(
+            "barry", password="pw", role="MANAGER",
+            denied_permissions=["expense.record"],
+        )
+        with self.assertRaisesMessage(ValidationError, "permission to record expenses"):
+            self._run(user=barred)
+        self.assertFalse(ProductionRun.objects.exists())
+        # ...and without any costs the same person records the batch as before.
+        self.assertEqual(self._run(costs=[], user=barred).other_cost, D("0.00"))
+
+    def test_a_bad_cost_line_leaves_nothing_behind(self):
+        from expenses.models import Expense
+
+        with self.assertRaises(ValidationError):
+            self._run(costs=[
+                {"category_name": "Labour", "amount": "300.00"},
+                {"category_name": "Power", "amount": "0"},
+            ])
+        self.assertFalse(ProductionRun.objects.exists())
+        self.assertFalse(Expense.objects.exists())
+        self.cement.refresh_from_db()
+        self.assertEqual(self.cement.quantity_in_stock, D("1000"))
+        self.assertLedgerAgrees(self.cement)
+
+    def test_empty_cost_rows_are_ignored(self):
+        run = self._run(costs=[{"category_name": "", "amount": ""}])
+        self.assertEqual(run.other_cost, D("0.00"))
+        self.assertEqual(run.unit_cost, D("17.70"))
+
+    def test_correcting_or_cancelling_a_cost_line_recosts_the_batch(self):
+        from expenses.models import Expense
+        from expenses.services import update_expense, void_expense
+
+        run = self._run()
+        labour = Expense.objects.get(production_run=run, category_name="Labour")
+        update_expense(labour, user=self.manager, data={
+            "amount": "420.00", "category_name": "Labour", "spent_on": labour.spent_on,
+        })
+        run.refresh_from_db()
+        self.assertEqual(run.other_cost, D("480.00"))
+        self.assertEqual(run.unit_cost, D("25.70"))  # (1,062 + 480) / 60
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.cost_price, D("25.70"))
+
+        void_expense(labour, user=self.manager, reason="Paid from the wrong batch")
+        run.refresh_from_db()
+        self.assertEqual(run.other_cost, D("60.00"))
+        self.assertEqual(run.unit_cost, D("18.70"))
+
+    def test_an_older_batch_does_not_move_the_product_cost(self):
+        from expenses.models import Expense
+        from expenses.services import void_expense
+
+        old = self._run()
+        self._run(costs=[])  # a later batch sets the cost price: 17.70
+        void_expense(
+            Expense.objects.filter(production_run=old).first(),
+            user=self.manager, reason="Mistake",
+        )
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.cost_price, D("17.70"))
+
+    def test_reversing_the_batch_cancels_its_costs(self):
+        from core.scoping import scoped
+        from expenses.models import Expense
+        from expenses.services import summarize
+
+        run = self._run()
+        services.reverse_production(run, user=self.manager, reason="Typed twice")
+        lines = Expense.objects.filter(production_run=run)
+        self.assertTrue(all(e.is_voided for e in lines))
+        self.assertIn("Typed twice", lines[0].void_reason)
+        month = summarize(scoped(Expense.objects.all(), self.manager))
+        self.assertEqual(month["total"], D("0"))
+
+
+class BatchCostApiTests(YardTestBase):
+    """The phone records a batch's other costs with it, and reads them back."""
+
+    def _post(self, user=None, **extra):
+        body = {
+            "product": self.block.pk,
+            "quantity_produced": 60,
+            "materials": [
+                {"material": self.cement.pk, "quantity": "50"},
+                {"material": self.sand.pk, "quantity": "0.180"},
+            ],
+            "expenses": [
+                {"category_name": "Labour", "amount": "300.00", "payee": "Day workers"},
+                {"category_name": "Electricity", "amount": "60.00"},
+            ],
+            **extra,
+        }
+        return self.as_(user or self.manager).post(
+            "/api/production/", body, content_type="application/json"
+        )
+
+    def test_the_batch_answers_with_its_whole_cost(self):
+        response = self._post()
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body["material_cost"], "1062.00")
+        self.assertEqual(body["other_cost"], "360.00")
+        self.assertEqual(body["total_cost"], "1422.00")
+        self.assertEqual(body["unit_cost"], "23.70")
+        self.assertEqual(body["selling_price"], "32.00")
+        self.assertEqual(
+            [(c["category_name"], c["amount"]) for c in body["costs"]],
+            [("Labour", "300.00"), ("Electricity", "60.00")],
+        )
+
+    def test_the_costs_are_in_the_expense_list_pointing_at_the_batch(self):
+        run = self._post().json()
+        rows = self.as_(self.manager).get(f"/api/expenses/?batch={run['id']}").json()["results"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({r["production_run_reference"] for r in rows}, {run["reference"]})
+        summary = self.as_(self.manager).get("/api/expenses/summary/").json()
+        self.assertEqual(D(summary["total"]), D("360"))
+        self.assertEqual(D(summary["in_product_cost"]), D("360"))
+
+    def test_paid_by_bank_the_bank_is_named(self):
+        refused = self._post(expense_payment={"payment_method": "BANK"})
+        self.assertEqual(refused.status_code, 400, refused.content)
+        self.assertFalse(ProductionRun.objects.exists())
+        accepted = self._post(expense_payment={
+            "payment_method": "BANK", "payment_channel_name": "Dashen Bank",
+        })
+        self.assertEqual(accepted.status_code, 201, accepted.content)
+
+    def test_without_expense_permission_the_costs_are_refused(self):
+        barred = User.objects.create_user(
+            "barry", password="pw", role="MANAGER",
+            denied_permissions=["expense.record"],
+        )
+        response = self._post(user=barred)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("permission to record expenses", response.content.decode())
+
+    def test_somebody_who_may_not_see_costs_is_not_sent_them(self):
+        self._post()
+        viewer = User.objects.create_user(
+            "vic", password="pw", role="MANAGER",
+            denied_permissions=["product.view_cost"],
+        )
+        row = self.as_(viewer).get("/api/production/").json()["results"][0]
+        for key in ("material_cost", "other_cost", "total_cost", "costs",
+                    "unit_cost", "selling_price"):
+            self.assertNotIn(key, row)
+
+
+class BatchCostWebTests(YardTestBase):
+    """The browser's batch form takes the other costs, and the page shows them."""
+
+    def _post(self, **extra):
+        body = {
+            "produced_on": timezone.localdate().isoformat(),
+            "product": self.block.pk,
+            "quantity_produced": "60",
+            "material_id[]": [str(self.cement.pk), str(self.sand.pk)],
+            "quantity[]": ["50", "0.180"],
+            "expected[]": ["", ""],
+            "cost_category[]": ["", ""],
+            "cost_category_name[]": ["Labour", "Electricity"],
+            "cost_payee[]": ["Day workers", ""],
+            "cost_amount[]": ["300", "60"],
+            "cost_payment_method": "CASH",
+        }
+        body.update(extra)
+        return self.as_(self.manager).post("/production/runs/new/", body)
+
+    def test_the_batch_is_recorded_with_its_costs(self):
+        response = self._post()
+        run = ProductionRun.objects.get()
+        self.assertRedirects(response, f"/production/runs/{run.pk}/",
+                             fetch_redirect_response=False)
+        self.assertEqual(run.other_cost, D("360.00"))
+        self.assertEqual(run.unit_cost, D("23.70"))
+
+        html = self.as_(self.manager).get(f"/production/runs/{run.pk}/").content.decode()
+        self.assertIn("Other costs", html)
+        self.assertIn("Day workers", html)
+        self.assertIn("Price check", html)
+        # 32.00 - 23.70 = 8.30 a block, 25.9% of the price.
+        self.assertIn("8.30", html)
+        self.assertIn("25.9%", html)
+
+    def test_a_refused_cost_keeps_the_rows_typed(self):
+        response = self._post(**{"cost_payment_method": "BANK"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ProductionRun.objects.exists())
+        html = response.content.decode()
+        self.assertIn("Choose which bank or wallet", html)
+        self.assertIn('"category_name": "Labour"', html)
+
+    def test_the_form_offers_costs_only_to_who_may_record_them(self):
+        self.assertIn('id="costCard"',
+                      self.as_(self.manager).get("/production/runs/new/").content.decode())
+        barred = User.objects.create_user(
+            "barry", password="pw", role="MANAGER", denied_permissions=["expense.record"],
+        )
+        self.assertNotIn('id="costCard"',
+                         self.as_(barred).get("/production/runs/new/").content.decode())

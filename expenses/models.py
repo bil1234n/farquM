@@ -172,6 +172,31 @@ class Expense(OwnedModel, TimeStampedModel):
         blank=True,
     )
 
+    # -- Paid together ---------------------------------------------------------
+    # One payment often covers several things - three workers paid out of one
+    # envelope, fuel and a repair on one receipt. Each line is still its own
+    # row, so "what did Kebede get" and "what went on fuel" keep working, and
+    # the lines share the first one's reference here, so they can be shown -
+    # and found - together.
+    group_reference = models.CharField(
+        max_length=40, blank=True, db_index=True,
+        help_text="The reference of the first line of a payment with several lines.",
+    )
+
+    # -- What a batch cost -----------------------------------------------------
+    # Labour, power, transport paid FOR one production batch. Still money out
+    # of the business - it is listed and totalled with every other expense -
+    # but it is also part of what that batch's units cost to make, so it goes
+    # into the batch's cost per unit and from there into the product's cost
+    # price. See production.services.record_production.
+    production_run = models.ForeignKey(
+        "production.ProductionRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="expenses",
+    )
+
     recorded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -219,6 +244,10 @@ class Expense(OwnedModel, TimeStampedModel):
     @property
     def is_staff_payment(self) -> bool:
         return self.employee_id is not None
+
+    @property
+    def is_batch_cost(self) -> bool:
+        return self.production_run_id is not None
 
     def save(self, *args, **kwargs):
         if not self.reference:

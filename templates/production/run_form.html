@@ -51,12 +51,6 @@
             <tbody></tbody>
           </table>
         </div>
-        <div class="card-footer bg-light d-flex justify-content-between">
-          <a href="{% url 'production:run_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
-          <button class="btn btn-primary btn-sm">
-            <i class="bi bi-check-lg me-1"></i> Record production
-          </button>
-        </div>
       </div>
       <p class="text-muted small mt-3">
         The recipe fills these in; correct them to what the shift actually used.
@@ -120,6 +114,79 @@
           </ul>
         </div>
       {% endif %}
+
+      {% if can_record_costs %}
+        {% comment %}
+          The batch's OTHER costs: labour, power, transport. Each line is
+          recorded as an expense (so it counts with everything else the
+          business paid) and added into the batch's cost per unit next to the
+          materials - the figure a selling price has to cover.
+        {% endcomment %}
+        <div class="card mt-3" id="costCard">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-cash-coin me-1"></i> Other costs of this batch</span>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="addCost">
+              <i class="bi bi-plus-lg me-1"></i> Add a cost
+            </button>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle mb-0" id="costs">
+              <thead>
+                <tr>
+                  <th style="width:38%">What for</th>
+                  <th>Paid to</th>
+                  <th style="width:24%" class="text-end">Amount</th>
+                  <th style="width:44px"></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="card-body border-top py-2" id="costPayment" hidden>
+            <div class="row g-2 align-items-end">
+              <div class="col-sm-4">
+                <label class="form-label small mb-1" for="costMethod">Paid by</label>
+                <select name="cost_payment_method" id="costMethod" class="form-select form-select-sm">
+                  {% for value, label in payment_methods %}
+                    <option value="{{ value }}" {% if value == posted_payment.payment_method %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-sm-5 d-none" id="costChannelBox">
+                <label class="form-label small mb-1" id="costChannelLabel">Bank</label>
+                <div class="option-select"
+                     id="costChannelSelect"
+                     data-group="BANK"
+                     data-id-field="cost_payment_channel"
+                     data-name-field="cost_payment_channel_name"
+                     data-value="{{ posted_payment.payment_channel|default_if_none:'' }}"
+                     data-value-name="{{ posted_payment.payment_channel_name|default_if_none:'' }}"
+                     data-placeholder="Select a bank"></div>
+              </div>
+              <div class="col-sm-3 d-none" id="costRefBox">
+                <label class="form-label small mb-1" for="costRef">Reference</label>
+                <input type="text" name="cost_payment_reference" id="costRef" maxlength="80"
+                       value="{{ posted_payment.payment_reference|default:'' }}"
+                       class="form-control form-control-sm">
+              </div>
+            </div>
+          </div>
+          <div class="card-footer bg-light small d-flex flex-wrap gap-2 justify-content-between">
+            <span class="text-muted">
+              Labour, power, transport paid for this batch. Each is recorded as
+              an expense and added to the cost per unit.
+            </span>
+            <strong>Other costs: <span class="money" id="costTotal">0.00</span></strong>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="d-flex justify-content-between align-items-center mt-3">
+        <a href="{% url 'production:run_list' %}" class="btn btn-outline-secondary">Cancel</a>
+        <button class="btn btn-primary">
+          <i class="bi bi-check-lg me-1"></i> Record production
+        </button>
+      </div>
     </div>
   </div>
 </form>
@@ -177,6 +244,32 @@
     </td>
   </tr>
 </template>
+
+<template id="costTemplate">
+  <tr>
+    <td>
+      <div class="option-select"
+           data-group="EXPENSE_CATEGORY"
+           data-id-field="cost_category[]"
+           data-name-field="cost_category_name[]"
+           data-placeholder="Labour, power..."></div>
+    </td>
+    <td>
+      <input type="text" name="cost_payee[]" maxlength="160"
+             class="form-control form-control-sm" placeholder="Optional">
+    </td>
+    <td>
+      <input type="number" min="0.01" step="0.01" name="cost_amount[]"
+             class="form-control form-control-sm text-end cost-amount" placeholder="0.00">
+    </td>
+    <td class="text-end">
+      <button type="button" class="btn btn-outline-danger btn-sm drop-cost">
+        <i class="bi bi-x"></i>
+      </button>
+    </td>
+  </tr>
+</template>
+{{ posted_costs|json_script:"postedCosts" }}
 
 <script>
   (function () {
@@ -336,6 +429,77 @@
         }
       });
     });
+
+    /* ---- Other costs -------------------------------------------------
+       Each row becomes an expense of this batch; "Paid by" is asked once,
+       for all of them, and only once there is something to pay. */
+    var costBody = document.querySelector("#costs tbody");
+    if (costBody) {
+      var costTemplate = document.getElementById("costTemplate");
+      var costTotal = document.getElementById("costTotal");
+      var costPayment = document.getElementById("costPayment");
+      var costMethod = document.getElementById("costMethod");
+      var CHANNELS = {
+        BANK:   {group: "BANK",         label: "Bank",          placeholder: "Select a bank"},
+        CHEQUE: {group: "BANK",         label: "Bank (cheque)", placeholder: "Select a bank"},
+        MOBILE: {group: "MOBILE_MONEY", label: "Mobile money",  placeholder: "Select a provider"}
+      };
+
+      var addCost = function (line) {
+        line = line || {};
+        costBody.appendChild(costTemplate.content.cloneNode(true));
+        var row = costBody.lastElementChild;
+        var pick = row.querySelector(".option-select");
+        pick.dataset.value = line.category || "";
+        pick.dataset.valueName = line.category_name || "";
+        if (window.OptionSelect) { window.OptionSelect.scan(row); }
+        row.querySelector("input[name='cost_payee[]']").value = line.payee || "";
+        row.querySelector(".cost-amount").value = line.amount || "";
+        return row;
+      };
+      var retotalCosts = function () {
+        var total = 0;
+        costBody.querySelectorAll(".cost-amount").forEach(function (input) {
+          total += parseFloat(input.value) || 0;
+        });
+        costTotal.textContent = total.toLocaleString(undefined,
+          {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        costPayment.hidden = !costBody.querySelector("tr");
+      };
+      var updateCostChannel = function () {
+        var spec = CHANNELS[costMethod.value];
+        var box = document.getElementById("costChannelBox");
+        var host = document.getElementById("costChannelSelect");
+        box.classList.toggle("d-none", !spec);
+        document.getElementById("costRefBox").classList.toggle("d-none", !spec);
+        if (!spec) { return; }
+        document.getElementById("costChannelLabel").textContent = spec.label;
+        if (host.dataset.group !== spec.group) {
+          host.dataset.group = spec.group;
+          host.dataset.placeholder = spec.placeholder;
+          host.dataset.ready = "";
+          host.innerHTML = "";
+          if (window.OptionSelect) { window.OptionSelect.scan(host.parentElement); }
+        }
+      };
+
+      document.getElementById("addCost").addEventListener("click", function () {
+        addCost().querySelector(".cost-amount").focus();
+        retotalCosts();
+      });
+      costBody.addEventListener("click", function (event) {
+        var button = event.target.closest(".drop-cost");
+        if (button) { button.closest("tr").remove(); retotalCosts(); }
+      });
+      costBody.addEventListener("input", retotalCosts);
+      costMethod.addEventListener("change", updateCostChannel);
+
+      // Rows sent back after a refusal come back as they were typed.
+      var posted = JSON.parse((document.getElementById("postedCosts") || {}).textContent || "[]");
+      posted.forEach(function (line) { addCost(line); });
+      updateCostChannel();
+      retotalCosts();
+    }
   })();
 </script>
 {% endblock %}

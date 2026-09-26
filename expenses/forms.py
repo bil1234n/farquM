@@ -160,6 +160,61 @@ class ExpenseForm(StyledFormMixin, forms.Form):
         return data
 
 
+class ExpenseLinesForm(ExpenseForm):
+    """
+    The new-expense page: the part of a payment that its lines share - the
+    date, who was paid, how, the receipt, the note, and for staff lines the
+    kind of payment and the month.
+
+    The lines themselves (what for, whose pay, how much) arrive as arrays -
+    see parse_expense_lines - because one payment may have one line or ten:
+    three workers paid out of one envelope, fuel and oil on one receipt.
+    """
+
+    #: Asked per line rather than once.
+    LINE_FIELDS = ("amount", "category", "category_name", "employee")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Kept for the line rows' "whose pay" list before the field goes.
+        self.employees = self.fields["employee"].queryset
+        for name in self.LINE_FIELDS:
+            self.fields.pop(name, None)
+
+
+def parse_expense_lines(post) -> list[dict]:
+    """
+    The posted line rows, as the list expenses.services.record_expense_lines
+    takes. Parallel arrays, one entry per row: each row carries exactly one of
+    each input, so the arrays line up by position.
+    """
+    amounts = post.getlist("line_amount[]")
+    ids = post.getlist("line_category[]")
+    names = post.getlist("line_category_name[]")
+    people = post.getlist("line_employee[]")
+    if not (amounts or ids or people) and "amount" in post:
+        # A form from before lines existed - one expense, posted flat.
+        amounts = [post.get("amount", "")]
+        ids = [post.get("category", "")]
+        names = [post.get("category_name", "")]
+        people = [post.get("employee", "")]
+
+    def at(values, index):
+        return (values[index] if index < len(values) else "").strip()
+
+    lines = []
+    for index in range(max(len(amounts), len(ids), len(people))):
+        category = at(ids, index)
+        employee = at(people, index)
+        lines.append({
+            "amount": at(amounts, index),
+            "category": int(category) if category.isdigit() else None,
+            "category_name": at(names, index),
+            "employee": int(employee) if employee.isdigit() else None,
+        })
+    return lines
+
+
 class VoidExpenseForm(StyledFormMixin, forms.Form):
     reason = forms.CharField(
         widget=forms.Textarea(attrs={"rows": 3}),

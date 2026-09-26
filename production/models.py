@@ -467,11 +467,21 @@ class ProductionRun(AuthoredModel, OwnedModel):
         default=Decimal("0.00"),
         help_text="Sum of the materials consumed, at the cost of the day.",
     )
+    # Labour, power, transport and the like, paid for THIS batch. Each one is
+    # an Expense row pointing here (expenses.Expense.production_run), so it is
+    # also counted as money out; this is their sum, kept on the run so the
+    # cost of a batch reads the same after its expense rows change.
+    other_cost = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="What else was paid to make this batch - recorded as expenses.",
+    )
     unit_cost = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=Decimal("0.00"),
-        help_text="material_cost divided by the good units produced.",
+        help_text="Materials plus other costs, divided by the good units produced.",
     )
 
     status = models.CharField(
@@ -527,6 +537,37 @@ class ProductionRun(AuthoredModel, OwnedModel):
         return self.quantity_produced + self.quantity_rejected
 
     @property
+    def total_cost(self) -> Decimal:
+        """Everything this batch cost: materials plus the other costs."""
+        return (self.material_cost + self.other_cost).quantize(Decimal("0.01"))
+
+    # -- Against the price ----------------------------------------------------
+    # "How much did it cost, and how much should I sell it for?" - the cost
+    # per unit set against what the product sells for now.
+    @property
+    def profit_per_unit(self) -> Decimal:
+        """What one good unit earns at today's selling price."""
+        return (self.product.selling_price - self.unit_cost).quantize(Decimal("0.01"))
+
+    @property
+    def margin_percent(self) -> Decimal | None:
+        """That profit as a share of the price. None when there is no price."""
+        price = self.product.selling_price
+        if not price or price <= 0:
+            return None
+        return ((price - self.unit_cost) * 100 / price).quantize(Decimal("0.1"))
+
+    @property
+    def price_guide(self) -> list:
+        """The cost per unit plus 10, 20 and 30 per cent: a place to start a price."""
+        if self.unit_cost <= 0:
+            return []
+        return [
+            (percent, (self.unit_cost * (100 + percent) / 100).quantize(Decimal("0.01")))
+            for percent in (10, 20, 30)
+        ]
+
+    @property
     def yield_percent(self) -> Decimal:
         """Good units as a share of everything attempted."""
         attempted = self.total_attempted
@@ -566,7 +607,7 @@ class ProductionRun(AuthoredModel, OwnedModel):
             # material cost at all). Fall back to deriving it the same way.
             if not self.quantity_produced:
                 return Decimal("0.00")
-            unit = (self.material_cost / Decimal(self.quantity_produced))
+            unit = (self.total_cost / Decimal(self.quantity_produced))
         return (unit * Decimal(self.quantity_rejected)).quantize(Decimal("0.01"))
 
     @property
@@ -588,7 +629,7 @@ class ProductionRun(AuthoredModel, OwnedModel):
         if not attempted or not self.quantity_rejected:
             return Decimal("0.00")
         share = Decimal(self.quantity_rejected) / Decimal(attempted)
-        return (self.material_cost * share).quantize(Decimal("0.01"))
+        return (self.total_cost * share).quantize(Decimal("0.01"))
 
     @property
     def damage_loss_gap(self) -> Decimal:

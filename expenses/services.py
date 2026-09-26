@@ -163,6 +163,107 @@ def record_expense(*, user, data: dict, receipt=None) -> Expense:
     return expense
 
 
+#: What may differ from one line of a payment to the next. Everything else -
+#: the date, how it was paid, the receipt, the note - is shared.
+LINE_FIELDS = (
+    "amount", "category", "category_name",
+    "employee", "pay_type", "pay_type_name", "payee",
+)
+
+#: More lines than this in one payment is a runaway form, not a payment.
+MAX_LINES = 50
+
+
+def _blank_line(line) -> bool:
+    """A row the "add another" button left behind, never filled in."""
+    return not any(
+        str(line.get(key) or "").strip()
+        for key in ("amount", "category", "category_name", "employee")
+    )
+
+
+@db_transaction.atomic
+def record_expense_lines(
+    *, user, data: dict, lines, receipt=None, production_run=None
+) -> list[Expense]:
+    """
+    One payment, several lines: three workers paid out of one envelope, fuel
+    and a repair on one receipt, the labour and the power for one batch.
+
+    Every line becomes an Expense row of its own - so "what did Kebede get"
+    and "what went on fuel" keep working line by line - and the lines share
+    the date, how the money was paid, the receipt and the note. They also
+    share the first line's reference (group_reference), so they can be shown
+    and found together.
+
+    `data` holds the shared fields, with the same keys record_expense takes;
+    each entry of `lines` holds what differs (LINE_FIELDS). Every line is
+    checked before any is written, so a mistake in the third line leaves
+    nothing half-recorded.
+    """
+    lines = [dict(line) for line in (lines or []) if not _blank_line(line)]
+    if not lines:
+        raise ExpenseError("Add at least one line with an amount.")
+    if len(lines) > MAX_LINES:
+        raise ExpenseError(f"One payment can have at most {MAX_LINES} lines.")
+
+    built = []
+    for number, line in enumerate(lines, start=1):
+        merged = dict(data)
+        merged.update({key: line[key] for key in LINE_FIELDS if key in line})
+        if merged.get("employee") and "payee" not in line:
+            # A shared "paid to" is a shop or a landlord; a staff line is paid
+            # to its own person, and says so.
+            merged["payee"] = ""
+        try:
+            built.append(_apply(Expense(), user=user, data=merged))
+        except ExpenseError as exc:
+            if len(lines) == 1:
+                raise
+            raise ExpenseError(
+                "; ".join(f"Line {number}: {message}" for message in exc.messages)
+            )
+
+    owner = owned_by(user)
+    first = None
+    for expense in built:
+        expense.owner = owner
+        expense.recorded_by = user
+        expense.production_run = production_run
+        if first is None:
+            if receipt is not None:
+                expense.receipt = receipt
+        elif first.receipt:
+            # The same photo for every line, stored once: the later lines
+            # point at the file the first one uploaded.
+            expense.receipt = first.receipt.name
+        expense.save()
+        first = first or expense
+        _count_uses(expense)
+
+    if len(built) > 1:
+        Expense.objects.filter(pk__in=[e.pk for e in built]).update(
+            group_reference=first.reference
+        )
+        for expense in built:
+            expense.group_reference = first.reference
+
+    logger.info(
+        "Expense %s recorded by %s: %d line(s), %s in all",
+        first.reference, getattr(user, "username", "?"), len(built),
+        sum((e.amount for e in built), ZERO),
+    )
+    return built
+
+
+def _recost_batch(expense: Expense):
+    """A batch's cost per unit follows its cost lines when one changes."""
+    if expense.production_run_id:
+        from production.services import recost_run
+
+        recost_run(expense.production_run)
+
+
 @db_transaction.atomic
 def update_expense(expense: Expense, *, user, data: dict, receipt=None) -> Expense:
     if not can_touch(expense, user):
@@ -174,6 +275,7 @@ def update_expense(expense: Expense, *, user, data: dict, receipt=None) -> Expen
     if receipt is not None:
         locked.receipt = receipt
     locked.save()
+    _recost_batch(locked)
     return locked
 
 
@@ -198,6 +300,7 @@ def void_expense(expense: Expense, *, user, reason: str) -> Expense:
         "Expense %s CANCELLED by %s. Reason: %s",
         locked.reference, getattr(user, "username", "?"), reason,
     )
+    _recost_batch(locked)
     return locked
 
 
@@ -212,6 +315,13 @@ def summarize(queryset) -> dict:
     live = queryset.filter(is_voided=False)
     head = live.aggregate(total=Sum("amount"), count=Count("id"))
     staff = live.filter(employee__isnull=False).aggregate(t=Sum("amount"))["t"]
+    # Paid to make a batch, and so already inside that batch's cost per unit
+    # - and, through the product's cost price, inside the cost of every unit
+    # sold. Still money out, so it stays in the total; a profit figure takes
+    # it off only once (see the callers of this).
+    in_product_cost = live.filter(production_run__isnull=False).aggregate(
+        t=Sum("amount")
+    )["t"]
     by_category = [
         {
             "category": row["category_name"] or "-",
@@ -226,5 +336,16 @@ def summarize(queryset) -> dict:
         "total": head["total"] or ZERO,
         "count": head["count"] or 0,
         "staff_total": staff or ZERO,
+        "in_product_cost": in_product_cost or ZERO,
         "by_category": by_category,
     }
+
+
+def running_costs(summary: dict):
+    """
+    What to take off gross profit: the total, less what is already inside the
+    cost of the goods. A batch's labour is in its cost per unit, so the sales
+    of those units already paid for it once - taking it off again would
+    report a loss that never happened.
+    """
+    return summary["total"] - summary.get("in_product_cost", ZERO)

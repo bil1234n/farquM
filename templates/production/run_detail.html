@@ -37,6 +37,15 @@
           <li class="list-group-item d-flex justify-content-between">
             <span class="text-muted">Material cost</span><span class="money">{{ run.material_cost|money }}</span>
           </li>
+          {% if run.other_cost %}
+            <li class="list-group-item d-flex justify-content-between">
+              <span class="text-muted">Other costs <span class="small">(labour, power&hellip;)</span></span>
+              <span class="money">{{ run.other_cost|money }}</span>
+            </li>
+            <li class="list-group-item d-flex justify-content-between">
+              <span class="text-muted">Total cost</span><span class="money fw-semibold">{{ run.total_cost|money }}</span>
+            </li>
+          {% endif %}
           <li class="list-group-item d-flex justify-content-between">
             <span class="text-muted">Cost per good unit</span>
             <span class="money fw-semibold">{{ run.unit_cost|money }}</span>
@@ -63,6 +72,42 @@ whole sellable one - not a share of the mix."></i>
         </li>
       </ul>
     </div>
+
+    {% if user.can_view_financials and run.unit_cost %}
+      {% comment %}
+        "What did it cost, and what should I sell it for?" - the cost per unit
+        against today's price, and a few prices to start from.
+      {% endcomment %}
+      <div class="card mb-3 price-check">
+        <div class="card-header"><i class="bi bi-tags me-1"></i> Price check</div>
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">Sells for now</span>
+            <span class="money fw-semibold">{{ run.product.selling_price|money }}</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between">
+            <span class="text-muted">{% if run.profit_per_unit < 0 %}Loss{% else %}Profit{% endif %} per unit</span>
+            <span class="money fw-semibold {% if run.profit_per_unit < 0 %}text-danger{% else %}text-success{% endif %}">
+              {{ run.profit_per_unit|money }}{% if run.margin_percent is not None %} &middot; {{ run.margin_percent }}%{% endif %}
+            </span>
+          </li>
+        </ul>
+        <div class="card-body py-2">
+          <div class="small text-muted mb-1">Cost per unit plus&hellip;</div>
+          <div class="d-flex flex-wrap gap-2">
+            {% for percent, price in run.price_guide %}
+              <span class="pay-chip">+{{ percent }}% <strong class="money ms-1">{{ price|money }}</strong></span>
+            {% endfor %}
+          </div>
+          {% if run.profit_per_unit < 0 %}
+            <div class="small text-danger mt-2">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              At today's price every unit of this batch sells at a loss.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
 
     {% if run.notes or run.note_tag %}
       <div class="mb-3">{% note_block run.notes run.note_tag %}</div>
@@ -144,6 +189,46 @@ whole sellable one - not a share of the mix."></i>
         </table>
       </div>
     </div>
+    {% if user.can_view_financials and cost_lines %}
+      {% comment %}
+        The batch's other costs. Each is an expense too - the same row the
+        Expenses page lists - so it links there.
+      {% endcomment %}
+      <div class="card mt-3">
+        <div class="card-header">Other costs</div>
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr><th>What for</th><th>Paid to</th><th class="text-end">Amount</th></tr>
+            </thead>
+            <tbody>
+              {% for e in cost_lines %}
+                <tr class="{% if e.is_voided %}table-secondary{% endif %}">
+                  <td>
+                    <span class="{% if e.is_voided %}text-decoration-line-through{% endif %}">{{ e.category_name|default:"-" }}</span>
+                    <div class="text-muted-sm mono">
+                      {% if can_see_expenses %}
+                        <a href="{% url 'expenses:expense_list' %}?month={{ e.spent_on|date:'Y-m' }}&q={{ e.reference }}{% if e.is_voided %}&voided=1{% endif %}">{{ e.reference }}</a>
+                      {% else %}{{ e.reference }}{% endif %}
+                    </div>
+                    {% if e.is_voided %}<div class="text-danger small">Cancelled: {{ e.void_reason }}</div>{% endif %}
+                  </td>
+                  <td class="small">{{ e.payee|default:"-" }}</td>
+                  <td class="text-end money {% if e.is_voided %}text-muted text-decoration-line-through{% endif %}">{{ e.amount|money }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr class="fw-semibold">
+                <td colspan="2" class="text-end">Total</td>
+                <td class="text-end money">{{ run.other_cost|money }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
     {% if run.damages.all %}
       <div class="card mt-3">
         <div class="card-header">What broke</div>
@@ -182,8 +267,8 @@ whole sellable one - not a share of the mix."></i>
         {% if user.can_view_financials and run.damage_loss_gap %}
           <div class="card-footer bg-light small text-muted">
             Each broken unit is valued at {{ run.unit_cost|money }} - what one
-            <em>sellable</em> unit of this batch cost, which is the material
-            cost divided by the {{ run.quantity_produced }} good units. Spread
+            <em>sellable</em> unit of this batch cost, which is the batch's
+            whole cost divided by the {{ run.quantity_produced }} good units. Spread
             across all {{ run.total_attempted }} attempted instead, the same
             breakage would read {{ run.naive_rejected_cost|money }} and
             under-report this batch's loss by

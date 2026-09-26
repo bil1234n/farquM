@@ -356,6 +356,42 @@ def parse_damage_lines(request):
     return lines
 
 
+def parse_cost_lines(request):
+    """
+    The batch's other costs, as record_production's `expenses`, and how they
+    were paid, as its `expense_payment`.
+
+    Parallel arrays like the damage rows: each row carries one of each input,
+    so the arrays line up by position. Empty rows are dropped by the service.
+    """
+    post = request.POST
+    ids = post.getlist("cost_category[]")
+    names = post.getlist("cost_category_name[]")
+    payees = post.getlist("cost_payee[]")
+    amounts = post.getlist("cost_amount[]")
+
+    def at(values, index):
+        return (values[index] if index < len(values) else "").strip()
+
+    lines = []
+    for index in range(max(len(ids), len(amounts))):
+        raw = at(ids, index)
+        lines.append({
+            "category": int(raw) if raw.isdigit() else None,
+            "category_name": at(names, index),
+            "payee": at(payees, index),
+            "amount": at(amounts, index),
+        })
+    channel = (post.get("cost_payment_channel") or "").strip()
+    payment = {
+        "payment_method": (post.get("cost_payment_method") or "CASH").strip().upper(),
+        "payment_channel": int(channel) if channel.isdigit() else None,
+        "payment_channel_name": (post.get("cost_payment_channel_name") or "").strip(),
+        "payment_reference": (post.get("cost_payment_reference") or "").strip(),
+    }
+    return lines, payment
+
+
 def parse_material_lines(request, user):
     """
     Turn the POSTed parallel arrays into the list `record_production` wants.
