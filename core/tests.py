@@ -919,6 +919,64 @@ class RegistrationPasscodeTests(AccessTestBase):
             ).exists()
         )
 
+    def test_saving_the_screen_before_a_role_has_a_code_does_not_lock_it(self):
+        """
+        Saving Settings -> Security while Sales and Stock keeper had no code
+        at all used to record them as switched OFF - so the codes added to the
+        server afterwards were ignored and the form kept offering only
+        Administrator and Manager.
+        """
+        client = Client()
+        client.force_login(self.admin)
+        client.post("/system/settings/security/", {"allow_self_registration": "on"})
+        self.assertEqual(available_roles(), [])
+
+        with self.settings(
+            REGISTRATION_PASSCODE_SALES="shop-sales-2026",
+            REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026",
+        ):
+            offered = dict(available_roles())
+        self.assertIn("SALES", offered)
+        self.assertIn("STOCK_KEEPER", offered)
+
+    def test_the_app_saving_before_a_role_has_a_code_does_not_lock_it(self):
+        from rest_framework.test import APIClient
+
+        api = APIClient()
+        api.force_authenticate(self.admin)
+        response = api.post(
+            "/api/settings/registration/",
+            {
+                "allow_self_registration": True,
+                "roles": [
+                    {"code": "SALES", "enabled": False},
+                    {"code": "STOCK_KEEPER", "enabled": False},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.settings(REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026"):
+            self.assertIn("STOCK_KEEPER", dict(available_roles()))
+
+    def test_the_development_server_restarts_when_env_changes(self):
+        """Passcodes are read from .env once, at start - so a change there
+        must restart `runserver`, or the form looks like it ignored it."""
+        from pathlib import Path
+
+        from core.apps import watch_env_file
+
+        class Reloader:
+            def __init__(self):
+                self.globs = []
+
+            def watch_dir(self, path, glob):
+                self.globs.append((Path(path), glob))
+
+        reloader = Reloader()
+        watch_env_file(sender=reloader)
+        self.assertIn((Path(settings.BASE_DIR), ".env"), reloader.globs)
+
     @override_settings(
         REGISTRATION_PASSCODE_SALES="shop-sales-2026",
         REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026",
@@ -928,6 +986,61 @@ class RegistrationPasscodeTests(AccessTestBase):
         html = self.client.get("/accounts/register/").content.decode()
         self.assertIn('value="STOCK_KEEPER"', html)
         self.assertIn('data-supervised="SALES"', html)
+
+
+class PasscodeSwitchMigrationTests(AccessTestBase):
+    """accounts/0009: old OFF records stop blocking server codes - unless a
+    person really did switch the role off."""
+
+    def run_migration(self):
+        from importlib import import_module
+
+        from django.apps import apps as global_apps
+
+        module = import_module("accounts.migrations.0009_passcode_switches_follow_server")
+        module.forwards(global_apps, None)
+
+    def stored_off(self, code):
+        row, _ = RegistrationPasscode.objects.get_or_create(role_code=code)
+        row.passcode_hash = ""
+        row.is_enabled = False
+        row.updated_by = self.admin
+        row.save()
+        return row
+
+    @override_settings(
+        REGISTRATION_PASSCODE_SALES="shop-sales-2026",
+        REGISTRATION_PASSCODE_MANAGER="mgr-gate-2026",
+    )
+    def test_a_saved_off_with_no_code_follows_the_server_again(self):
+        self.stored_off("SALES")
+        self.stored_off("MANAGER")
+        AuditLog.objects.create(
+            action="UPDATE",
+            description="Registration security: Manager registration turned off.",
+        )
+        self.assertEqual(available_roles(), [])
+
+        self.run_migration()
+
+        offered = dict(available_roles())
+        # Sales was only ever "off" because it had no code: now it opens.
+        self.assertIn("SALES", offered)
+        # Somebody really did close Manager. That stands.
+        self.assertNotIn("MANAGER", offered)
+
+    def test_a_role_with_its_own_code_is_left_alone(self):
+        row, _ = RegistrationPasscode.objects.get_or_create(role_code="SALES")
+        row.set_passcode("shop-sales-2026")
+        row.is_enabled = False
+        row.updated_by = self.admin
+        row.save()
+
+        self.run_migration()
+
+        row.refresh_from_db()
+        self.assertEqual(row.updated_by, self.admin)
+        self.assertNotIn("SALES", dict(available_roles()))
 
 
 class FlushRecoveryTests(TestCase):

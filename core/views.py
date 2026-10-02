@@ -284,7 +284,12 @@ def _apply_passcode_changes(request, conf) -> dict:
         if note != (row.note or ""):
             row.note = note
 
-        row.updated_by = request.user
+        # ...except for a role with no code anywhere. Its switch could not be
+        # turned on, so saving the screen decided nothing about it - and
+        # recording "off" would shut out the code somebody adds to the server
+        # next week. It keeps following the server instead.
+        has_code = row.has_passcode or has_server_passcode(code)
+        row.updated_by = request.user if has_code else None
         row.save()
 
     if changes:

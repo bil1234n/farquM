@@ -636,7 +636,11 @@ def registration_security(request):
         if "note" in entry:
             row.note = str(entry.get("note") or "")[:120]
 
-        row.updated_by = request.user
+        # ...except for a role with no code anywhere: its switch could not be
+        # turned on, so this decided nothing, and recording "off" would shut
+        # out a code added to the server later. Same rule as the web screen.
+        has_code = row.has_passcode or has_server_passcode(code)
+        row.updated_by = request.user if has_code else None
         row.save()
 
     if changes:
