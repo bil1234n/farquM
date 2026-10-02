@@ -31,7 +31,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
 from accounts.models import AuditAction, AuditLog, RegistrationPasscode, RoleDefinition
-from accounts.registration import ensure_passcode_rows, has_server_passcode, registration_status
+from accounts.registration import (
+    ensure_passcode_rows,
+    has_server_passcode,
+    registration_status,
+    switched_on,
+)
 from accounts.services import log_action
 from core.models import SystemSetting
 from core.scoping import scoped, sees_everything
@@ -588,9 +593,13 @@ def registration_security(request):
             continue
 
         row, _ = RegistrationPasscode.objects.get_or_create(role_code=code)
+        # The switch as the app showed it - the server's code, for a row
+        # nobody has decided on yet. Also the default when the app sends no
+        # "enabled", so leaving a role out never closes it by accident.
+        was_on = switched_on(row, code)
         raw = str(entry.get("passcode") or "").strip()
         clearing = bool(entry.get("clear"))
-        wanted_on = bool(entry.get("enabled", row.is_enabled))
+        wanted_on = bool(entry.get("enabled", was_on))
 
         if clearing:
             row.set_passcode("")  # also switches the role off
@@ -616,11 +625,13 @@ def registration_security(request):
             )
             wanted_on = False
 
-        if row.is_enabled != wanted_on:
-            row.is_enabled = wanted_on
+        if was_on != wanted_on:
             changes.append(
                 f"{role.name} registration turned " + ("on" if wanted_on else "off")
             )
+        # Stored even when unchanged: saving makes the row a decision (see
+        # accounts.registration.switched_on).
+        row.is_enabled = wanted_on
 
         if "note" in entry:
             row.note = str(entry.get("note") or "")[:120]

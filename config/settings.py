@@ -333,11 +333,16 @@ DEFAULT_CREDIT_DUE_DAYS = config("DEFAULT_CREDIT_DUE_DAYS", default=30, cast=int
 # the code to a new hire in person; it is NOT acceptable for a large team.
 # Treat these as you would the shop keys.
 #
-# Leaving either blank DISABLES registration for that role - deliberately, so
-# an unconfigured deployment cannot be signed up to by strangers.
+# Leaving one blank DISABLES registration for that role - deliberately, so an
+# unconfigured deployment cannot be signed up to by strangers.
+#
+# An administrator can also set a code per role from Settings -> Security,
+# which wins over these. But those live in the database, and `manage.py flush`
+# empties it: these are the codes that still open the door afterwards.
 REGISTRATION_PASSCODE_ADMIN = config("PASSCODE_ADMIN", default="")
 REGISTRATION_PASSCODE_MANAGER = config("PASSCODE_MANAGER", default="")
 REGISTRATION_PASSCODE_SALES = config("PASSCODE_SALES", default="")
+REGISTRATION_PASSCODE_STOCK_KEEPER = config("PASSCODE_STOCK_KEEPER", default="")
 REGISTRATION_ENABLED = config("REGISTRATION_ENABLED", default=True, cast=bool)
 # An administrator can also switch self-registration off from System Settings
 # without a redeploy - see core.models.SystemSetting.allow_self_registration.

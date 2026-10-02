@@ -17,8 +17,10 @@ file is the catalogue of groups.
 RULES FOR ADDING A GROUP
 ------------------------
 1. `key` is stored in the database on every row. Never rename one.
-2. `defaults` are seeded by migration. They are a starting point, not a fixed
-   list - anybody may add to them from inside the dropdown itself.
+2. `defaults` are seeded by migration - and put back by refill_after_flush
+   below when `manage.py flush` empties the table. They are a starting
+   point, not a fixed list - anybody may add to them from inside the
+   dropdown itself.
 3. Anything that references an Option must ALSO snapshot its label, and use
    on_delete=SET_NULL. An option deleted a year from now must not rewrite what
    last year's sale said.
@@ -307,6 +309,69 @@ def seed_colors() -> list[tuple[str, str, str]]:
         for group in GROUPS
         for label, color in group.colors
     ]
+
+
+def refill_after_flush(sender, using="default", apps=None, verbosity=1, **kwargs):
+    """
+    post_migrate: give an EMPTY pick-list table its defaults back.
+
+    The defaults are seeded by migration, and `manage.py flush` empties the
+    table without letting those migrations run again, so after a flush every
+    "choose one, or add your own" list - banks, damage types, expense
+    categories, note colours - starts blank. Django sends post_migrate after a
+    flush as well as after a migrate, so this refills them either way.
+
+    Only a table with NO rows at all is touched. A list somebody has trimmed -
+    an entry deleted because the yard never uses it - must not grow back on
+    the next migrate. One row of anything means the lists are in use, and what
+    is in them is the business's choice.
+    """
+    from django.apps import apps as global_apps
+
+    try:
+        option_model = (apps or global_apps).get_model("core", "Option")
+    except LookupError:
+        return  # migrated back past the table
+    rows = option_model.objects.db_manager(using)
+    if rows.exists():
+        return
+
+    # The historical model of a partly-migrated database may predate a column
+    # (`code` arrived in core.0003, `color` in core.0005). Fill what exists.
+    columns = {f.name for f in option_model._meta.concrete_fields}
+    rows.bulk_create(
+        [
+            option_model(
+                **{
+                    name: value
+                    for name, value in (
+                        ("group", group),
+                        ("code", code),
+                        ("label", label),
+                        ("sort_order", order),
+                        ("is_active", True),
+                        ("is_seeded", True),
+                    )
+                    if name in columns
+                }
+            )
+            for group, code, label, order in seed_pairs()
+        ]
+    )
+    if "color" in columns:
+        for group, label, color in seed_colors():
+            rows.filter(group=group, label__iexact=label, color="").update(color=color)
+
+    # Unit labels are cached per process (core.models.labels_for); one taken
+    # while the table was empty would keep showing the built-in wording.
+    from core.models import forget_labels
+
+    forget_labels()
+    if verbosity:
+        import sys
+
+        out = kwargs.get("stdout") or sys.stdout
+        out.write(f"Put back the default pick-lists ({rows.count()} entries).\n")
 
 
 #: Groups drawn as coloured marks; their entries carry a colour.

@@ -38,6 +38,7 @@ from accounts.registration import (
     ensure_passcode_rows,
     has_server_passcode,
     registration_status,
+    switched_on,
 )
 from accounts.roles import BLUEPRINTS, reset_to_blueprint
 from accounts.services import log_action
@@ -237,6 +238,10 @@ def _apply_passcode_changes(request, conf) -> dict:
     for role in RoleDefinition.objects.assignable():
         code = role.code
         row, _ = RegistrationPasscode.objects.get_or_create(role_code=code)
+        # What the screen showed as the switch - for a row nobody has decided
+        # on yet, that is the server's code - so the audit line below speaks
+        # only of switches somebody actually flipped.
+        was_on = switched_on(row, code)
         raw = (request.POST.get(f"passcode_{code}") or "").strip()
         clearing = f"clear_{code}" in request.POST
         wanted_on = f"enabled_{code}" in request.POST
@@ -267,11 +272,13 @@ def _apply_passcode_changes(request, conf) -> dict:
             )
             wanted_on = False
 
-        if row.is_enabled != wanted_on:
-            row.is_enabled = wanted_on
+        if was_on != wanted_on:
             changes.append(
                 f"{role.name} registration turned " + ("on" if wanted_on else "off")
             )
+        # Stored even when unchanged: saving the screen makes the row a
+        # decision (see accounts.registration.switched_on).
+        row.is_enabled = wanted_on
 
         note = (request.POST.get(f"note_{code}") or "").strip()[:120]
         if note != (row.note or ""):

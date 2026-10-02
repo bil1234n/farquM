@@ -337,6 +337,18 @@ class RegisterForm(StyledFormMixin, forms.Form):
         )
         self.fields["manager"].empty_label = "Nobody - I work independently"
 
+        # "I report to" decides whose stock a person sells, which matters only
+        # to a role that sees nothing but its own records (Sales). The page
+        # shows the question for those roles alone - an administrator or a
+        # stock keeper being asked who they report to is just confusing - and
+        # not at all while there is nobody to pick, as on a brand-new system.
+        self.supervised_roles = [
+            code
+            for code, _name in self.fields["role"].choices
+            if self._needs_a_manager(code)
+        ]
+        self.has_supervisors = self.fields["manager"].queryset.exists()
+
     @staticmethod
     def _needs_a_manager(role_code: str) -> bool:
         """

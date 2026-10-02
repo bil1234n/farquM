@@ -17,6 +17,42 @@
       Self-registration is switched off for this system. Ask an administrator
       to create an account for you.
     </p>
+
+    {% comment %}
+      Only on a system with no accounts at all - a new install, or one that
+      was just flushed. Then there is no administrator to ask, and whoever is
+      reading this is the owner trying to get in for the first time, so the
+      page says what actually opens the door. Once a single account exists
+      this box never shows again.
+    {% endcomment %}
+    {% if no_accounts_yet %}
+      <div class="text-start small bg-body-tertiary border rounded-3 p-3 mb-4">
+        <div class="fw-semibold mb-2">
+          <i class="bi bi-info-circle me-1"></i>Setting this system up?
+        </div>
+        {% if switched_off_on_server %}
+          <p class="mb-0">
+            There are no accounts yet, and registration is switched off on the
+            server: <code>REGISTRATION_ENABLED</code> is set to False. Remove it
+            or set it to True, redeploy, and open this page again.
+          </p>
+        {% else %}
+          <p class="mb-2">
+            There are no accounts yet. A role opens for registration once the
+            server has a passcode for it. In the hosting settings (on Vercel:
+            Settings &rarr; Environment Variables) add:
+          </p>
+          <ul class="mb-2 ps-3">
+            <li><code>PASSCODE_ADMIN</code> &ndash; register the administrator first</li>
+            <li><code>PASSCODE_MANAGER</code></li>
+            <li><code>PASSCODE_SALES</code></li>
+            <li><code>PASSCODE_STOCK_KEEPER</code></li>
+          </ul>
+          <p class="mb-0">Then redeploy and open this page again.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+
     <a href="{% url 'accounts:login' %}" class="btn btn-primary w-100">
       <i class="bi bi-box-arrow-in-right me-1"></i> Go to sign in
     </a>

@@ -70,6 +70,19 @@ class AppLogoutView(LogoutView):
         return super().dispatch(request, *args, **kwargs)
 
 
+def _no_accounts_yet() -> bool:
+    """
+    True on a system with no accounts at all - a new install, or one that was
+    just flushed. "Ask an administrator" is no help then: there is none, and
+    the person reading the page is the owner trying to get in for the first
+    time. Never raises; a page that only exists to say "closed" must not 500.
+    """
+    try:
+        return not User.objects.exists()
+    except Exception:
+        return False
+
+
 def register(request):
     """
     Self-service staff registration, gated by a per-role passcode.
@@ -85,7 +98,15 @@ def register(request):
     if not registration_open():
         # No passcodes configured means registration is switched off. Say so
         # plainly rather than showing a form that can never succeed.
-        return render(request, "registration/register_closed.html", status=403)
+        return render(
+            request,
+            "registration/register_closed.html",
+            {
+                "no_accounts_yet": _no_accounts_yet(),
+                "switched_off_on_server": not settings.REGISTRATION_ENABLED,
+            },
+            status=403,
+        )
 
     form = RegisterForm(request.POST or None, request.FILES or None)
 

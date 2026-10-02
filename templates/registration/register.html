@@ -100,14 +100,16 @@
           {% for e in form.passcode.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
         </div>
 
-        <div class="col-12">
-          <label class="form-label" for="{{ form.manager.id_for_label }}">
-            <i class="bi bi-diagram-3 me-1"></i>{{ form.manager.label }}
-          </label>
-          {% render_field form.manager class="form-select" %}
-          <div class="form-text">{{ form.manager.help_text }}</div>
-          {% for e in form.manager.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
-        </div>
+        {% if form.has_supervisors %}
+          <div class="col-12" id="managerBlock" data-supervised="{{ form.supervised_roles|join:',' }}">
+            <label class="form-label" for="{{ form.manager.id_for_label }}">
+              <i class="bi bi-diagram-3 me-1"></i>{{ form.manager.label }}
+            </label>
+            {% render_field form.manager class="form-select" %}
+            <div class="form-text">{{ form.manager.help_text }}</div>
+            {% for e in form.manager.errors %}<div class="text-danger small mt-1">{{ e }}</div>{% endfor %}
+          </div>
+        {% endif %}
 
         <div class="col-12">
           <div class="alert alert-secondary py-2 px-3 small mb-0">
@@ -144,5 +146,23 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {# An eye on each password box - app-ui.js, as on every other page. #}
 <script src="{% static 'js/app-ui.js' %}"></script>
+<script>
+  // "I report to" only for the roles listed on the block (see RegisterForm).
+  // A hidden choice is cleared too, so switching from Sales to Administrator
+  // does not quietly send the supervisor picked a moment ago.
+  (function () {
+    var role = document.getElementById('{{ form.role.id_for_label }}');
+    var block = document.getElementById('managerBlock');
+    if (!role || !block) return;
+    var pick = block.querySelector('select');
+    var needs = (block.getAttribute('data-supervised') || '').split(',').filter(Boolean);
+    function sync() {
+      block.hidden = needs.indexOf(role.value) === -1;
+      if (block.hidden && pick) pick.value = '';
+    }
+    role.addEventListener('change', sync);
+    sync();
+  })();
+</script>
 </body>
 </html>

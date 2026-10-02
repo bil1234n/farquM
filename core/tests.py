@@ -27,10 +27,18 @@ from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
+from django.core.management import call_command
 from django.template.loader import get_template
-from django.test import Client, SimpleTestCase, TestCase
+from django.test import (
+    Client,
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 
 from accounts.models import (
+    AuditLog,
     DataScope,
     RegistrationPasscode,
     RoleDefinition,
@@ -39,7 +47,9 @@ from accounts.models import (
 from accounts.registration import (
     RegistrationError,
     available_roles,
+    ensure_passcode_rows,
     register_user,
+    registration_open,
 )
 from accounts.roles import BLUEPRINTS, ensure_system_roles
 from core.access import apply_user_access, build_matrix, diff_against_role
@@ -825,6 +835,227 @@ class RegistrationPasscodeTests(AccessTestBase):
         client.force_login(self.admin)
         client.post("/system/settings/security/", {})
         self.assertEqual(available_roles(), [])
+
+    # -- Codes kept on the server ---------------------------------------------
+    @override_settings(REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026")
+    def test_a_stock_keeper_can_have_a_passcode_on_the_server(self):
+        self.assertIn(("STOCK_KEEPER", "Stock keeper"), available_roles())
+        response = self.client.post(
+            "/accounts/register/",
+            {
+                "username": "kebede",
+                "role": "STOCK_KEEPER",
+                "passcode": "yard-gate-2026",
+                "password1": "Str0ngPass!42",
+                "password2": "Str0ngPass!42",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        keeper = User.objects.get(username="kebede")
+        self.assertEqual(keeper.role, "STOCK_KEEPER")
+        # Hands goods over at the gate - and never sees a cost.
+        self.assertIn("delivery.record", keeper.effective_permissions)
+        self.assertNotIn("product.view_cost", keeper.effective_permissions)
+
+    @override_settings(REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026")
+    def test_a_wrong_stock_keeper_code_creates_nothing(self):
+        with self.assertRaises(RegistrationError):
+            register_user(
+                username="gatecrasher",
+                password="Str0ngPass!42",
+                role="STOCK_KEEPER",
+                passcode="yard-gate-2025",
+            )
+        self.assertFalse(User.objects.filter(username="gatecrasher").exists())
+
+    def test_a_code_added_to_the_server_later_opens_the_role(self):
+        """
+        The rows made automatically - by the migration, or by opening the
+        Security screen - start switched off when the server has no code yet.
+        That is nobody's decision, so it must not shut out a code the owner
+        adds to the server afterwards. This is how the page stayed closed.
+        """
+        ensure_passcode_rows()
+        self.assertFalse(RegistrationPasscode.objects.get(role_code="SALES").is_enabled)
+        self.assertNotIn("SALES", dict(available_roles()))
+
+        with self.settings(REGISTRATION_PASSCODE_SALES="shop-sales-2026"):
+            self.assertIn(("SALES", "Sales"), available_roles())
+            register_user(
+                username="selam",
+                password="Str0ngPass!42",
+                role="SALES",
+                passcode="shop-sales-2026",
+                manager=self.manager,
+            )
+        self.assertEqual(User.objects.get(username="selam").role, "SALES")
+
+    @override_settings(REGISTRATION_PASSCODE_SALES="shop-sales-2026")
+    def test_an_administrator_switching_a_role_off_beats_the_server_code(self):
+        self.assertIn("SALES", dict(available_roles()))
+        client = Client()
+        client.force_login(self.admin)
+        # The switch arrives unticked: the administrator closed the door.
+        client.post("/system/settings/security/", {"allow_self_registration": "on"})
+        self.assertNotIn("SALES", dict(available_roles()))
+
+    @override_settings(REGISTRATION_PASSCODE_SALES="shop-sales-2026")
+    def test_saving_the_security_screen_unchanged_changes_nothing(self):
+        client = Client()
+        client.force_login(self.admin)
+        page = client.get("/system/settings/security/").content.decode()
+        # Shown switched on, because the server has a code for it...
+        self.assertRegex(page, r'name="enabled_SALES"\s+checked')
+        client.post(
+            "/system/settings/security/",
+            {"allow_self_registration": "on", "enabled_SALES": "on"},
+        )
+        # ...so saving it ticked leaves Sales open and logs no change.
+        self.assertIn("SALES", dict(available_roles()))
+        self.assertFalse(
+            AuditLog.objects.filter(
+                description__contains="Sales registration turned"
+            ).exists()
+        )
+
+    @override_settings(
+        REGISTRATION_PASSCODE_SALES="shop-sales-2026",
+        REGISTRATION_PASSCODE_STOCK_KEEPER="yard-gate-2026",
+    )
+    def test_only_sales_is_asked_who_they_report_to(self):
+        """A stock keeper sees every sale; who they report to decides nothing."""
+        html = self.client.get("/accounts/register/").content.decode()
+        self.assertIn('value="STOCK_KEEPER"', html)
+        self.assertIn('data-supervised="SALES"', html)
+
+
+class FlushRecoveryTests(TestCase):
+    """
+    `manage.py flush` empties every table but keeps the migration history, so
+    nothing the migrations seeded comes back by itself. The owner who flushed
+    to start fresh found the registration page closed, with no account left
+    that could open it. These pin the way back in.
+    """
+
+    def wipe(self):
+        """What a flush leaves: no accounts, no roles, no passcode rows."""
+        User.objects.all().delete()
+        RegistrationPasscode.objects.all().delete()
+        RoleDefinition.objects.all().delete()
+
+    @override_settings(REGISTRATION_PASSCODE_ADMIN="owner-gate-2026")
+    def test_the_register_page_puts_wiped_roles_back(self):
+        self.wipe()
+        with self.assertLogs("accounts.registration", level="WARNING"):
+            html = Client().get("/accounts/register/").content.decode()
+        self.assertIn('value="ADMIN"', html)
+        self.assertEqual(set(RoleDefinition.objects.values_list("code", flat=True)), set(BLUEPRINTS))
+
+        register_user(
+            username="owner",
+            password="Str0ngPass!42",
+            role="ADMIN",
+            passcode="owner-gate-2026",
+        )
+        owner = User.objects.get(username="owner")
+        # The reinstalled role carries real permissions, not an empty shell.
+        self.assertTrue(owner.is_admin)
+        self.assertIn("user.permissions", owner.effective_permissions)
+
+    @override_settings(REGISTRATION_PASSCODE_ADMIN="owner-gate-2026")
+    def test_roles_an_administrator_switched_off_stay_off(self):
+        RoleDefinition.objects.update(is_active=False)
+        self.assertEqual(available_roles(), [])
+        self.assertFalse(registration_open())
+        self.assertFalse(RoleDefinition.objects.filter(is_active=True).exists())
+
+    def test_reinstalled_roles_match_a_fresh_install(self):
+        """
+        A fresh install seeds the roles by migration; a flushed one gets them
+        back from accounts/roles.py. If a migration ever grants a role a code
+        the blueprint lacks, the two drift apart and this fails.
+        """
+        def snapshot():
+            return {
+                r.code: (r.name, sorted(r.permissions), r.data_scope, r.rank, r.is_system, r.is_active)
+                for r in RoleDefinition.objects.all()
+            }
+
+        fresh = snapshot()
+        RoleDefinition.objects.all().delete()
+        ensure_system_roles()
+        self.assertEqual(snapshot(), fresh)
+
+    @override_settings(
+        REGISTRATION_PASSCODE_ADMIN="",
+        REGISTRATION_PASSCODE_MANAGER="",
+        REGISTRATION_PASSCODE_SALES="",
+        REGISTRATION_PASSCODE_STOCK_KEEPER="",
+    )
+    def test_with_no_accounts_the_closed_page_says_what_opens_it(self):
+        self.wipe()
+        with self.assertLogs("accounts.registration", level="WARNING"):
+            response = Client().get("/accounts/register/")
+        self.assertEqual(response.status_code, 403)
+        html = response.content.decode()
+        self.assertIn("Setting this system up?", html)
+        for name in ("PASSCODE_ADMIN", "PASSCODE_MANAGER", "PASSCODE_SALES", "PASSCODE_STOCK_KEEPER"):
+            self.assertIn(name, html)
+
+        # Once anybody has an account, the page is for staff again: no hints
+        # about how the server is configured.
+        User.objects.create_user("owner", password="pw", role="ADMIN")
+        html = Client().get("/accounts/register/").content.decode()
+        self.assertNotIn("Setting this system up?", html)
+        self.assertNotIn("PASSCODE_ADMIN", html)
+
+    @override_settings(REGISTRATION_ENABLED=False, REGISTRATION_PASSCODE_ADMIN="owner-gate-2026")
+    def test_the_hint_names_the_master_switch_when_that_is_what_is_off(self):
+        self.wipe()
+        with self.assertLogs("accounts.registration", level="WARNING"):
+            html = Client().get("/accounts/register/").content.decode()
+        self.assertIn("REGISTRATION_ENABLED", html)
+
+
+class FlushCommandTests(TransactionTestCase):
+    """
+    The real commands, end to end. TransactionTestCase because `flush` and
+    `migrate` commit; Django runs these after every ordinary TestCase.
+    """
+
+    def test_flush_puts_the_roles_and_pick_lists_back(self):
+        from core.models import Option
+        from core.options import seed_pairs
+
+        call_command("flush", interactive=False, verbosity=0)
+        self.assertEqual(
+            set(RoleDefinition.objects.values_list("code", flat=True)), set(BLUEPRINTS)
+        )
+        self.assertEqual(Option.objects.count(), len(seed_pairs()))
+        # The coloured note marks get their colours, as on a fresh install.
+        self.assertFalse(Option.objects.filter(group="NOTE_TAG", color="").exists())
+
+    def test_migrate_mends_a_database_flushed_before_this_fix(self):
+        """The state the owner is in now: emptied by an older flush."""
+        from core.models import Option
+
+        Option.objects.all().delete()
+        RoleDefinition.objects.all().delete()
+        call_command("migrate", verbosity=0)
+        self.assertEqual(RoleDefinition.objects.count(), len(BLUEPRINTS))
+        self.assertTrue(Option.objects.exists())
+
+    def test_a_trimmed_list_is_not_grown_back(self):
+        from core.models import Option
+
+        broken = Option.objects.filter(group="DAMAGE_TYPE", label="Broken")
+        self.assertTrue(broken.exists())
+        broken.delete()
+        call_command("migrate", verbosity=0)
+        self.assertFalse(
+            Option.objects.filter(group="DAMAGE_TYPE", label="Broken").exists()
+        )
 
 
 class DashboardProfileTests(AccessTestBase):

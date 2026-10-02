@@ -179,20 +179,22 @@ BLUEPRINTS: dict[str, dict] = {
 }
 
 
-def ensure_system_roles(role_model=None) -> dict:
+def ensure_system_roles(role_model=None, using=None) -> dict:
     """
     Create any missing built-in role. Never overwrites an existing one.
 
     `role_model` lets a data migration pass in its historical model instead of
     the live one - importing the real class inside a migration would break the
-    moment the model changes shape again.
+    moment the model changes shape again. `using` names the database, for the
+    post_migrate hook below.
     """
     if role_model is None:
         from .models import RoleDefinition as role_model
 
+    roles = role_model.objects.db_manager(using)
     created = {}
     for code, spec in BLUEPRINTS.items():
-        obj, was_created = role_model.objects.get_or_create(
+        obj, was_created = roles.get_or_create(
             code=code,
             defaults={
                 "name": spec["name"],
@@ -211,6 +213,37 @@ def ensure_system_roles(role_model=None) -> dict:
             obj.save(update_fields=["is_system"])
         created[code] = was_created
     return created
+
+
+def reinstall_after_flush(sender, using="default", apps=None, verbosity=1, **kwargs):
+    """
+    post_migrate: put back any built-in role the database has lost.
+
+    `manage.py flush` empties every table but keeps the migration history, so
+    the migrations that seeded these roles never run again. A database with
+    no roles is one where the registration page is closed to everybody and an
+    account that does sign in can do nothing at all - which is exactly what an
+    owner who flushed to "start fresh" walked into.
+
+    Django sends post_migrate at the end of every flush ("as if the database
+    had been migrated from scratch") and at the end of every migrate, so this
+    puts the roles back either way. It only creates what is MISSING - see
+    ensure_system_roles - so on a working database it changes nothing, and a
+    role an administrator has tuned keeps every change.
+    """
+    from django.apps import apps as global_apps
+
+    try:
+        role_model = (apps or global_apps).get_model("accounts", "RoleDefinition")
+    except LookupError:
+        return  # migrated back past the table that holds them
+    created = ensure_system_roles(role_model=role_model, using=using)
+    names = [BLUEPRINTS[code]["name"] for code, new in created.items() if new]
+    if names and verbosity:
+        import sys
+
+        out = kwargs.get("stdout") or sys.stdout
+        out.write("Put back the built-in roles: " + ", ".join(names) + ".\n")
 
 
 def reset_to_blueprint(role) -> bool:

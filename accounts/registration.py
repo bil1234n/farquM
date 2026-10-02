@@ -70,15 +70,24 @@ def _env_passcode(role: str) -> str:
 
     This is the fallback path, kept so a deployment that configured
     PASSCODE_ADMIN / PASSCODE_MANAGER in its .env keeps working with no
-    action required. Only the three built-in roles can have one: you cannot
+    action required. Only the four built-in roles can have one: you cannot
     invent an environment variable per custom role. Custom roles get their
     code from the database instead.
+
+    It is also the path that survives `manage.py flush`. A code set from
+    Settings -> Security lives in a table, and a flush empties it along with
+    every account - leaving nobody who could sign in to set it again. A code
+    in the server's environment is still there afterwards, so the first
+    administrator can always get back in.
     """
     return (
         {
             RoleCode.ADMIN: getattr(settings, "REGISTRATION_PASSCODE_ADMIN", ""),
             RoleCode.MANAGER: getattr(settings, "REGISTRATION_PASSCODE_MANAGER", ""),
             RoleCode.SALES: getattr(settings, "REGISTRATION_PASSCODE_SALES", ""),
+            RoleCode.STOCK_KEEPER: getattr(
+                settings, "REGISTRATION_PASSCODE_STOCK_KEEPER", ""
+            ),
         }.get(role, "")
         or ""
     )
@@ -108,8 +117,10 @@ def passcode_row(role: str) -> RegistrationPasscode | None:
 def ensure_passcode_rows() -> None:
     """
     Give every assignable role a passcode row so Settings -> Security can
-    show it. A new row is disabled and codeless: creating a role must never
-    open a registration door by itself.
+    show it. A new row is codeless and nobody's decision, so it follows the
+    server (see switched_on): creating a role never opens a registration door
+    by itself, and a custom role - which can have no code on the server -
+    stays shut until an administrator gives it one.
     """
     try:
         existing = set(
@@ -148,6 +159,36 @@ def _self_registration_allowed() -> bool:
         return True
 
 
+def _decided(row) -> bool:
+    """
+    Whether a passcode row records somebody's decision about the role.
+
+    Rows are also made automatically - by migration 0005, and whenever the
+    Security screen is opened - switched off unless the server happened to
+    have a code for the role at that moment. Such a row is nobody saying "not
+    now". Reading it as one is how a code added to the server afterwards was
+    ignored, and the registration page stayed closed with no way to tell why.
+
+    A row is a decision once a person has saved the Security screen (it then
+    names who) or typed a code into it.
+    """
+    return bool(row.updated_by_id or row.passcode_hash)
+
+
+def switched_on(row, role: str) -> bool:
+    """
+    Whether a role's own registration switch is on.
+
+    A decided row says what was decided. Otherwise - no row, or one nobody has
+    touched - the server decides: the role is on exactly when the server has a
+    code for it. This is also what the Security screens show as the switch,
+    so saving one without touching anything changes nothing.
+    """
+    if row is not None and _decided(row):
+        return bool(row.is_enabled)
+    return bool(_env_passcode(role))
+
+
 def role_available(role: str) -> bool:
     """
     May somebody register as this role right now?
@@ -156,24 +197,48 @@ def role_available(role: str) -> bool:
 
       1. self-registration is allowed at all (env + the administrator's
          setting);
-      2. the role's own switch is on - a row that exists but is disabled is
-         an administrator saying "not at the moment";
+      2. the role's own switch is on - see switched_on. A row an
+         administrator switched off is them saying "not at the moment", and
+         wins over a code on the server;
       3. an actual passcode exists to check against, in the database or in
          the environment. A blank code must never mean "anything passes".
-
-    A role with no row at all falls back to the environment, which is how
-    a deployment that upgrades without visiting Settings keeps working.
     """
     if not _self_registration_allowed():
         return False
 
     row = passcode_row(role)
-    if row is not None:
-        if not row.is_enabled:
-            return False
-        return row.has_passcode or bool(_env_passcode(role))
+    if not switched_on(row, role):
+        return False
+    return bool(row is not None and row.has_passcode) or bool(_env_passcode(role))
 
-    return bool(_env_passcode(role))
+
+def _roles_reinstalled_if_wiped() -> list:
+    """
+    The assignable roles - reinstalling the built-in ones if there are none.
+
+    A role table with no rows at all is not a choice anybody made in the app:
+    the built-in roles cannot be deleted from it. It is what `manage.py flush`
+    leaves behind, since the migrations that seeded the roles never run again.
+    Without them every door stays shut - the registration page says "closed"
+    to the owner trying to start again, and an account that does exist has no
+    permissions at all. So they are put back here, on the first page anybody
+    opens, without waiting for somebody to run a command on the server.
+
+    Roles that exist but are all switched off ARE an administrator's choice,
+    and are left exactly as they are.
+    """
+    roles = list(RoleDefinition.objects.assignable())
+    if roles or RoleDefinition.objects.exists():
+        return roles
+
+    from .roles import ensure_system_roles
+
+    ensure_system_roles()
+    logger.warning(
+        "The role table was empty (was the database flushed?) - "
+        "reinstalled the built-in roles."
+    )
+    return list(RoleDefinition.objects.assignable())
 
 
 def available_roles() -> list[tuple[str, str]]:
@@ -182,11 +247,11 @@ def available_roles() -> list[tuple[str, str]]:
 
     Read from RoleDefinition, not from the RoleCode enum, so a custom role an
     administrator created and gave a passcode is offered too. Ordered by rank,
-    so Administrator/Manager/Sales appear in seniority order rather than
-    alphabetically.
+    so Administrator/Manager/Sales/Stock keeper appear in seniority order
+    rather than alphabetically.
     """
     try:
-        roles = list(RoleDefinition.objects.assignable())
+        roles = _roles_reinstalled_if_wiped()
     except Exception:
         return []
     return [(role.code, role.name) for role in roles if role_available(role.code)]
@@ -212,7 +277,7 @@ def registration_status() -> list[dict]:
             {
                 "role": role,
                 "row": row,
-                "enabled": bool(row and row.is_enabled),
+                "enabled": switched_on(row, role.code),
                 "has_passcode": bool(row and row.has_passcode),
                 "from_env": from_env,
                 "configured": bool(row and row.has_passcode) or from_env,
