@@ -65,7 +65,8 @@ BLUEPRINTS: dict[str, dict] = {
             "products, keeps the raw material store, writes recipes and "
             "records production batches. Does not sell, does not keep "
             "customers, and does not touch credit - those belong to the "
-            "counter. No profit margins, staff accounts or system settings."
+            "counter. Sees the Audit, but the owner sets what a product "
+            "costs. No staff accounts or system settings."
         ),
         "permissions": [
             "dashboard.view",
@@ -113,6 +114,11 @@ BLUEPRINTS: dict[str, dict] = {
             "employee.manage",
             "report.inventory",
             "report.export",
+            # The Audit: money in and out, stock value and cost per unit. The
+            # owner asked for it on the manager's bar - the person who runs
+            # the plant is the one who sees what a batch really costs. Setting
+            # the cost of a product (`costing.set`) stays with the owner.
+            "costing.view",
         ],
     },
     "SALES": {

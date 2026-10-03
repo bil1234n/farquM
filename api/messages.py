@@ -321,6 +321,14 @@ EXACT_AM: dict[str, str] = {
     "corrupted image.":
         "ትክክለኛ ምስል ይስቀሉ። የሰቀሉት ፋይል ምስል አይደለም ወይም የተበላሸ ነው።",
     "No file was submitted.": "ምንም ፋይል አልተላከም።",
+
+    # -- The Audit: the owner's cost of a product ---------------------------
+    "Only the owner can set what a product costs.":
+        "አንድ ምርት ስንት እንደሚያወጣ ማስቀመጥ የሚችለው ባለቤቱ ብቻ ነው።",
+    "Enter the cost as a number, for example 24.50.":
+        "ወጪውን በቁጥር ያስገቡ፤ ለምሳሌ 24.50።",
+    "A cost cannot be below zero.": "ወጪ ከዜሮ በታች ሊሆን አይችልም።",
+    "That cost is too large.": "ያ ወጪ በጣም ትልቅ ነው።",
 }
 
 #: Every language the API can answer in. English is the source, so it has no

@@ -1,0 +1,414 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Audit{% endblock %}
+{% block page_title %}Audit{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    <span>{{ report.period.start|date:"d M Y" }}</span> &ndash; <span>{{ report.period.end|date:"d M Y" }}</span>
+  </div>
+{% endblock %}
+
+{% block page_actions %}
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-printer me-1"></i> <span>Print</span>
+  </button>
+{% endblock %}
+
+{% block content %}
+{% comment %}
+  The Audit. Every figure comes from reports/audit.py; the charts are drawn as
+  SVG by reports/charts.py. Text is kept in short whole phrases, each its own
+  element, because the browser translates by matching whole text nodes - a
+  sentence with a number in the middle would arrive as fragments no
+  dictionary entry can match.
+{% endcomment %}
+
+{# ---------- One filter row, above everything it scopes ---------- #}
+<form method="get" class="filter-bar audit-filter no-print">
+  <div class="d-flex flex-wrap align-items-end gap-2">
+    <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Period">
+      {% for key in ranges %}
+        <a href="?range={{ key }}{% if chosen %}&product={{ chosen.id }}{% endif %}"
+           class="btn {% if report.period.key == key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+          {% if key == "30d" %}30 days{% elif key == "90d" %}3 months{% elif key == "365d" %}12 months{% else %}All time{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+    <div class="d-flex align-items-end gap-2 ms-lg-auto flex-wrap">
+      <div><label class="form-label" for="audit_from">From</label>
+        <input id="audit_from" type="date" name="date_from" value="{{ report.period.start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+      <div><label class="form-label" for="audit_to">To</label>
+        <input id="audit_to" type="date" name="date_to" value="{{ report.period.end|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+      {% if chosen %}<input type="hidden" name="product" value="{{ chosen.id }}">{% endif %}
+      <button class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i> <span>Apply</span></button>
+    </div>
+  </div>
+</form>
+
+{# ---------- The four answers ---------- #}
+{% with ch=report.changes pr=report.profit %}
+<div class="row g-3 mb-3 audit-kpis">
+  <div class="col-6 col-xl-3">
+    <div class="stat-card accent-warning h-100">
+      <div class="label"><i class="bi bi-box-arrow-up-right me-1"></i><span>Money out</span></div>
+      <div class="value money">{{ report.money_out.total|money }}</div>
+      <div class="hint"><span>Expenses</span> {{ report.money_out.expenses|money }}</div>
+      <div class="hint"><span>Raw materials bought</span> {{ report.money_out.materials|money }}</div>
+      {% if report.money_out.bought_in %}
+        <div class="hint"><span>Stock bought or brought in</span> {{ report.money_out.bought_in|money }}</div>
+      {% endif %}
+      {% if ch.money_out is not None %}
+        <div class="audit-delta {% if ch.money_out > 0 %}is-bad{% elif ch.money_out < 0 %}is-good{% endif %}">
+          <i class="bi {% if ch.money_out > 0 %}bi-arrow-up-right{% elif ch.money_out < 0 %}bi-arrow-down-right{% else %}bi-dash{% endif %}"></i>
+          <span>{{ ch.money_out }}%</span> <span>vs the period before</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="stat-card accent-info h-100">
+      <div class="label"><i class="bi bi-box-arrow-in-down-left me-1"></i><span>Money in</span></div>
+      <div class="value money">{{ report.money_in.total|money }}</div>
+      <div class="hint"><span>Paid at the till</span> {{ report.money_in.at_till|money }}</div>
+      <div class="hint"><span>Debts paid off</span> {{ report.money_in.repaid|money }}</div>
+      {% if ch.money_in is not None %}
+        <div class="audit-delta {% if ch.money_in > 0 %}is-good{% elif ch.money_in < 0 %}is-bad{% endif %}">
+          <i class="bi {% if ch.money_in > 0 %}bi-arrow-up-right{% elif ch.money_in < 0 %}bi-arrow-down-right{% else %}bi-dash{% endif %}"></i>
+          <span>{{ ch.money_in }}%</span> <span>vs the period before</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="stat-card {% if pr.profit < 0 %}accent-danger{% else %}accent-success{% endif %} h-100">
+      <div class="label"><i class="bi bi-graph-up-arrow me-1"></i><span>Profit after all costs</span></div>
+      <div class="value money {% if pr.profit < 0 %}text-danger{% endif %}">{{ pr.profit|money }}</div>
+      <div class="hint"><span>Sales</span> {{ pr.revenue|money }}{% if pr.margin is not None %} &middot; <span>{{ pr.margin }}%</span>{% endif %}</div>
+      <div class="hint"><span>Cost of what was sold</span> {{ pr.cost_of_sold|money }}</div>
+      <div class="hint"><span>Running costs</span> {{ pr.running_costs|money }}</div>
+      {% if ch.profit is not None %}
+        <div class="audit-delta {% if ch.profit > 0 %}is-good{% elif ch.profit < 0 %}is-bad{% endif %}">
+          <i class="bi {% if ch.profit > 0 %}bi-arrow-up-right{% elif ch.profit < 0 %}bi-arrow-down-right{% else %}bi-dash{% endif %}"></i>
+          <span>{{ ch.profit }}%</span> <span>vs the period before</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-6 col-xl-3">
+    <div class="stat-card accent-primary h-100">
+      <div class="label"><i class="bi bi-boxes me-1"></i><span>On hand now</span></div>
+      <div class="value money">{{ report.holdings.total|money }}</div>
+      <div class="hint"><span>Raw materials</span> {{ report.holdings.materials_value|money }}</div>
+      <div class="hint"><span>Finished products</span> {{ report.holdings.products_value|money }}</div>
+      <div class="hint"><span>Could sell for</span> {{ report.holdings.products_retail|money }}</div>
+      {% if report.holdings.owed %}<div class="hint"><span>Owed by customers</span> {{ report.holdings.owed|money }}</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endwith %}
+
+{# ---------- Money in minus money out, as candles; and the findings ---------- #}
+<div class="row g-3 mb-3">
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-bar-chart-steps me-1"></i><span>Money in minus money out</span></span>
+        <span class="text-muted-sm">
+          {% if report.period.bucket == "day" %}<span>One candle per day</span>{% elif report.period.bucket == "week" %}<span>One candle per week</span>{% else %}<span>One candle per month</span>{% endif %}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if cash_chart %}
+          <div class="d-none d-sm-block">{{ cash_chart }}</div>
+          <div class="d-sm-none">{{ cash_chart_narrow }}</div>
+          <div class="audit-legend">
+            <span><svg width="14" height="14" aria-hidden="true"><rect x="3" y="2" width="8" height="10" rx="1.5" fill="#fff" stroke="{{ good_colour }}" stroke-width="1.5"/></svg> <span>Rose</span></span>
+            <span><svg width="14" height="14" aria-hidden="true"><rect x="3" y="2" width="8" height="10" rx="1.5" fill="{{ bad_colour }}"/></svg> <span>Fell</span></span>
+            <span class="text-muted-sm"><span>Running total since the start of the period. The wick shows the lowest and highest it went.</span></span>
+          </div>
+          <details class="mt-2">
+            <summary class="text-muted-sm"><span>Show as a table</span></summary>
+            <div class="table-responsive mt-2">
+              <table class="table table-sm">
+                <thead><tr><th>Period</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">At the start</th><th class="num">At the end</th><th class="num">Lowest</th><th class="num">Highest</th></tr></thead>
+                <tbody>
+                  {% for c in report.cash_candles %}
+                    <tr><td>{{ c.start|date:"d M Y" }}</td>
+                      <td class="num money">{{ c.money_in|money }}</td><td class="num money">{{ c.money_out|money }}</td>
+                      <td class="num money">{{ c.open|money }}</td><td class="num money">{{ c.close|money }}</td>
+                      <td class="num money">{{ c.low|money }}</td><td class="num money">{{ c.high|money }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        {% else %}
+          <div class="empty-state"><i class="bi bi-bar-chart-steps"></i><span>No money moved in this period.</span></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-lightbulb me-1"></i><span>What the numbers say</span></div>
+      <div class="card-body p-0">
+        <ul class="audit-insights list-unstyled mb-0">
+          {% for i in report.insights %}
+            {% include "reports/panels/audit_insight.html" with i=i %}
+          {% empty %}
+            <li class="audit-insight is-good"><i class="bi bi-check-circle"></i>
+              <div><span>Nothing needs your attention.</span></div></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ---------- Where it went, and what is held ---------- #}
+<div class="row g-3 mb-3">
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-pie-chart me-1"></i><span>Where the money went</span></div>
+      <div class="card-body audit-ring">
+        {{ spend_donut }}
+        <ul class="audit-key list-unstyled">
+          {% for part in spend_legend %}
+            <li><span class="swatch" style="background:{{ part.colour }}"></span>
+              <span class="name">{% if forloop.counter == 1 %}Materials and stock{% elif forloop.counter == 2 %}Wages{% else %}Running costs{% endif %}</span>
+              <span class="amount money">{{ part.amount|money }}</span>
+              <span class="share">{{ part.share }}%</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-list-ol me-1"></i><span>Expenses by category</span></div>
+      <div class="card-body">
+        {% for c in report.money_out.categories|slice:":8" %}
+          <div class="audit-bar">
+            <div class="d-flex justify-content-between small">
+              <span class="text-truncate me-2">{{ c.label }}</span>
+              <span class="money">{{ c.total|money }}</span>
+            </div>
+            <div class="track"><span style="width:{% widthratio c.total top_category 100 %}%;background:{{ series.0 }}"></span></div>
+          </div>
+        {% empty %}
+          <div class="empty-state py-4"><i class="bi bi-wallet2"></i><span>No expenses in this period.</span></div>
+        {% endfor %}
+        {% if report.money_out.materials %}
+          <div class="audit-bar mt-3">
+            <div class="d-flex justify-content-between small">
+              <span class="text-truncate me-2"><span>Raw materials bought</span></span>
+              <span class="money">{{ report.money_out.materials|money }}</span>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-12 col-xl-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-pie-chart-fill me-1"></i><span>What the business holds</span></div>
+      <div class="card-body audit-ring">
+        {{ held_donut }}
+        <ul class="audit-key list-unstyled">
+          {% for part in held_legend %}
+            <li><span class="swatch" style="background:{{ part.colour }}"></span>
+              <span class="name">{% if forloop.counter == 1 %}Raw materials{% elif forloop.counter == 2 %}Finished products{% else %}Owed by customers{% endif %}</span>
+              <span class="amount money">{{ part.amount|money }}</span>
+              <span class="share">{{ part.share }}%</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ---------- What one product really costs ---------- #}
+<div class="card mb-3" id="cost">
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <span><i class="bi bi-calculator me-1"></i><span>What one product really costs</span></span>
+    {% if report.costing %}
+      <form method="get" class="d-flex align-items-center gap-2 no-print">
+        {% for k, v in query.items %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <label class="text-muted-sm" for="audit_product">Product</label>
+        <select id="audit_product" name="product" class="form-select form-select-sm" onchange="this.form.submit()">
+          {% for r in report.costing %}
+            <option value="{{ r.id }}" {% if chosen and r.id == chosen.id %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    {% if chosen %}
+      <div class="row g-3">
+        <div class="col-lg-8">
+          <div class="d-flex justify-content-between align-items-baseline mb-1">
+            <div class="fw-semibold">{{ chosen.name }}</div>
+            <div class="text-muted-sm"><span>Batch cost per unit: materials and batch costs</span></div>
+          </div>
+          {% if cost_chart %}
+            <div class="d-none d-sm-block">{{ cost_chart }}</div>
+            <div class="d-sm-none">{{ cost_chart_narrow }}</div>
+            <div class="audit-legend">
+              <span><svg width="14" height="14" aria-hidden="true"><rect x="3" y="2" width="8" height="10" rx="1.5" fill="#fff" stroke="{{ bad_colour }}" stroke-width="1.5"/></svg> <span>Cost went up</span></span>
+              <span><svg width="14" height="14" aria-hidden="true"><rect x="3" y="2" width="8" height="10" rx="1.5" fill="{{ good_colour }}"/></svg> <span>Cost went down</span></span>
+              {% for label, value, colour in cost_lines %}
+                <span><svg width="18" height="10" aria-hidden="true"><line x1="1" x2="17" y1="5" y2="5" stroke="{{ colour }}" stroke-width="2"/></svg>
+                  <span>{% if label == "Your cost" %}Your cost{% elif label == "Selling price" %}Selling price{% else %}Suggested{% endif %}</span>
+                  <span class="money">{{ value|money }}</span></span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state py-4"><i class="bi bi-bricks"></i><span>No batches of this product in the period.</span></div>
+          {% endif %}
+        </div>
+
+        <div class="col-lg-4">
+          <table class="table table-sm audit-breakdown mb-3">
+            <tbody>
+              <tr><td><span>Materials per unit</span></td><td class="num money">{{ chosen.materials_per_unit|default_if_none:"-"|money }}</td></tr>
+              <tr><td><span>Batch costs per unit</span></td><td class="num money">{{ chosen.extras_per_unit|default_if_none:"-"|money }}</td></tr>
+              {% if chosen.base_source == "system" %}
+                <tr><td><span>Last recorded cost</span></td><td class="num money">{{ chosen.base_per_unit|money }}</td></tr>
+              {% endif %}
+              <tr><td><span>Share of running costs</span></td><td class="num money">{{ chosen.running_per_unit|default_if_none:"-"|money }}</td></tr>
+              <tr class="fw-semibold"><td><span>Suggested cost</span></td><td class="num money">{{ chosen.suggested|default_if_none:"-"|money }}</td></tr>
+              <tr class="fw-semibold"><td><span>Your cost</span></td><td class="num money">{% if chosen.your_cost is not None %}{{ chosen.your_cost|money }}{% else %}<span class="text-muted">Not set</span>{% endif %}</td></tr>
+              <tr><td><span>Selling price</span></td><td class="num money">{{ chosen.selling_price|money }}</td></tr>
+              {% if chosen.margin_at_your_cost is not None %}
+                <tr><td><span>Margin at your cost</span></td><td class="num {% if chosen.margin_at_your_cost < 0 %}text-danger{% endif %}">{{ chosen.margin_at_your_cost }}%</td></tr>
+              {% endif %}
+              {% if chosen.batch_low is not None %}
+                <tr><td><span>Batch cost range</span></td><td class="num money">{{ chosen.batch_low|money }} &ndash; {{ chosen.batch_high|money }}</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+
+          {% if report.can_set_cost %}
+            <form method="post" action="{% url 'reports:audit_set_cost' chosen.id %}" class="audit-cost-form no-print">
+              {% csrf_token %}
+              {% for k, v in query.items %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+              <label class="form-label fw-semibold" for="your_cost"><span>Set what one unit really costs</span></label>
+              <div class="input-group input-group-sm mb-2">
+                <input id="your_cost" name="cost" type="number" step="0.01" min="0" class="form-control"
+                       value="{% if chosen.your_cost is not None %}{{ chosen.your_cost }}{% elif chosen.suggested is not None %}{{ chosen.suggested }}{% endif %}" required>
+                <button class="btn btn-primary"><i class="bi bi-check2 me-1"></i><span>Save</span></button>
+              </div>
+              <input name="note" maxlength="255" class="form-control form-control-sm mb-2"
+                     placeholder="Why this figure (optional)" value="{{ chosen.your_cost_note }}">
+              <div class="text-muted-sm">
+                <span>All costs included: materials, wages, electricity, transport. Every margin on this page is worked out from it.</span>
+              </div>
+              {% if chosen.your_cost is not None %}
+                <div class="text-muted-sm mt-1">
+                  <span>Last set</span> <span>{{ chosen.your_cost_set_at|date:"d M Y" }}</span>{% if chosen.your_cost_set_by %} &middot; <span>{{ chosen.your_cost_set_by }}</span>{% endif %}
+                </div>
+              {% endif %}
+            </form>
+            {% if chosen.your_cost is not None %}
+              <form method="post" action="{% url 'reports:audit_set_cost' chosen.id %}" class="mt-2 no-print">
+                {% csrf_token %}
+                {% for k, v in query.items %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+                <button name="clear" value="1" class="btn btn-link btn-sm text-danger p-0"><span>Clear your cost</span></button>
+              </form>
+            {% endif %}
+          {% elif chosen.your_cost is None %}
+            <div class="text-muted-sm"><span>The owner has not set a cost for this product yet.</span></div>
+          {% endif %}
+        </div>
+      </div>
+    {% else %}
+      <div class="empty-state py-4"><i class="bi bi-calculator"></i><span>No products have been made, sold or stocked yet.</span></div>
+    {% endif %}
+  </div>
+</div>
+
+{# ---------- Every product ---------- #}
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-table me-1"></i><span>Products: cost, margin and profit</span></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 audit-table">
+      <thead><tr>
+        <th>Product</th><th class="num">Made</th><th class="num">Sold</th><th class="num">In stock</th>
+        <th class="num">Price</th><th class="num">Suggested</th><th class="num">Your cost</th>
+        <th class="num">Margin</th><th class="num">Profit at your cost</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for r in report.costing %}
+          <tr {% if r.below_cost %}class="table-danger"{% endif %}>
+            <td><div class="fw-semibold">{{ r.name }}</div><div class="text-muted-sm mono">{{ r.sku }}</div></td>
+            <td class="num">{{ r.produced }}</td>
+            <td class="num">{{ r.sold }}</td>
+            <td class="num">{{ r.in_stock }}</td>
+            <td class="num money">{{ r.selling_price|money }}</td>
+            <td class="num money">{% if r.suggested is not None %}{{ r.suggested|money }}{% else %}-{% endif %}</td>
+            <td class="num money">{% if r.your_cost is not None %}{{ r.your_cost|money }}{% else %}<span class="text-muted">Not set</span>{% endif %}</td>
+            <td class="num">{% if r.margin_at_your_cost is not None %}<span class="badge text-bg-{% if r.margin_at_your_cost >= 20 %}success{% elif r.margin_at_your_cost > 0 %}warning{% else %}danger{% endif %}">{{ r.margin_at_your_cost }}%</span>{% elif r.margin_at_suggested is not None %}<span class="text-muted">{{ r.margin_at_suggested }}%</span>{% else %}-{% endif %}</td>
+            <td class="num money {% if r.profit_at_your_cost is not None and r.profit_at_your_cost < 0 %}text-danger{% endif %}">{% if r.profit_at_your_cost is not None %}{{ r.profit_at_your_cost|money }}{% else %}-{% endif %}</td>
+            <td class="text-end no-print"><a href="?{% for k, v in query.items %}{{ k }}={{ v|urlencode }}&{% endfor %}product={{ r.id }}#cost" class="btn btn-sm btn-outline-primary text-nowrap">{% if report.can_set_cost %}<span>Set cost</span>{% else %}<span>Details</span>{% endif %}</a></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="10"><div class="empty-state py-4"><i class="bi bi-box-seam"></i><span>No products yet.</span></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ---------- Raw materials on hand ---------- #}
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-boxes me-1"></i><span>Raw materials on hand</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Material</th><th class="num">On hand</th><th class="num">Unit cost</th><th class="num">Value</th></tr></thead>
+          <tbody>
+            {% for m in report.holdings.materials %}
+              <tr><td>{{ m.name }}</td><td class="num">{{ m.quantity|floatformat:"-2" }} <span class="text-muted-sm">{{ m.unit_display }}</span></td>
+                <td class="num money">{{ m.unit_cost|money }}</td><td class="num money">{{ m.value|money }}</td></tr>
+            {% empty %}
+              <tr><td colspan="4"><div class="empty-state py-3"><span>No raw materials in store.</span></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-box-seam me-1"></i><span>Finished products on hand</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Value at cost</th><th class="num">Could sell for</th></tr></thead>
+          <tbody>
+            {% for p in report.holdings.products %}
+              <tr><td>{{ p.name }}{% if not p.your_cost_set %} <span class="badge text-bg-light border" title="Valued at the batch cost - the owner has not set a cost yet">batch cost</span>{% endif %}</td>
+                <td class="num">{{ p.quantity }}</td>
+                <td class="num money">{{ p.value|money }}</td><td class="num money">{{ p.retail_value|money }}</td></tr>
+            {% empty %}
+              <tr><td colspan="4"><div class="empty-state py-3"><span>No finished products on hand.</span></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-light border small">
+  <i class="bi bi-info-circle me-1"></i>
+  <strong><span>How these figures are worked out.</span></strong>
+  <span>Profit after all costs is sales, less the recorded cost of what was sold, less the running costs of the period. It needs no guesses.</span>
+  <span>Your cost is your own figure for one unit with everything included; the margins and the profit at your cost use it.</span>
+  <span>When the two profits disagree over a long period, your costs are missing something.</span>
+</div>
+{% endblock %}

@@ -58,6 +58,8 @@ NAV_RULES: tuple[tuple[str, str, str], ...] = (
     ("reports", "inventory_report", "inventory_report"),
     ("reports", "receivables_report", "receivables_report"),
     ("reports", "profit_report", "profit_report"),
+    # The business Audit. Its own key: "audit" is the audit LOG's link.
+    ("reports", "audit", "business_audit"),
 
     ("sales", "sale_create", "new_sale"),
     ("sales", "transaction_", "transactions"),

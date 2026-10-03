@@ -574,3 +574,58 @@ a.pay-chip.batch:hover{background:#ffedd5}
   body{background:#fff}
   .card{border:none;box-shadow:none}
 }
+
+/* ---------------------------------------------------------------------------
+   The Audit (reports/audit.html). Charts are SVG drawn by reports/charts.py;
+   these rules size them and set the chrome around them - hairline grid,
+   muted axis text, the data the only loud thing.
+--------------------------------------------------------------------------- */
+.audit-chart{width:100%;height:auto;display:block}
+.audit-chart .audit-axis{font-size:11px;fill:#898781;font-variant-numeric:tabular-nums}
+.audit-candle{cursor:default}
+.audit-candle:focus{outline:none}
+.audit-candle:hover rect[fill="transparent"],
+.audit-candle:focus rect[fill="transparent"]{fill:rgba(15,76,129,.07)}
+.audit-legend{display:flex;flex-wrap:wrap;gap:.35rem 1.1rem;align-items:center;
+  font-size:.78rem;color:var(--muted);margin-top:.55rem}
+.audit-legend>span{display:inline-flex;align-items:center;gap:.35rem}
+.audit-legend .money{color:var(--ink);font-weight:600}
+.audit-ring{display:flex;align-items:center;gap:1.1rem;flex-wrap:wrap}
+.audit-donut{width:150px;height:150px;flex:0 0 auto}
+.audit-donut .audit-donut-value{font-size:22px;font-weight:700;fill:var(--ink)}
+.audit-donut .audit-donut-label{font-size:12px;fill:#898781}
+.audit-key{flex:1 1 170px;margin:0}
+.audit-key li{display:grid;grid-template-columns:12px 1fr auto auto;gap:.55rem;
+  align-items:center;font-size:.82rem;padding:.28rem 0;border-bottom:1px solid var(--line)}
+.audit-key li:last-child{border-bottom:0}
+.audit-key .swatch{width:12px;height:12px;border-radius:3px}
+.audit-key .amount{font-weight:600}
+.audit-key .share{color:var(--muted);font-size:.74rem;min-width:2.4rem;text-align:right}
+.audit-bar{margin-bottom:.65rem}
+.audit-bar .track{height:8px;background:#f0efec;border-radius:4px;overflow:hidden;margin-top:.28rem}
+.audit-bar .track span{display:block;height:100%;border-radius:0 4px 4px 0;min-width:2px}
+.audit-insights{max-height:430px;overflow:auto}
+.audit-insight{display:flex;gap:.7rem;padding:.72rem 1rem;border-bottom:1px solid var(--line);font-size:.86rem}
+.audit-insight:last-child{border-bottom:0}
+.audit-insight>i{font-size:1.05rem;line-height:1.35}
+.audit-insight.is-critical>i{color:#d03b3b}
+.audit-insight.is-warning>i{color:#b7791f}
+.audit-insight.is-good>i{color:#0ca30c}
+.audit-insight.is-info>i{color:var(--brand)}
+.audit-insight.is-critical{background:#fdf3f3}
+.audit-delta{font-size:.74rem;margin-top:.4rem;color:var(--muted)}
+.audit-delta.is-good{color:#006300}
+.audit-delta.is-bad{color:#b42318}
+.audit-kpis .stat-card .hint span:first-child{color:var(--muted)}
+.audit-breakdown td{padding:.32rem .3rem}
+.audit-breakdown tr.fw-semibold td{border-top:1px solid var(--line)}
+.audit-cost-form{background:var(--brand-light);border-radius:var(--radius);padding:.8rem}
+@media (max-width:575.98px){
+  .audit-donut{width:128px;height:128px}
+  .audit-ring{justify-content:center}
+  .audit-filter .btn-group{width:100%}
+  .audit-filter .btn-group .btn{flex:1 1 auto}
+}
+@media print{
+  .audit-insights{max-height:none;overflow:visible}
+}

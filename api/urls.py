@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from . import (
+    audit_views,
     delivery_views,
     expense_views,
     option_views,
@@ -99,6 +100,16 @@ urlpatterns = [
         "reports/export/receivables/",
         parity_views.export_receivables,
         name="export_receivables",
+    ),
+
+    # The Audit - the whole business on one screen - and the owner's figure
+    # for what one unit of a product really costs. Not to be confused with
+    # the audit LOG below, which is who did what.
+    path("audit/", audit_views.audit_report, name="audit_report"),
+    path(
+        "audit/products/<int:pk>/cost/",
+        audit_views.product_cost,
+        name="audit_product_cost",
     ),
 
     # The permanent record.

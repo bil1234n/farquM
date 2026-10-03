@@ -238,6 +238,148 @@ class ProfitReportView(PermissionRequiredMixin, TemplateView):
         return ctx
 
 
+class AuditView(PermissionRequiredMixin, TemplateView):
+    """
+    The Audit: what went in, what came back, what is on hand, and what a
+    product really costs. The figures come from reports/audit.py, which the
+    phone's API uses too; the charts are drawn here as SVG (reports/charts.py).
+    """
+
+    required_permission = "costing.view"
+    template_name = "reports/audit.html"
+
+    def get_context_data(self, **kwargs):
+        from .audit import RANGES, build_report, resolve_period
+        from .charts import (
+            BAD, GOOD, LINE_PRICE, LINE_SUGGESTED, LINE_YOURS, SERIES,
+            candle_svg, donut_svg, legend,
+        )
+
+        ctx = super().get_context_data(**kwargs)
+        user = self.request.user
+        q = self.request.GET
+        period = resolve_period(
+            q.get("range", ""), q.get("date_from", ""), q.get("date_to", ""), user=user
+        )
+        report = build_report(user, period, product_id=q.get("product"))
+
+        chosen = next(
+            (r for r in report["costing"] if r["id"] == report["cost_product_id"]), None
+        )
+        cost_lines = []
+        if chosen:
+            cost_lines = [
+                ("Your cost", chosen["your_cost"], LINE_YOURS),
+                ("Selling price", chosen["selling_price"], LINE_PRICE),
+                ("Suggested", chosen["suggested"], LINE_SUGGESTED),
+            ]
+
+        spend = report["money_out"]
+        spend_parts = [
+            ("Materials and stock", spend["kinds"][0]["amount"]),
+            ("Wages", spend["kinds"][1]["amount"]),
+            ("Running costs", spend["kinds"][2]["amount"]),
+        ]
+        held = report["holdings"]
+        held_parts = [
+            ("Raw materials", held["materials_value"]),
+            ("Finished products", held["products_value"]),
+            ("Owed by customers", held["owed"]),
+        ]
+        top_category = max((c["total"] for c in spend["categories"]), default=0)
+
+        ctx.update({
+            "report": report,
+            "period": period,
+            "ranges": list(RANGES),
+            "chosen": chosen,
+            "cash_chart": candle_svg(
+                report["cash_candles"], bucket=period.bucket, rising_good=True,
+                zero_line=True, skip_idle=True, title="Money in minus money out",
+            ),
+            "cash_chart_narrow": candle_svg(
+                report["cash_candles"], bucket=period.bucket, rising_good=True,
+                zero_line=True, skip_idle=True, title="Money in minus money out",
+                width=360, height=230, max_labels=4,
+            ),
+            "cost_chart": candle_svg(
+                report["cost_candles"], bucket=period.bucket, rising_good=False,
+                lines=[(lbl, v, c) for lbl, v, c in cost_lines if v is not None],
+                title="Batch cost per unit",
+            ) if chosen else "",
+            "cost_chart_narrow": candle_svg(
+                report["cost_candles"], bucket=period.bucket, rising_good=False,
+                lines=[(lbl, v, c) for lbl, v, c in cost_lines if v is not None],
+                title="Batch cost per unit", width=360, height=230, max_labels=4,
+            ) if chosen else "",
+            "cost_lines": [(lbl, v, c) for lbl, v, c in cost_lines if v is not None],
+            "spend_donut": donut_svg(
+                spend_parts, centre_value=_compact_money(spend["total"]),
+                centre_label="spent", title="Where the money went",
+            ),
+            "spend_legend": legend(spend_parts),
+            "held_donut": donut_svg(
+                held_parts, centre_value=_compact_money(held["total"]),
+                centre_label="on hand", title="What the business holds",
+            ),
+            "held_legend": legend(held_parts),
+            "top_category": top_category,
+            "good_colour": GOOD,
+            "bad_colour": BAD,
+            "series": SERIES,
+            "query": {k: v for k, v in q.items() if k in ("range", "date_from", "date_to")},
+        })
+        return ctx
+
+
+def _compact_money(value):
+    from .charts import compact
+
+    return compact(value)
+
+
+def audit_set_cost(request, pk):
+    """
+    The owner's figure for one product, from the Audit page. POST only; the
+    answer is the page again, scrolled back to the product.
+    """
+    from django.contrib import messages
+    from django.shortcuts import get_object_or_404, redirect
+    from django.urls import reverse
+    from django.utils.http import urlencode
+
+    from .audit import CostError, set_your_cost
+
+    blocked = require(
+        request, "costing.set",
+        message="Only the owner can set what a product costs.",
+    )
+    if blocked:
+        return blocked
+    if request.method != "POST":
+        return redirect("reports:audit")
+
+    product = get_object_or_404(scoped(Product.objects.alive(), request.user), pk=pk)
+    raw = request.POST.get("cost", "")
+    clearing = "clear" in request.POST
+    try:
+        set_your_cost(
+            product, None if clearing else raw, user=request.user,
+            note=request.POST.get("note", ""), request=request,
+        )
+    except CostError as exc:
+        messages.error(request, str(exc))
+    else:
+        if clearing:
+            messages.success(request, f"Your cost for {product.name} was cleared.")
+        else:
+            messages.success(request, f"Saved: one {product.name} costs {product.audit_cost}.")
+
+    keep = {k: v for k, v in request.POST.items() if k in ("range", "date_from", "date_to") and v}
+    keep["product"] = product.pk
+    return redirect(f"{reverse('reports:audit')}?{urlencode(keep)}#cost")
+
+
 class InventoryReportView(PermissionRequiredMixin, TemplateView):
     required_permission = "report.inventory"
     template_name = "reports/inventory_report.html"

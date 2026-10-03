@@ -192,6 +192,35 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
     image = models.ImageField(upload_to="products/%Y/%m/", blank=True, null=True)
     is_active = models.BooleanField(default=True, db_index=True)
 
+    # -- What one unit really costs, in the owner's judgement ---------------
+    # cost_price is what the batches can measure: materials, plus whatever
+    # was paid against the batch. It cannot see the electricity, the wages of
+    # the people who stacked the blocks, the truck that brought the sand -
+    # costs that change day by day and belong to no single batch. Only the
+    # owner, looking at everything, can say what one unit truly costs; the
+    # Audit asks them, and keeps the answer here. See reports/audit.py.
+    #
+    # Deliberately NOT copied into cost_price. The profit report takes the
+    # running costs off separately; folding them into the unit cost as well
+    # would count the same electricity twice.
+    audit_cost = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="What one unit really costs, all costs included - the owner's figure.",
+    )
+    audit_cost_note = models.CharField(max_length=255, blank=True)
+    audit_cost_set_at = models.DateTimeField(null=True, blank=True)
+    audit_cost_set_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     objects = ProductQuerySet.as_manager()
 
     class Meta:
@@ -343,6 +372,50 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
         Product.objects.filter(pk=self.pk).update(stock_quantity=total)
         self.refresh_from_db(fields=["stock_quantity"])
         return total
+
+    @property
+    def audit_unit_cost(self) -> Decimal:
+        """The owner's figure when there is one, otherwise what batches measured."""
+        return self.audit_cost if self.audit_cost is not None else self.cost_price
+
+
+class ProductCostEstimate(models.Model):
+    """
+    Every time the owner said what a product really costs.
+
+    Append-only. The current figure lives on the product (Product.audit_cost);
+    this is how it got there - so "why did the margin on hollow blocks drop in
+    March?" can be answered with "because in March the owner decided they
+    cost 3 Birr more than he had thought", and by whom.
+    """
+
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="cost_estimates"
+    )
+    #: None when the owner cleared their figure.
+    cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    previous = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    #: What the batches said at that moment, for comparison later.
+    system_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    set_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    set_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-set_at", "-id"]
+        verbose_name = "Product cost estimate"
+
+    def __str__(self):
+        return f"{self.product} -> {self.cost}"
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError("Cost estimates are a history and cannot be deleted.")
 
 
 class MovementType(models.TextChoices):

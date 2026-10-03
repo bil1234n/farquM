@@ -1,0 +1,76 @@
+{% load core_extras %}
+{% comment %}
+  One finding from reports.audit._insights. The level picks the icon and the
+  colour - never the colour alone - and the words are written here, phrase by
+  phrase, so the browser's translator can match each one whole. Names and
+  amounts sit in their own elements and are never translated.
+{% endcomment %}
+{% with p=i.params %}
+<li class="audit-insight is-{{ i.level }}">
+  <i class="bi {% if i.level == 'critical' %}bi-exclamation-octagon{% elif i.level == 'warning' %}bi-exclamation-triangle{% elif i.level == 'good' %}bi-check-circle{% else %}bi-info-circle{% endif %}"
+     aria-hidden="true"></i>
+  <div>
+    {% if i.code == "no_activity" %}
+      <span>Nothing was recorded in this period.</span>
+    {% elif i.code == "below_cost" %}
+      <strong>{{ p.product }}</strong>
+      <span>sells for less than it costs.</span>
+      <div class="text-muted-sm"><span>Price</span> <span class="money">{{ p.price|money }}</span> &middot;
+        {% if p.basis == "yours" %}<span>your cost</span>{% elif p.basis == "suggested" %}<span>suggested cost</span>{% else %}<span>last cost</span>{% endif %}
+        <span class="money">{{ p.cost|money }}</span></div>
+    {% elif i.code == "estimate_low" %}
+      <strong>{{ p.product }}</strong>
+      <span>Your cost looks too low.</span>
+      <div class="text-muted-sm"><span>Yours</span> <span class="money">{{ p.cost|money }}</span> &middot;
+        <span>suggested</span> <span class="money">{{ p.suggested|money }}</span> (<span>-{{ p.percent }}%</span>)</div>
+    {% elif i.code == "costs_missing" %}
+      <span>Products without your cost:</span> <strong>{{ p.count }}</strong>
+      <div class="text-muted-sm">{{ p.products }}</div>
+      <div class="text-muted-sm"><span>Set what they really cost to see their true margins.</span></div>
+    {% elif i.code == "estimates_too_low" %}
+      <span>Your costs look too low.</span>
+      <div class="text-muted-sm"><span>At your costs the products made</span> <span class="money">{{ p.at_yours|money }}</span>
+        &middot; <span>the books show</span> <span class="money">{{ p.books|money }}</span></div>
+    {% elif i.code == "estimates_too_high" %}
+      <span>Your costs look too high.</span>
+      <div class="text-muted-sm"><span>At your costs the products made</span> <span class="money">{{ p.at_yours|money }}</span>
+        &middot; <span>the books show</span> <span class="money">{{ p.books|money }}</span></div>
+    {% elif i.code == "estimates_right" %}
+      <span>Your costs match the books.</span>
+      <div class="text-muted-sm"><span>At your costs the products made</span> <span class="money">{{ p.at_yours|money }}</span>
+        &middot; <span>the books show</span> <span class="money">{{ p.books|money }}</span></div>
+    {% elif i.code == "cost_rising" %}
+      <strong>{{ p.product }}</strong>
+      <span>Batch cost is rising.</span> <span>+{{ p.percent }}%</span>
+    {% elif i.code == "cost_falling" %}
+      <strong>{{ p.product }}</strong>
+      <span>Batch cost is falling.</span> <span>-{{ p.percent }}%</span>
+    {% elif i.code == "loss" %}
+      <span>The business lost money in this period.</span>
+      <div class="money fw-semibold">{{ p.amount|money }}</div>
+    {% elif i.code == "profit" %}
+      <span>The business made a profit.</span>
+      <div><span class="money fw-semibold">{{ p.amount|money }}</span>{% if p.margin is not None %} &middot; <span>{{ p.margin }}%</span>{% endif %}</div>
+    {% elif i.code == "spend_up" %}
+      <span>Spending is up on the period before.</span> <span>+{{ p.percent }}%</span>
+    {% elif i.code == "spend_down" %}
+      <span>Spending is down on the period before.</span> <span>-{{ p.percent }}%</span>
+    {% elif i.code == "owed_high" %}
+      <span>Customers owe a large share of sales.</span>
+      <div class="text-muted-sm"><span class="money">{{ p.amount|money }}</span> &middot; <span>{{ p.percent }}%</span></div>
+    {% elif i.code == "slow_stock" %}
+      <span>Products on the shelf that did not sell:</span> <strong>{{ p.count }}</strong>
+      <div class="text-muted-sm">{{ p.products }} &middot; <span class="money">{{ p.value|money }}</span></div>
+    {% elif i.code == "materials_cover" %}
+      <span>Raw materials on hand last about</span> <strong>{{ p.days }}</strong> <span>days at the current pace.</span>
+      <div class="text-muted-sm money">{{ p.value|money }}</div>
+    {% elif i.code == "cash_out" %}
+      <span>More money went out than came in.</span>
+      <div class="money fw-semibold">{{ p.amount|money }}</div>
+    {% elif i.code == "cash_in" %}
+      <span>More money came in than went out.</span>
+      <div class="money fw-semibold">{{ p.amount|money }}</div>
+    {% endif %}
+  </div>
+</li>
+{% endwith %}

@@ -266,6 +266,23 @@ CATALOG: tuple[PermGroup, ...] = (
         ),
     ),
     PermGroup(
+        key="costing",
+        label="Audit",
+        icon="bi-clipboard2-data",
+        blurb="The whole business on one page: what went in, what came back, "
+              "what is still on hand, and what one product really costs.",
+        perms=(
+            Perm("costing.view", "Open the Audit",
+                 "Money in and out, profit, stock value and cost per unit, "
+                 "with the charts. Shows what the business makes.",
+                 sensitive=True),
+            Perm("costing.set", "Set what a product really costs",
+                 "The owner's own figure for one unit, all costs included. "
+                 "Every margin in the Audit is worked out from it.",
+                 sensitive=True),
+        ),
+    ),
+    PermGroup(
         key="admin",
         label="Administration",
         icon="bi-shield-lock",
@@ -447,6 +464,7 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "reports:inventory_report": "report.inventory",
     "reports:receivables_report": "report.receivables",
     "reports:profit_report": "report.profit",
+    "reports:audit": "costing.view",
     "accounts:user_list": "user.view",
     "accounts:audit_log": "audit.view",
     "core:settings": "settings.view",

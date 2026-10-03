@@ -35,12 +35,24 @@
 
   <nav class="nav flex-column pb-3">
 
-    {% if user|can:"dashboard.view" %}
+    {% if user|can:"dashboard.view,costing.view" %}
       <div class="nav-section">Overview</div>
-      <a class="nav-link {% if NAV == 'dashboard' %}active{% endif %}"
-         href="{% url 'reports:dashboard' %}">
-        <i class="bi bi-grid-1x2"></i> Dashboard
-      </a>
+      {% if user|can:"dashboard.view" %}
+        <a class="nav-link {% if NAV == 'dashboard' %}active{% endif %}"
+           href="{% url 'reports:dashboard' %}">
+          <i class="bi bi-grid-1x2"></i> Dashboard
+        </a>
+      {% endif %}
+      {% comment %}
+        The business Audit - money in and out, stock value, cost per unit.
+        Not the audit LOG further down, which is who did what.
+      {% endcomment %}
+      {% if user|can:"costing.view" %}
+        <a class="nav-link {% if NAV == 'business_audit' %}active{% endif %}"
+           href="{% url 'reports:audit' %}">
+          <i class="bi bi-clipboard2-data"></i> Audit
+        </a>
+      {% endif %}
     {% endif %}
 
     {% if user|can:"sale.view,sale.create,customer.view" %}
