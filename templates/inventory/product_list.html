@@ -100,7 +100,8 @@
             </td>
             <td>{{ p.category.name|default:"&mdash;" }}</td>
             {% if user.can_view_financials %}
-              <td class="num money text-muted">{{ p.cost_price|money }}</td>
+              {# The owner's own cost when set (the margin beside it uses it too). #}
+              <td class="num money text-muted">{{ p.audit_unit_cost|money }}{% if p.has_your_cost %}<div class="text-muted-sm"><span>Your cost</span></div>{% endif %}</td>
             {% endif %}
             <td class="num money fw-semibold">{{ p.selling_price|money }}</td>
             {% if user.can_view_financials %}

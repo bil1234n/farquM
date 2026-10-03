@@ -192,10 +192,13 @@ def inventory_valuation(user=None):
     """Stock on hand valued at cost and at retail."""
     from inventory.models import Product
 
+    from inventory.models import cost_used
+
     qs = _apply_user(Product.objects.alive(), user).filter(is_active=True)
     agg = qs.aggregate(
+        # At the owner's own cost where he has set one - see cost_used().
         cost_value=Coalesce(
-            Sum(ExpressionWrapper(F("stock_quantity") * F("cost_price"), output_field=DEC)),
+            Sum(ExpressionWrapper(F("stock_quantity") * cost_used(), output_field=DEC)),
             ZERO, output_field=DEC,
         ),
         retail_value=Coalesce(

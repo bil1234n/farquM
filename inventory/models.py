@@ -69,6 +69,20 @@ class Supplier(TimeStampedModel):
         return reverse("inventory:supplier_list")
 
 
+def cost_used():
+    """
+    What one unit is held to cost, as a database expression: the owner's own
+    figure when he has set one in the Audit, otherwise the cost price.
+
+    The Python twin is Product.audit_unit_cost. Every valuation of the stock
+    goes through one or the other, so the product page, the products list,
+    the inventory report and the Audit all agree on what the shelf is worth.
+    """
+    from django.db.models.functions import Coalesce
+
+    return Coalesce(F("audit_cost"), F("cost_price"))
+
+
 class ProductQuerySet(models.QuerySet):
     def alive(self):
         return self.filter(is_deleted=False)
@@ -92,10 +106,13 @@ class ProductQuerySet(models.QuerySet):
         # stock_quantity is an integer and the prices are decimals, so the
         # database needs an explicit output type for the product. Without
         # output_field Django raises "Expression contains mixed types".
+        #
+        # At the owner's own cost where he has set one (Product.audit_cost),
+        # like everything else that values the stock - see cost_used().
         dec = models.DecimalField(max_digits=16, decimal_places=2)
         return self.annotate(
             stock_value=models.ExpressionWrapper(
-                F("stock_quantity") * F("cost_price"), output_field=dec
+                F("stock_quantity") * cost_used(), output_field=dec
             ),
             retail_value=models.ExpressionWrapper(
                 F("stock_quantity") * F("selling_price"), output_field=dec
@@ -308,29 +325,41 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
         return f"{prefix}-{seq:05d}"
 
     # -- Derived financials (Admin-facing) ----------------------------------
+    # All at the cost the owner holds a unit to - his own figure from the
+    # Audit when he has set one, else the cost price (audit_unit_cost). He
+    # sets that figure precisely because the batches cannot see the
+    # electricity and the wages; a product page that went on showing the
+    # batch figure would contradict the Audit he has just corrected.
+    #
+    # What a SALE records as its cost stays the cost price (see
+    # TransactionItem.unit_cost): the profit report takes the running costs
+    # off separately, and his figure already has them in it.
     @property
     def profit_per_unit(self) -> Decimal:
-        return self.selling_price - self.cost_price
+        return self.selling_price - self.audit_unit_cost
 
     @property
     def margin_percent(self) -> Decimal:
         if not self.selling_price:
             return Decimal("0.00")
-        return ((self.selling_price - self.cost_price) / self.selling_price * 100).quantize(
+        return ((self.selling_price - self.audit_unit_cost) / self.selling_price * 100).quantize(
             Decimal("0.01")
         )
 
     @property
     def markup_percent(self) -> Decimal:
-        if not self.cost_price:
+        cost = self.audit_unit_cost
+        if not cost:
             return Decimal("0.00")
-        return ((self.selling_price - self.cost_price) / self.cost_price * 100).quantize(
-            Decimal("0.01")
-        )
+        return ((self.selling_price - cost) / cost * 100).quantize(Decimal("0.01"))
 
     @property
     def stock_value(self) -> Decimal:
-        return self.cost_price * self.stock_quantity
+        return self.audit_unit_cost * self.stock_quantity
+
+    @property
+    def has_your_cost(self) -> bool:
+        return self.audit_cost is not None
 
     @property
     def retail_value(self) -> Decimal:

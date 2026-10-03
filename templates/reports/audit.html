@@ -49,13 +49,19 @@
 {% with ch=report.changes pr=report.profit %}
 <div class="row g-3 mb-3 audit-kpis">
   <div class="col-6 col-xl-3">
+    <a class="audit-kpi-link" href="{% url 'reports:audit_detail' 'money-out' %}{% if audit_query %}?{{ audit_query }}{% endif %}">
     <div class="stat-card accent-warning h-100">
+      <i class="bi bi-chevron-right audit-kpi-go" aria-hidden="true"></i>
       <div class="label"><i class="bi bi-box-arrow-up-right me-1"></i><span>Money out</span></div>
       <div class="value money">{{ report.money_out.total|money }}</div>
       <div class="hint"><span>Expenses</span> {{ report.money_out.expenses|money }}</div>
       <div class="hint"><span>Raw materials bought</span> {{ report.money_out.materials|money }}</div>
       {% if report.money_out.bought_in %}
         <div class="hint"><span>Stock bought or brought in</span> {{ report.money_out.bought_in|money }}</div>
+      {% endif %}
+      {% if report.money_out.not_counted %}
+        {# Deliveries of items deleted with their goods - see the Money out page. #}
+        <div class="hint"><span>Not counted</span> {{ report.money_out.not_counted|money }}</div>
       {% endif %}
       {% if ch.money_out is not None %}
         <div class="audit-delta {% if ch.money_out > 0 %}is-bad{% elif ch.money_out < 0 %}is-good{% endif %}">
@@ -64,9 +70,12 @@
         </div>
       {% endif %}
     </div>
+    </a>
   </div>
   <div class="col-6 col-xl-3">
+    <a class="audit-kpi-link" href="{% url 'reports:audit_detail' 'money-in' %}{% if audit_query %}?{{ audit_query }}{% endif %}">
     <div class="stat-card accent-info h-100">
+      <i class="bi bi-chevron-right audit-kpi-go" aria-hidden="true"></i>
       <div class="label"><i class="bi bi-box-arrow-in-down-left me-1"></i><span>Money in</span></div>
       <div class="value money">{{ report.money_in.total|money }}</div>
       <div class="hint"><span>Paid at the till</span> {{ report.money_in.at_till|money }}</div>
@@ -78,9 +87,12 @@
         </div>
       {% endif %}
     </div>
+    </a>
   </div>
   <div class="col-6 col-xl-3">
+    <a class="audit-kpi-link" href="{% url 'reports:audit_detail' 'profit' %}{% if audit_query %}?{{ audit_query }}{% endif %}">
     <div class="stat-card {% if pr.profit < 0 %}accent-danger{% else %}accent-success{% endif %} h-100">
+      <i class="bi bi-chevron-right audit-kpi-go" aria-hidden="true"></i>
       <div class="label"><i class="bi bi-graph-up-arrow me-1"></i><span>Profit after all costs</span></div>
       <div class="value money {% if pr.profit < 0 %}text-danger{% endif %}">{{ pr.profit|money }}</div>
       <div class="hint"><span>Sales</span> {{ pr.revenue|money }}{% if pr.margin is not None %} &middot; <span>{{ pr.margin }}%</span>{% endif %}</div>
@@ -93,9 +105,12 @@
         </div>
       {% endif %}
     </div>
+    </a>
   </div>
   <div class="col-6 col-xl-3">
+    <a class="audit-kpi-link" href="{% url 'reports:audit_detail' 'on-hand' %}{% if audit_query %}?{{ audit_query }}{% endif %}">
     <div class="stat-card accent-primary h-100">
+      <i class="bi bi-chevron-right audit-kpi-go" aria-hidden="true"></i>
       <div class="label"><i class="bi bi-boxes me-1"></i><span>On hand now</span></div>
       <div class="value money">{{ report.holdings.total|money }}</div>
       <div class="hint"><span>Raw materials</span> {{ report.holdings.materials_value|money }}</div>
@@ -103,6 +118,7 @@
       <div class="hint"><span>Could sell for</span> {{ report.holdings.products_retail|money }}</div>
       {% if report.holdings.owed %}<div class="hint"><span>Owed by customers</span> {{ report.holdings.owed|money }}</div>{% endif %}
     </div>
+    </a>
   </div>
 </div>
 {% endwith %}

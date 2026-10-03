@@ -251,6 +251,114 @@ def _tooltip(c, bucket):
     return text
 
 
+def bars_svg(rows, *, labels=(), colours=SERIES, signed=False, bucket="day",
+             title="", width=720, height=240, max_labels=8):
+    """
+    Bars per bucket, as an <svg> string - the Audit detail pages' chart.
+
+    `rows` are the series rows of reports/audit_detail.py: start/end and
+    `values`, one per key, in `labels`' order (which is also the colour
+    order). Several keys stack, money out above the line and any money back
+    (a return to a supplier) below it. `signed` draws one key as gain/loss
+    bars instead: above the line in the good colour, below it in the bad
+    one - status colours, and the legend says which is which.
+
+    Every bucket carries a <title> with all its figures, on a hit area as
+    tall as the plot, so the tooltip is easy to find; the page has the same
+    figures in a table.
+    """
+    if not rows or not any(_num(v) for r in rows for v in r["values"]):
+        return ""
+    left = 58 if width >= 500 else 46
+    right, top, bottom = 14, 12, 30
+    plot_w, plot_h = width - left - right, height - top - bottom
+
+    highs, lows = [0.0], [0.0]
+    for r in rows:
+        values = [_num(v) for v in r["values"]]
+        highs.append(sum(v for v in values if v > 0))
+        lows.append(sum(v for v in values if v < 0))
+    lo, hi = min(lows), max(highs)
+    if hi == lo:
+        hi = lo + 1
+    ticks = nice_ticks(lo, hi)
+    lo, hi = min(ticks[0], lo), max(ticks[-1], hi)
+
+    def y(v):
+        return top + plot_h - (_num(v) - lo) / (hi - lo) * plot_h
+
+    slot = plot_w / len(rows)
+    bar = max(2.0, min(28.0, slot * 0.62))
+    out = [format_html(
+        '<svg class="audit-chart" viewBox="0 0 {} {}" role="img" aria-label="{}" '
+        'preserveAspectRatio="xMidYMid meet">',
+        width, height, title,
+    )]
+    for t in ticks:
+        ty = y(t)
+        out.append(format_html(
+            '<line x1="{}" x2="{}" y1="{}" y2="{}" stroke="{}" stroke-width="1"/>',
+            left, width - right, _f(ty), _f(ty), GRID,
+        ))
+        out.append(format_html(
+            '<text x="{}" y="{}" text-anchor="end" class="audit-axis">{}</text>',
+            left - 8, _f(ty + 4), compact(t),
+        ))
+    zero = y(0)
+    out.append(format_html(
+        '<line x1="{}" x2="{}" y1="{}" y2="{}" stroke="{}" stroke-width="1"/>',
+        left, width - right, _f(zero), _f(zero), BASELINE,
+    ))
+
+    every = max(1, math.ceil(len(rows) / max_labels))
+    for i, r in enumerate(rows):
+        cx = left + slot * (i + 0.5)
+        if i % every == 0:
+            out.append(format_html(
+                '<text x="{}" y="{}" text-anchor="middle" class="audit-axis">{}</text>',
+                _f(cx), height - 10, _label_for(r, bucket),
+            ))
+        values = [_num(v) for v in r["values"]]
+        if not any(values):
+            continue
+        when = r["start"].strftime("%b %Y") if bucket == "month" else r["start"].strftime("%d %b %Y")
+        if bucket == "week":
+            when = f"Week of {when}"
+        parts_text = ", ".join(
+            f"{labels[k] if k < len(labels) else k}: {money(Decimal(str(v)))}"
+            for k, v in enumerate(values) if v
+        )
+        out.append('<g class="audit-bargroup" tabindex="0">')
+        out.append(format_html("<title>{}: {}</title>", when, parts_text))
+        out.append(format_html(
+            '<rect x="{}" y="{}" width="{}" height="{}" fill="transparent"/>',
+            _f(cx - slot / 2), top, _f(slot), plot_h,
+        ))
+        up = down = 0.0
+        for k, v in enumerate(values):
+            if not v:
+                continue
+            if signed:
+                colour = GOOD if v >= 0 else BAD
+            else:
+                colour = colours[k % len(colours)]
+            if v > 0:
+                y0, y1 = y(up + v), y(up)
+                up += v
+            else:
+                y0, y1 = y(down), y(down + v)
+                down += v
+            h = max(y1 - y0, 1.5)
+            out.append(format_html(
+                '<rect x="{}" y="{}" width="{}" height="{}" rx="2" fill="{}" '
+                'stroke="{}" stroke-width="1"/>',
+                _f(cx - bar / 2), _f(y0), _f(bar), _f(h), colour, SURFACE,
+            ))
+        out.append("</g>")
+    out.append("</svg>")
+    return mark_safe("".join(str(p) for p in out))
+
+
 def donut_svg(parts, *, centre_value="", centre_label="", title="", size=200):
     """
     A ring of up to three parts. `parts` are (label, amount) in drawing order;
@@ -323,4 +431,4 @@ def legend(parts):
     ]
 
 
-__all__ = ["candle_svg", "donut_svg", "legend", "nice_ticks", "compact", "escape"]
+__all__ = ["bars_svg", "candle_svg", "donut_svg", "legend", "nice_ticks", "compact", "escape"]

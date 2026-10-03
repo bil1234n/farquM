@@ -442,7 +442,7 @@ def _validate_unit(value, group, builtin):
 
 
 class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer):
-    financial_fields = ("cost_price", "stock_value")
+    financial_fields = ("cost_price", "stock_value", "your_cost", "cost_used")
     profit_fields = ("margin_percent", "profit_per_unit")
 
     category_name = serializers.CharField(source="category.name", default=None, read_only=True)
@@ -453,6 +453,13 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
     margin_percent = DerivedDecimal()
     stock_value = DerivedDecimal()
     profit_per_unit = DerivedDecimal()
+    # What one unit really costs in the owner's judgement, set in the Audit
+    # (null until he does), and the cost every figure above is worked out
+    # from: his when set, else cost_price. Read-only here on purpose - the
+    # owner's figure is changed through the Audit, which keeps its history
+    # and refuses anybody but him.
+    your_cost = DerivedDecimal(source="audit_cost", allow_null=True)
+    cost_used = DerivedDecimal(source="audit_unit_cost")
     image_url = serializers.SerializerMethodField()
     owner_name = serializers.SerializerMethodField()
 
@@ -496,6 +503,7 @@ class ProductSerializer(OwnerNameMixin, FinancialFieldsMixin, serializers.ModelS
             "category", "category_name", "supplier", "supplier_name",
             "unit", "unit_display",
             "cost_price", "selling_price", "profit_per_unit", "margin_percent",
+            "your_cost", "cost_used",
             "stock_quantity", "low_stock_threshold", "stock_value",
             "stock_status", "stock_status_label", "is_active",
             "image", "image_url", "has_image",

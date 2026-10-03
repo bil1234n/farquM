@@ -249,6 +249,8 @@ class AuditView(PermissionRequiredMixin, TemplateView):
     template_name = "reports/audit.html"
 
     def get_context_data(self, **kwargs):
+        from django.utils.http import urlencode
+
         from .audit import RANGES, build_report, resolve_period
         from .charts import (
             BAD, GOOD, LINE_PRICE, LINE_SUGGESTED, LINE_YOURS, SERIES,
@@ -328,6 +330,10 @@ class AuditView(PermissionRequiredMixin, TemplateView):
             "bad_colour": BAD,
             "series": SERIES,
             "query": {k: v for k, v in q.items() if k in ("range", "date_from", "date_to")},
+            # For the four cards, which open their own pages for the same period.
+            "audit_query": urlencode(
+                {k: v for k, v in q.items() if k in ("range", "date_from", "date_to") and v}
+            ),
         })
         return ctx
 
@@ -336,6 +342,143 @@ def _compact_money(value):
     from .charts import compact
 
     return compact(value)
+
+
+class AuditDetailView(PermissionRequiredMixin, TemplateView):
+    """
+    One Audit card opened up - /reports/audit/money-out/ and its three
+    siblings. The figures come from reports/audit_detail.py, which the phone
+    uses too, and each page's total is its card's total.
+    """
+
+    required_permission = "costing.view"
+    template_name = "reports/audit_detail.html"
+
+    HEADINGS = {
+        "money-out": "Money out",
+        "money-in": "Money in",
+        "profit": "Profit after all costs",
+        "on-hand": "On hand now",
+    }
+    #: The keys of the bars and rings, as the page says them.
+    KEY_LABELS = {
+        "materials": "Materials and stock",
+        "wages": "Wages",
+        "running": "Running costs",
+        "till": "Paid at the till",
+        "repaid": "Debts paid off",
+        "profit": "Profit",
+        "products": "Finished products",
+        "owed": "Owed by customers",
+    }
+    #: What each line of a list is.
+    TYPE_LABELS = {
+        "delivery": "Delivery received",
+        "returned": "Returned to supplier",
+        "opening": "Opening balance",
+        "stock": "Stock bought",
+        "stock_returned": "Stock returned to supplier",
+        "stock_opening": "Opening stock",
+        "expense": "Expense",
+        "wage": "Staff payment",
+        "sale": "Sale",
+        "repayment": "Debt payment",
+    }
+
+    def get(self, request, *args, **kwargs):
+        from django.http import Http404
+
+        from .audit_detail import KINDS
+
+        if kwargs.get("kind") not in KINDS:
+            raise Http404("No such Audit page.")
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        from django.utils.http import urlencode
+
+        from .audit import RANGES, resolve_period
+        from .audit_detail import build_detail
+        from .charts import BAD, GOOD, SERIES, bars_svg, donut_svg, legend
+
+        ctx = super().get_context_data(**kwargs)
+        kind = kwargs["kind"]
+        q = self.request.GET
+        period = resolve_period(
+            q.get("range", ""), q.get("date_from", ""), q.get("date_to", ""),
+            user=self.request.user,
+        )
+        detail = build_detail(self.request.user, period, kind)
+
+        # Bars, in the order of the detail's keys (which is the colour order).
+        keys = detail.get("series_keys") or []
+        labels = [self.KEY_LABELS.get(k, k) for k in keys]
+        signed = kind == "profit"
+        chart = chart_narrow = ""
+        if detail.get("series"):
+            chart = bars_svg(
+                detail["series"], labels=labels, signed=signed, bucket=period.bucket,
+                title=self.HEADINGS[kind],
+            )
+            chart_narrow = bars_svg(
+                detail["series"], labels=labels, signed=signed, bucket=period.bucket,
+                title=self.HEADINGS[kind], width=360, height=220, max_labels=4,
+            )
+        series_legend = (
+            [{"label": "Profit", "colour": GOOD}, {"label": "Loss", "colour": BAD}]
+            if signed else
+            [{"label": label, "colour": SERIES[i % len(SERIES)]} for i, label in enumerate(labels)]
+        )
+
+        ring = ring_legend = ""
+        parts = [
+            (self.KEY_LABELS.get(p["key"], p["key"]), p["amount"])
+            for p in detail.get("parts") or []
+        ]
+        if kind == "on-hand":
+            parts[0] = ("Raw materials", parts[0][1])
+        if parts:
+            ring = donut_svg(
+                parts, centre_value=_compact_money(detail["total"]),
+                centre_label="total", title=self.HEADINGS[kind],
+            )
+            ring_legend = legend(parts)
+
+        def shares(rows, field):
+            top = max((r[field] for r in rows), default=0)
+            return [
+                {**r, "share": round(float(r[field]) / float(top) * 100) if top and r[field] > 0 else 0}
+                for r in rows
+            ]
+
+        for row in detail.get("items") or []:
+            row["type_label"] = self.TYPE_LABELS.get(row["type"], row["type"])
+        for row in (detail.get("not_counted") or {}).get("items") or []:
+            row["type_label"] = self.TYPE_LABELS.get(row["type"], row["type"])
+
+        query = {k: v for k, v in q.items() if k in ("range", "date_from", "date_to") and v}
+        ctx.update({
+            "kind": kind,
+            "heading": self.HEADINGS[kind],
+            "detail": detail,
+            "period": period,
+            "ranges": list(RANGES),
+            "chart": chart,
+            "chart_narrow": chart_narrow,
+            "series_legend": series_legend,
+            "key_labels": labels,
+            "ring": ring,
+            "ring_legend": ring_legend,
+            "categories": shares(detail.get("categories") or [], "total"),
+            "running_categories": shares(detail.get("running_categories") or [], "total"),
+            "by_person": shares(detail.get("by_person") or [], "amount"),
+            "query": query,
+            "audit_query": urlencode(query),
+            "series_colours": SERIES,
+            "good_colour": GOOD,
+            "bad_colour": BAD,
+        })
+        return ctx
 
 
 def audit_set_cost(request, pk):

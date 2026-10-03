@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from core.scoping import scoped
 from inventory.models import Product
 from reports.audit import CostError, build_report, resolve_period, set_your_cost
+from reports.audit_detail import KINDS, build_detail
 
 from .permissions import requires
 
@@ -51,6 +52,23 @@ def audit_report(request):
     )
     report = build_report(request.user, period, product_id=q.get("product"))
     return Response(jsonable(report))
+
+
+@api_view(["GET"])
+@permission_classes([requires("costing.view")])
+def audit_detail(request, kind):
+    """
+    One Audit card opened up: money-out, money-in, profit or on-hand, for the
+    same period parameters as the Audit itself. Its total is the card's total.
+    """
+    if kind not in KINDS:
+        return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+    q = request.query_params
+    period = resolve_period(
+        q.get("range", ""), q.get("date_from", ""), q.get("date_to", ""),
+        user=request.user,
+    )
+    return Response(jsonable(build_detail(request.user, period, kind)))
 
 
 def _history(product, limit=10):

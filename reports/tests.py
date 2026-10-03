@@ -451,3 +451,258 @@ class ApiShapeTests(AuditTestBase):
         self.assertEqual(data["cost_product_id"], self.block.pk)
         data = self.as_(self.owner).get("/api/audit/?range=30d&product=99999").json()
         self.assertEqual(data["cost_product_id"], self.block.pk)
+
+
+# ---------------------------------------------------------------------------
+# Money out: what was deleted with its goods still in it is not money spent
+# ---------------------------------------------------------------------------
+class DeletedStockTests(AuditTestBase):
+    """
+    An owner tried things out with a raw material that turned out to be a
+    mistake - received a big delivery, then deleted the material. The Audit
+    went on counting the delivery as money spent: 400,000 he never spent.
+    """
+
+    def money_out(self):
+        return self.report()["money_out"]
+
+    def test_a_deleted_material_still_holding_its_delivery_is_not_counted(self):
+        before = self.money_out()
+        test = RawMaterial.objects.create(name="Test cement", code="TST", unit="KG",
+                                          unit_cost=D("4000.00"), owner=self.manager)
+        yard.receive_material(test, D("100"), user=self.manager, unit_cost=D("4000.00"))
+        self.assertEqual(self.money_out()["materials"], before["materials"] + D("400000.00"))
+
+        test.soft_delete(user=self.owner)
+        after = self.money_out()
+        self.assertEqual(after["materials"], before["materials"])
+        self.assertEqual(after["total"], before["total"])
+        self.assertEqual(after["not_counted"], D("400000.00"))
+        self.assertEqual(after["not_counted_count"], 1)
+        # The cash candles agree with the card.
+        report = self.report()
+        self.assertEqual(
+            sum((c["money_out"] for c in report["cash_candles"]), D("0")), after["total"]
+        )
+
+    def test_what_was_used_before_the_delete_still_counts(self):
+        before = self.money_out()["materials"]
+        old = RawMaterial.objects.create(name="Old sand", code="OLD", unit="M3",
+                                         unit_cost=D("100.00"), owner=self.manager)
+        yard.receive_material(old, D("10"), user=self.manager, unit_cost=D("100.00"))
+        yard.receive_material(old, D("5"), user=self.manager, unit_cost=D("120.00"))
+        yard.waste_material(old, D("8"), user=self.manager, reason="Washed away")
+        old.soft_delete(user=self.owner)
+        # 7 were left: the newest delivery (5 at 120) and 2 of the first.
+        # What was used - 8 at 100 - was really bought.
+        out = self.money_out()
+        self.assertEqual(out["materials"], before + D("800.00"))
+        self.assertEqual(out["not_counted"], D("800.00"))  # 5 x 120 + 2 x 100
+
+    def test_a_material_used_up_and_then_deleted_counts_in_full(self):
+        before = self.money_out()["materials"]
+        gone = RawMaterial.objects.create(name="Pigment", code="PIG", unit="KG",
+                                          unit_cost=D("50.00"), owner=self.manager)
+        yard.receive_material(gone, D("4"), user=self.manager, unit_cost=D("50.00"))
+        yard.waste_material(gone, D("4"), user=self.manager)
+        gone.soft_delete(user=self.owner)
+        self.assertEqual(self.money_out()["materials"], before + D("200.00"))
+        self.assertEqual(self.money_out()["not_counted"], D("0.00"))
+
+    def test_a_deleted_product_still_holding_its_restock_is_not_counted(self):
+        from inventory.services import restock
+
+        before = self.money_out()["total"]
+        trial = Product.objects.create(name="Trial pavers", sku="TP1", selling_price=D("10"),
+                                       cost_price=D("6.00"), owner=self.manager)
+        restock(trial, 50, user=self.manager, unit_cost=D("6.00"))
+        self.assertEqual(self.money_out()["total"], before + D("300.00"))
+        trial.soft_delete(user=self.owner)
+        self.assertEqual(self.money_out()["total"], before)
+
+    def test_a_switched_off_material_still_counts_on_hand(self):
+        before = self.report()["holdings"]["materials_value"]
+        RawMaterial.objects.filter(pk=self.sand.pk).update(is_active=False)
+        self.assertEqual(self.report()["holdings"]["materials_value"], before)
+
+    def test_goods_taken_back_for_a_debt_are_not_money_in(self):
+        before = self.report()["money_in"]["total"]
+        record_repayment(debt=self.credit_sale.debt_record, amount=D("50.00"),
+                         user=self.sales, method="GOODS_RETURN")
+        self.assertEqual(self.report()["money_in"]["total"], before)
+
+
+# ---------------------------------------------------------------------------
+# The owner's cost on the product pages
+# ---------------------------------------------------------------------------
+class OwnersCostOnProductsTests(AuditTestBase):
+    def setUp(self):
+        super().setUp()
+        set_your_cost(self.block, "30", user=self.owner)
+        self.block.refresh_from_db()
+
+    def test_profit_margin_and_stock_value_use_it(self):
+        # 10 blocks on the shelf, sold at 32, the owner says they cost 30.
+        self.assertEqual(self.block.cost_price, D("23.70"))
+        self.assertEqual(self.block.profit_per_unit, D("2.00"))
+        self.assertEqual(self.block.margin_percent, D("6.25"))
+        self.assertEqual(self.block.stock_value, D("300.00"))
+
+    def test_the_stock_is_valued_the_same_everywhere(self):
+        from reports.selectors import inventory_valuation
+
+        self.assertEqual(inventory_valuation(user=self.owner)["cost_value"], D("300.00"))
+        self.assertEqual(self.report()["holdings"]["products_value"], D("300.00"))
+        from django.db.models import Sum
+
+        # As the products list adds it up.
+        total = (
+            Product.objects.alive().filter(pk=self.block.pk)
+            .with_stock_value().aggregate(t=Sum("stock_value"))["t"]
+        )
+        self.assertEqual(total, D("300.00"))
+
+    def test_the_api_sends_both_costs(self):
+        data = self.as_(self.owner).get(f"/api/products/{self.block.pk}/").json()
+        self.assertEqual(data["your_cost"], "30.00")
+        self.assertEqual(data["cost_used"], "30.00")
+        self.assertEqual(data["cost_price"], "23.70")
+        self.assertEqual(data["profit_per_unit"], "2.00")
+        self.assertEqual(data["stock_value"], "300.00")
+        # Nobody who may not see costs is told the owner's either.
+        hidden = self.as_(self.sales).get(f"/api/products/{self.block.pk}/").json()
+        self.assertNotIn("your_cost", hidden)
+        self.assertNotIn("cost_used", hidden)
+        # And it cannot be set through the product: that is the Audit's job.
+        self.as_(self.owner).patch(
+            f"/api/products/{self.block.pk}/", {"your_cost": "1.00"}, content_type="application/json"
+        )
+        self.block.refresh_from_db()
+        self.assertEqual(self.block.audit_cost, D("30.00"))
+
+    def test_without_it_the_cost_price_is_used(self):
+        set_your_cost(self.block, None, user=self.owner)
+        data = self.as_(self.owner).get(f"/api/products/{self.block.pk}/").json()
+        self.assertIsNone(data["your_cost"])
+        self.assertEqual(data["cost_used"], "23.70")
+        self.assertEqual(data["profit_per_unit"], "8.30")
+
+    def test_the_web_page_says_which_cost_it_is(self):
+        page = self.as_(self.owner).get(f"/inventory/products/{self.block.pk}/").content.decode()
+        self.assertIn("Your cost", page)
+        self.assertIn("Batch cost", page)
+
+    def test_a_sale_still_records_the_batch_cost(self):
+        """The profit report takes running costs off separately; the owner's
+        figure already has them in it, so a sale must not copy it."""
+        sale = create_sale(
+            user=self.sales, customer=self.customer,
+            cart=[{"product": self.block, "quantity": 1, "unit_price": D("32.00")}],
+            amount_paid=D("32.00"), payment_method="CASH",
+        )
+        self.assertEqual(sale.items.get().unit_cost, D("23.70"))
+
+
+# ---------------------------------------------------------------------------
+# The four cards, opened up
+# ---------------------------------------------------------------------------
+class DetailTests(AuditTestBase):
+    def detail(self, kind, user=None, key="30d"):
+        from .audit_detail import build_detail
+
+        user = user or self.owner
+        return build_detail(user, resolve_period(key, user=user), kind)
+
+    def test_each_page_adds_up_to_its_card(self):
+        report = self.report()
+        self.assertEqual(self.detail("money-out")["total"], report["money_out"]["total"])
+        self.assertEqual(self.detail("money-in")["total"], report["money_in"]["total"])
+        self.assertEqual(self.detail("profit")["total"], report["profit"]["profit"])
+        self.assertEqual(self.detail("on-hand")["total"], report["holdings"]["total"])
+
+    def test_money_out_lists_every_payment(self):
+        d = self.detail("money-out")
+        # Two deliveries; rent, a wage, and the batch's labour and electricity.
+        self.assertEqual(d["items_count"], 6)
+        self.assertEqual(sum((D(str(i["amount"])) for i in d["items"]), D("0")), d["total"])
+        self.assertEqual(sum((r["total"] for r in d["series"]), D("0")), d["total"])
+        self.assertEqual([m["name"] for m in d["by_material"]], ["Cement", "Sand"])
+        self.assertEqual(d["by_material"][0]["amount"], D("18000.00"))
+        types = {i["type"] for i in d["items"]}
+        self.assertEqual(types, {"delivery", "expense", "wage"})
+        wage = next(i for i in d["items"] if i["type"] == "wage")
+        self.assertEqual(wage["party"], "Tesfaye")
+        self.assertEqual(wage["by"], "mary")
+        self.assertEqual(d["not_counted"]["count"], 0)
+
+    def test_money_in_lists_every_payment(self):
+        d = self.detail("money-in")
+        self.assertEqual(d["items_count"], 3)  # two sales and a repayment
+        self.assertEqual(d["figures"]["at_till"], D("1380.00"))
+        self.assertEqual(d["figures"]["repaid"], D("120.00"))
+        self.assertEqual(d["figures"]["on_credit"], D("220.00"))
+        self.assertEqual(sum((r["total"] for r in d["series"]), D("0")), d["total"])
+        self.assertEqual(d["by_person"][0]["name"], "sam")
+        self.assertEqual(d["by_person"][0]["amount"], D("1500.00"))
+
+    def test_the_profit_bars_add_up_to_the_profit(self):
+        d = self.detail("profit")
+        self.assertEqual(sum((r["total"] for r in d["series"]), D("0")), d["total"])
+        self.assertEqual(sum((r["revenue"] for r in d["series"]), D("0")), D("1600.00"))
+        self.assertEqual([s["amount"] for s in d["steps"]],
+                         [D("1600.00"), D("-1185.00"), D("-3000.00"), D("-2585.00")])
+        row = d["products"][0]
+        self.assertEqual((row["sold"], row["revenue"], row["recorded_cost"]),
+                         (50, D("1600.00"), D("1185.00")))
+        self.assertEqual([c["label"] for c in d["running_categories"]],
+                         ["Salaries & wages", "Rent"])
+
+    def test_on_hand_lists_what_is_held_and_owed(self):
+        d = self.detail("on-hand")
+        self.assertEqual(d["figures"]["owed"], D("100.00"))
+        self.assertEqual(len(d["debts"]), 1)
+        self.assertEqual(d["debts"][0]["balance"], D("100.00"))
+        self.assertEqual(d["debts"][0]["customer"], "Abebe")
+        self.assertEqual({m["name"] for m in d["materials"]}, {"Cement", "Sand"})
+
+    def test_the_api(self):
+        owner = self.as_(self.owner)
+        for kind in ("money-out", "money-in", "profit", "on-hand"):
+            r = owner.get(f"/api/audit/detail/{kind}/?range=30d")
+            self.assertEqual(r.status_code, 200, kind)
+            self.assertIsInstance(r.json()["total"], str)
+        data = owner.get("/api/audit/detail/money-out/?range=30d").json()
+        self.assertEqual(data["total"], "30360.00")
+        self.assertEqual(len(data["series"]), 30)
+        dt.datetime.fromisoformat(data["items"][0]["at"])
+        self.assertEqual(owner.get("/api/audit/detail/nonsense/").status_code, 404)
+        self.assertEqual(self.as_(self.manager).get("/api/audit/detail/profit/").status_code, 200)
+        for user in (self.sales, self.keeper):
+            self.assertEqual(self.as_(user).get("/api/audit/detail/profit/").status_code, 403)
+
+    def test_the_web_pages(self):
+        owner = self.as_(self.owner)
+        for kind in ("money-out", "money-in", "profit", "on-hand"):
+            page = owner.get(f"/reports/audit/{kind}/?range=30d")
+            self.assertEqual(page.status_code, 200, kind)
+        page = owner.get("/reports/audit/money-out/?range=30d").content.decode()
+        self.assertIn('class="audit-chart"', page)
+        self.assertIn("Every payment out", page)
+        self.assertIn("Tesfaye", page)
+        self.assertEqual(owner.get("/reports/audit/nonsense/").status_code, 404)
+        self.assertNotEqual(self.as_(self.sales).get("/reports/audit/profit/").status_code, 200)
+        # The Audit's cards lead here, for the same period.
+        audit = owner.get("/reports/audit/?range=90d").content.decode()
+        self.assertIn('href="/reports/audit/money-out/?range=90d"', audit)
+
+    def test_deleted_deliveries_are_listed_apart(self):
+        test = RawMaterial.objects.create(name="Test block mix", code="TBM", unit="KG",
+                                          unit_cost=D("10.00"), owner=self.manager)
+        yard.receive_material(test, D("7"), user=self.manager, unit_cost=D("10.00"))
+        test.soft_delete(user=self.owner)
+        d = self.detail("money-out")
+        self.assertEqual(d["not_counted"]["count"], 1)
+        self.assertEqual(d["not_counted"]["items"][0]["title"], "Test block mix")
+        self.assertEqual(d["not_counted"]["amount"], D("70.00"))
+        page = self.as_(self.owner).get("/reports/audit/money-out/?range=30d").content.decode()
+        self.assertIn("not-counted", page)

@@ -55,9 +55,24 @@
   {% if user.can_view_financials %}
     <div class="col-6 col-lg-3">
       <div class="stat-card accent-info">
-        <div class="label">Cost Price <span class="badge text-bg-secondary">Admin</span></div>
-        <div class="value money">{{ product.cost_price|money }}</div>
-        <div class="hint">Profit {{ product.profit_per_unit|money }} / unit</div>
+        {% comment %}
+          The owner's own figure from the Audit, when he has set one: every
+          margin and value on this page is worked out from it, so the card
+          says which cost it is and keeps the batch cost beside it.
+        {% endcomment %}
+        {% if product.has_your_cost %}
+          <div class="label"><span>Your cost</span> <span class="badge text-bg-secondary">Admin</span></div>
+          <div class="value money">{{ product.audit_cost|money }}</div>
+          <div class="hint"><span>Batch cost</span> {{ product.cost_price|money }}</div>
+          <div class="hint"><span>Profit per unit</span> {{ product.profit_per_unit|money }}</div>
+          {% if user|can:"costing.view" %}
+            <div class="hint"><a href="{% url 'reports:audit' %}?product={{ product.pk }}#cost"><span>Set in the Audit</span></a></div>
+          {% endif %}
+        {% else %}
+          <div class="label">Cost Price <span class="badge text-bg-secondary">Admin</span></div>
+          <div class="value money">{{ product.cost_price|money }}</div>
+          <div class="hint"><span>Profit per unit</span> {{ product.profit_per_unit|money }}</div>
+        {% endif %}
       </div>
     </div>
     <div class="col-6 col-lg-3">

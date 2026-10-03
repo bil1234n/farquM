@@ -1,0 +1,446 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ heading }}{% endblock %}
+{% block page_title %}{{ heading }}{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    <a href="{% url 'reports:audit' %}{% if audit_query %}?{{ audit_query }}{% endif %}"><span>Audit</span></a>
+    {% if kind != "on-hand" %}
+      &middot; <span>{{ detail.period.start|date:"d M Y" }}</span> &ndash; <span>{{ detail.period.end|date:"d M Y" }}</span>
+    {% else %}
+      &middot; <span>{{ detail.as_of|date:"d M Y" }}</span>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'reports:audit' %}{% if audit_query %}?{{ audit_query }}{% endif %}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i> <span>Back to the Audit</span>
+  </a>
+  <button onclick="window.print()" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-printer me-1"></i> <span>Print</span>
+  </button>
+{% endblock %}
+
+{% block content %}
+{% comment %}
+  One Audit card opened up. Figures from reports/audit_detail.py - the page's
+  total is the card's total. As on the Audit page, every phrase is its own
+  element: the browser translates whole text nodes, and a sentence with a
+  number in the middle would arrive as fragments no dictionary entry matches.
+{% endcomment %}
+
+{# ---------- The period (what is on hand has none: it is now) ---------- #}
+{% if kind != "on-hand" %}
+<form method="get" class="filter-bar audit-filter no-print">
+  <div class="d-flex flex-wrap align-items-end gap-2">
+    <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Period">
+      {% for key in ranges %}
+        <a href="?range={{ key }}"
+           class="btn {% if detail.period.key == key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+          {% if key == "30d" %}30 days{% elif key == "90d" %}3 months{% elif key == "365d" %}12 months{% else %}All time{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+    <div class="d-flex align-items-end gap-2 ms-lg-auto flex-wrap">
+      <div><label class="form-label" for="audit_from">From</label>
+        <input id="audit_from" type="date" name="date_from" value="{{ detail.period.start|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+      <div><label class="form-label" for="audit_to">To</label>
+        <input id="audit_to" type="date" name="date_to" value="{{ detail.period.end|date:'Y-m-d' }}" class="form-control form-control-sm"></div>
+      <button class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i> <span>Apply</span></button>
+    </div>
+  </div>
+</form>
+{% endif %}
+
+{# ---------- The total, and what it is made of ---------- #}
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+      <div>
+        <div class="text-muted-sm"><span>{{ heading }}</span></div>
+        <div class="audit-total money {% if kind == 'profit' and detail.total < 0 %}text-danger{% endif %}">{{ detail.total|money }}</div>
+      </div>
+      {% if detail.change is not None %}
+        {% if kind == "money-out" %}
+          <div class="audit-delta {% if detail.change > 0 %}is-bad{% elif detail.change < 0 %}is-good{% endif %}">
+        {% else %}
+          <div class="audit-delta {% if detail.change > 0 %}is-good{% elif detail.change < 0 %}is-bad{% endif %}">
+        {% endif %}
+          <i class="bi {% if detail.change > 0 %}bi-arrow-up-right{% elif detail.change < 0 %}bi-arrow-down-right{% else %}bi-dash{% endif %}"></i>
+          <span>{{ detail.change }}%</span> <span>vs the period before</span>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="audit-figures">
+      {% with f=detail.figures %}
+      {% if kind == "money-out" %}
+        <div><div class="label"><span>Raw materials bought</span></div><div class="amount money">{{ f.materials|money }}</div></div>
+        {% if f.bought_in %}<div><div class="label"><span>Stock bought or brought in</span></div><div class="amount money">{{ f.bought_in|money }}</div></div>{% endif %}
+        <div><div class="label"><span>Wages</span></div><div class="amount money">{{ f.wages|money }}</div></div>
+        <div><div class="label"><span>Running costs</span></div><div class="amount money">{{ f.running|money }}</div></div>
+        {% if f.in_batches %}<div><div class="label"><span>Paid against batches</span></div><div class="amount money">{{ f.in_batches|money }}</div></div>{% endif %}
+        {% if f.not_counted %}<div><div class="label"><span>Not counted</span></div><div class="amount money text-muted">{{ f.not_counted|money }}</div></div>{% endif %}
+      {% elif kind == "money-in" %}
+        <div><div class="label"><span>Paid at the till</span></div><div class="amount money">{{ f.at_till|money }}</div></div>
+        <div><div class="label"><span>Debts paid off</span></div><div class="amount money">{{ f.repaid|money }}</div></div>
+        <div><div class="label"><span>Sales</span></div><div class="amount">{{ f.sales }}</div></div>
+        <div><div class="label"><span>Debt payments</span></div><div class="amount">{{ f.repayments }}</div></div>
+        {% if f.on_credit %}<div><div class="label"><span>Sold on credit, not paid yet</span></div><div class="amount money">{{ f.on_credit|money }}</div></div>{% endif %}
+      {% elif kind == "profit" %}
+        <div><div class="label"><span>Sales</span></div><div class="amount money">{{ f.revenue|money }}</div></div>
+        <div><div class="label"><span>Cost of what was sold</span></div><div class="amount money">{{ f.cost_of_sold|money }}</div></div>
+        <div><div class="label"><span>Running costs</span></div><div class="amount money">{{ f.running_costs|money }}</div></div>
+        {% if f.margin is not None %}<div><div class="label"><span>Margin</span></div><div class="amount">{{ f.margin }}%</div></div>{% endif %}
+        {% if f.at_your_costs is not None %}<div><div class="label"><span>Profit at your cost</span></div><div class="amount money">{{ f.at_your_costs|money }}</div></div>{% endif %}
+        {% if f.outstanding %}<div><div class="label"><span>Still owed on these sales</span></div><div class="amount money">{{ f.outstanding|money }}</div></div>{% endif %}
+      {% else %}
+        <div><div class="label"><span>Raw materials</span></div><div class="amount money">{{ f.materials_value|money }}</div></div>
+        <div><div class="label"><span>Finished products</span></div><div class="amount money">{{ f.products_value|money }}</div></div>
+        <div><div class="label"><span>Could sell for</span></div><div class="amount money">{{ f.products_retail|money }}</div></div>
+        <div><div class="label"><span>Owed by customers</span></div><div class="amount money">{{ f.owed|money }}</div></div>
+      {% endif %}
+      {% endwith %}
+    </div>
+  </div>
+</div>
+
+{% if kind == "money-out" and detail.not_counted.count %}
+  <div class="alert alert-warning small">
+    <i class="bi bi-info-circle me-1"></i>
+    <strong><span>Not counted</span>: <span class="money">{{ detail.not_counted.amount|money }}</span></strong>
+    <span>These deliveries are of raw materials or products that were deleted with the goods still in them, so they are not counted as money spent.</span>
+    <span>Write stock off before deleting an item if the goods were really lost.</span>
+    <a href="#not-counted"><span>See them</span></a>
+  </div>
+{% endif %}
+
+{# ---------- By day, and the shares ---------- #}
+<div class="row g-3 mb-3">
+  {% if kind != "on-hand" %}
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span><i class="bi bi-bar-chart me-1"></i>
+          {% if kind == "money-out" %}<span>Money out over time</span>{% elif kind == "money-in" %}<span>Money in over time</span>{% else %}<span>Profit over time</span>{% endif %}
+        </span>
+        <span class="text-muted-sm">
+          {% if detail.period.bucket == "day" %}<span>One bar per day</span>{% elif detail.period.bucket == "week" %}<span>One bar per week</span>{% else %}<span>One bar per month</span>{% endif %}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if chart %}
+          <div class="d-none d-sm-block">{{ chart }}</div>
+          <div class="d-sm-none">{{ chart_narrow }}</div>
+          <div class="audit-legend">
+            {% for item in series_legend %}
+              <span><svg width="12" height="12" aria-hidden="true"><rect width="12" height="12" rx="3" fill="{{ item.colour }}"/></svg>
+                {% if item.label == "Materials and stock" %}<span>Materials and stock</span>{% elif item.label == "Wages" %}<span>Wages</span>{% elif item.label == "Running costs" %}<span>Running costs</span>{% elif item.label == "Paid at the till" %}<span>Paid at the till</span>{% elif item.label == "Debts paid off" %}<span>Debts paid off</span>{% elif item.label == "Profit" %}<span>Profit</span>{% else %}<span>Loss</span>{% endif %}
+              </span>
+            {% endfor %}
+          </div>
+          <details class="mt-2">
+            <summary class="text-muted-sm"><span>Show as a table</span></summary>
+            <div class="table-responsive mt-2">
+              <table class="table table-sm">
+                <thead><tr><th>Period</th>
+                  {% if kind == "profit" %}
+                    <th class="num">Sales</th><th class="num">Cost of what was sold</th><th class="num">Running costs</th><th class="num">Profit</th>
+                  {% else %}
+                    {% for label in key_labels %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">Total</th>
+                  {% endif %}
+                </tr></thead>
+                <tbody>
+                  {% for r in detail.series %}
+                    {% if r.total or r.revenue or r.cost or r.running %}
+                      <tr><td>{{ r.start|date:"d M Y" }}</td>
+                        {% if kind == "profit" %}
+                          <td class="num money">{{ r.revenue|money }}</td><td class="num money">{{ r.cost|money }}</td>
+                          <td class="num money">{{ r.running|money }}</td>
+                          <td class="num money {% if r.total < 0 %}text-danger{% endif %}">{{ r.total|money }}</td>
+                        {% else %}
+                          {% for v in r.values %}<td class="num money">{{ v|money }}</td>{% endfor %}
+                          <td class="num money fw-semibold">{{ r.total|money }}</td>
+                        {% endif %}
+                      </tr>
+                    {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        {% else %}
+          <div class="empty-state"><i class="bi bi-bar-chart"></i><span>Nothing in this period.</span></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="{% if kind == 'on-hand' %}col-lg-5{% else %}col-lg-4{% endif %}">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-pie-chart me-1"></i>
+        {% if kind == "profit" %}<span>From sales to profit</span>{% elif kind == "on-hand" %}<span>What the business holds</span>{% elif kind == "money-in" %}<span>Where the money came from</span>{% else %}<span>Where the money went</span>{% endif %}
+      </div>
+      <div class="card-body {% if kind != 'profit' %}audit-ring{% endif %}">
+        {% if kind == "profit" %}
+          {% for step in detail.steps %}
+            <div class="audit-step">
+              <span>{% if step.key == "revenue" %}<span>Sales</span>{% elif step.key == "cost_of_sold" %}<span>Less the cost of what was sold</span>{% elif step.key == "running" %}<span>Less running costs</span>{% else %}<span>Profit after all costs</span>{% endif %}</span>
+              <span class="money {% if step.amount < 0 %}text-danger{% endif %}">{{ step.amount|money }}</span>
+            </div>
+          {% endfor %}
+        {% else %}
+          {{ ring }}
+          <ul class="audit-key list-unstyled">
+            {% for part in ring_legend %}
+              <li><span class="swatch" style="background:{{ part.colour }}"></span>
+                <span class="name">{% if part.label == "Materials and stock" %}<span>Materials and stock</span>{% elif part.label == "Wages" %}<span>Wages</span>{% elif part.label == "Running costs" %}<span>Running costs</span>{% elif part.label == "Paid at the till" %}<span>Paid at the till</span>{% elif part.label == "Debts paid off" %}<span>Debts paid off</span>{% elif part.label == "Raw materials" %}<span>Raw materials</span>{% elif part.label == "Finished products" %}<span>Finished products</span>{% else %}<span>Owed by customers</span>{% endif %}</span>
+                <span class="amount money">{{ part.amount|money }}</span>
+                <span class="share">{{ part.share }}%</span></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if kind == "on-hand" %}
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-person-lines-fill me-1"></i><span>Owed by customers</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Customer</th><th>Due</th><th class="num">Balance</th></tr></thead>
+          <tbody>
+            {% for d in detail.debts %}
+              <tr>
+                <td><a href="{% url 'credit:debt_detail' d.id %}">{{ d.customer|default:"-" }}</a><div class="text-muted-sm mono">{{ d.reference }}</div></td>
+                <td>{{ d.due_date|date:"d M Y" }}{% if d.days_overdue %}<div class="text-danger small"><span>Late</span> {{ d.days_overdue }}</div>{% endif %}</td>
+                <td class="num money">{{ d.balance|money }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="3"><div class="empty-state py-3"><span>Nobody owes anything.</span></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{# ---------- Breakdowns ---------- #}
+{% if kind == "money-out" %}
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-boxes me-1"></i><span>Raw materials bought</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Material</th><th class="num">Quantity</th><th class="num">Deliveries</th><th class="num">Amount</th></tr></thead>
+          <tbody>
+            {% for m in detail.by_material %}
+              <tr><td>{{ m.name }}</td>
+                <td class="num">{{ m.quantity|floatformat:"-3" }} <span class="text-muted-sm">{{ m.unit_display }}</span></td>
+                <td class="num">{{ m.count }}</td><td class="num money">{{ m.amount|money }}</td></tr>
+            {% empty %}
+              <tr><td colspan="4"><div class="empty-state py-3"><span>No raw materials bought in this period.</span></div></td></tr>
+            {% endfor %}
+            {% for p in detail.by_product %}
+              <tr><td>{{ p.name }} <span class="badge text-bg-light border"><span>Stock bought</span></span></td>
+                <td class="num">{{ p.quantity|floatformat:"-3" }} <span class="text-muted-sm">{{ p.unit_display }}</span></td>
+                <td class="num">{{ p.count }}</td><td class="num money">{{ p.amount|money }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-list-ol me-1"></i><span>Expenses by category</span></div>
+      <div class="card-body">
+        {% for c in categories %}
+          <div class="audit-bar">
+            <div class="d-flex justify-content-between small">
+              <span class="text-truncate me-2">{{ c.label }} <span class="text-muted-sm">&times;{{ c.count }}</span></span>
+              <span class="money">{{ c.total|money }}</span>
+            </div>
+            <div class="track"><span style="width:{{ c.share }}%;background:{{ series_colours.1 }}"></span></div>
+          </div>
+        {% empty %}
+          <div class="empty-state py-4"><i class="bi bi-wallet2"></i><span>No expenses in this period.</span></div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% elif kind == "money-in" %}
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-people me-1"></i><span>Who took the money</span></div>
+  <div class="card-body">
+    {% for p in by_person %}
+      <div class="audit-bar">
+        <div class="d-flex justify-content-between small">
+          <span class="text-truncate me-2">{{ p.name }} <span class="text-muted-sm">&times;{{ p.count }}</span></span>
+          <span class="money">{{ p.amount|money }}</span>
+        </div>
+        <div class="track"><span style="width:{{ p.share }}%;background:{{ series_colours.0 }}"></span></div>
+      </div>
+    {% empty %}
+      <div class="empty-state py-4"><i class="bi bi-cash-coin"></i><span>No money came in during this period.</span></div>
+    {% endfor %}
+  </div>
+</div>
+{% elif kind == "profit" %}
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-table me-1"></i><span>Profit by product</span></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 audit-table">
+      <thead><tr>
+        <th>Product</th><th class="num">Sold</th><th class="num">Sales</th><th class="num">Recorded cost</th>
+        <th class="num">Profit</th><th class="num">Margin</th><th class="num">Profit at your cost</th>
+      </tr></thead>
+      <tbody>
+        {% for r in detail.products %}
+          <tr>
+            <td><div class="fw-semibold">{{ r.name }}</div></td>
+            <td class="num">{{ r.sold }} <span class="text-muted-sm">{{ r.unit_display }}</span></td>
+            <td class="num money">{{ r.revenue|money }}</td>
+            <td class="num money">{{ r.recorded_cost|money }}</td>
+            <td class="num money {% if r.profit_recorded < 0 %}text-danger{% endif %}">{{ r.profit_recorded|money }}</td>
+            <td class="num">{% if r.margin_recorded is not None %}{{ r.margin_recorded }}%{% else %}-{% endif %}</td>
+            <td class="num money {% if r.profit_at_your_cost is not None and r.profit_at_your_cost < 0 %}text-danger{% endif %}">{% if r.profit_at_your_cost is not None %}{{ r.profit_at_your_cost|money }}{% else %}<span class="text-muted">Not set</span>{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-receipt"></i><span>Nothing was sold in this period.</span></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer text-muted-sm">
+    <span>Profit here is sales less the cost recorded on each sale. Running costs are taken off the whole business, not product by product.</span>
+  </div>
+</div>
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-list-ol me-1"></i><span>Running costs by category</span></div>
+  <div class="card-body">
+    {% for c in running_categories %}
+      <div class="audit-bar">
+        <div class="d-flex justify-content-between small">
+          <span class="text-truncate me-2">{{ c.label }} <span class="text-muted-sm">&times;{{ c.count }}</span></span>
+          <span class="money">{{ c.total|money }}</span>
+        </div>
+        <div class="track"><span style="width:{{ c.share }}%;background:{{ series_colours.2 }}"></span></div>
+      </div>
+    {% empty %}
+      <div class="empty-state py-4"><i class="bi bi-wallet2"></i><span>No running costs in this period.</span></div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<div class="row g-3 mb-3">
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-boxes me-1"></i><span>Raw materials on hand</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Material</th><th class="num">On hand</th><th class="num">Unit cost</th><th class="num">Value</th></tr></thead>
+          <tbody>
+            {% for m in detail.materials %}
+              <tr><td><a href="{% url 'production:material_detail' m.id %}">{{ m.name }}</a>
+                  {% if m.status == "LOW" %} <span class="badge text-bg-warning"><span>Low</span></span>{% endif %}</td>
+                <td class="num">{{ m.quantity|floatformat:"-3" }} <span class="text-muted-sm">{{ m.unit_display }}</span></td>
+                <td class="num money">{{ m.unit_cost|money }}</td><td class="num money">{{ m.value|money }}</td></tr>
+            {% empty %}
+              <tr><td colspan="4"><div class="empty-state py-3"><span>No raw materials in store.</span></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-box-seam me-1"></i><span>Finished products on hand</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Unit cost</th><th class="num">Value at cost</th><th class="num">Could sell for</th></tr></thead>
+          <tbody>
+            {% for p in detail.products %}
+              <tr><td><a href="{% url 'inventory:product_detail' p.id %}">{{ p.name }}</a>
+                  {% if p.your_cost_set %} <span class="badge text-bg-light border"><span>Your cost</span></span>{% else %} <span class="badge text-bg-light border"><span>batch cost</span></span>{% endif %}</td>
+                <td class="num">{{ p.quantity }} <span class="text-muted-sm">{{ p.unit_display }}</span></td>
+                <td class="num money">{{ p.unit_cost|money }}</td>
+                <td class="num money">{{ p.value|money }}</td><td class="num money">{{ p.retail_value|money }}</td></tr>
+            {% empty %}
+              <tr><td colspan="5"><div class="empty-state py-3"><span>No finished products on hand.</span></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ---------- Every line ---------- #}
+{% if kind == "money-out" or kind == "money-in" %}
+<div class="card mb-3">
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <span><i class="bi bi-list-ul me-1"></i>{% if kind == "money-out" %}<span>Every payment out</span>{% else %}<span>Every payment in</span>{% endif %}</span>
+    <span class="text-muted-sm"><span>Newest first</span>{% if detail.items_count > detail.items|length %} &middot; <span>Showing the latest</span> {{ detail.items|length }} / {{ detail.items_count }}{% endif %}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 audit-items">
+      <thead><tr><th>Date</th><th>What</th><th>Details</th><th>By</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for i in detail.items %}
+          <tr>
+            <td class="when">{{ i.at|date:"d M Y" }}{% if i.has_time %}<div>{{ i.at|date:"H:i" }}</div>{% endif %}</td>
+            <td><div class="what">{% if i.title %}{{ i.title }}{% else %}-{% endif %}</div>
+              <div class="sub"><span>{{ i.type_label }}</span>{% if i.in_batch %} &middot; <span>Paid against a batch</span>{% endif %}{% if i.deleted %} &middot; <span>Deleted</span>{% endif %}</div></td>
+            <td class="sub">
+              {% if i.quantity is not None %}{{ i.quantity|floatformat:"-3" }} <span>{{ i.unit_display }}</span> &times; <span class="money">{{ i.unit_cost|money }}</span>{% endif %}
+              {% if i.party %}{{ i.party }}{% endif %}
+              {% if i.type == "sale" and i.on_credit %}<span>On credit</span> <span class="money">{{ i.on_credit|money }}</span>{% endif %}
+              {% if i.method_display %}{{ i.method_display }}{% endif %}
+              {% if i.reference %}<div class="mono">{{ i.reference }}</div>{% endif %}
+              {% if i.note %}<div>{{ i.note }}</div>{% endif %}
+            </td>
+            <td class="sub">{{ i.by|default:"-" }}</td>
+            <td class="num money fw-semibold {% if kind == 'money-in' or i.amount < 0 %}in{% endif %}">{{ i.amount|money }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5"><div class="empty-state py-4"><i class="bi bi-inbox"></i><span>Nothing in this period.</span></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if kind == "money-out" and detail.not_counted.count %}
+<div class="card mb-3" id="not-counted">
+  <div class="card-header"><i class="bi bi-slash-circle me-1"></i><span>Not counted: deliveries of deleted items</span></div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 audit-items">
+      <thead><tr><th>Date</th><th>What</th><th>Details</th><th>By</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for i in detail.not_counted.items %}
+          <tr class="text-muted">
+            <td class="when">{{ i.at|date:"d M Y" }}<div>{{ i.at|date:"H:i" }}</div></td>
+            <td><div class="what">{{ i.title }}</div><div class="sub"><span>{{ i.type_label }}</span> &middot; <span>Deleted</span></div></td>
+            <td class="sub">{{ i.quantity|floatformat:"-3" }} <span>{{ i.unit_display }}</span> &times; <span class="money">{{ i.unit_cost|money }}</span>{% if i.reference %}<div class="mono">{{ i.reference }}</div>{% endif %}</td>
+            <td class="sub">{{ i.by|default:"-" }}</td>
+            <td class="num money">{{ i.amount|money }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

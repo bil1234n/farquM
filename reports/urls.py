@@ -10,6 +10,8 @@ urlpatterns = [
     path("profit/", views.ProfitReportView.as_view(), name="profit_report"),
     path("audit/", views.AuditView.as_view(), name="audit"),
     path("audit/cost/<int:pk>/", views.audit_set_cost, name="audit_set_cost"),
+    # One card opened up: money-out, money-in, profit, on-hand.
+    path("audit/<slug:kind>/", views.AuditDetailView.as_view(), name="audit_detail"),
     path("inventory/", views.InventoryReportView.as_view(), name="inventory_report"),
     path("receivables/", views.ReceivablesReportView.as_view(), name="receivables_report"),
     path("export/sales.csv", views.export_sales_csv, name="export_sales_csv"),

@@ -265,94 +265,224 @@ def _sum(qs, expr):
     return qs.aggregate(t=Coalesce(Sum(expr, output_field=DEC), ZERO, output_field=DEC))["t"]
 
 
-def money_out(user, period: Period, with_events=False):
-    """
-    Everything that left the business, by kind.
+def _names(ids) -> dict:
+    """Display names for a handful of user ids, in one query."""
+    from accounts.models import User
 
-    Raw materials count when they are BOUGHT, not when a batch uses them: a
-    bag of cement is money spent the day it arrives, and counting it again
-    when it is mixed would spend it twice. Opening balances count too - stock
-    the business already had is money the owner put in before the first sale.
+    ids = {i for i in ids if i}
+    if not ids:
+        return {}
+    return {u.pk: u.display_name for u in User.objects.filter(pk__in=ids)}
+
+
+def _left_in_deleted(user):
     """
+    Deliveries whose goods were deleted with the item before anybody used them.
+
+    Deleting a raw material - or a product - that still has stock takes that
+    stock out of the business without a write-off: it is not on hand any more,
+    it was not used and it was not sold. Nearly always the item itself was the
+    mistake (a test entry, a duplicate), and so were its deliveries. Counted as
+    money out, they made the Audit say the owner had spent hundreds of
+    thousands he never spent.
+
+    So the stock left in a deleted item is traced back to the deliveries that
+    brought it in - newest first, because the last in is what was still there -
+    and that much of them is not counted. An item that was used up and only
+    then deleted had nothing left, so every delivery of it still counts: that
+    money really was spent. (Stock that is really lost should be written off
+    before the item is deleted; then it counts, as a loss.)
+
+    Returns two maps of {movement id: quantity not counted}: materials, products.
+    """
+    from inventory.models import MovementType, Product, StockMovement
+    from production.models import MaterialMovement, MaterialMovementType, RawMaterial
+
+    def trace(left, movements, counted_kinds):
+        found = {}
+        for pk, kind, delta in movements:
+            if left <= 0:
+                break
+            take = min(left, delta)
+            if kind in counted_kinds:
+                found[pk] = take
+            left -= take
+        return found
+
+    materials = {}
+    for m in scoped(
+        RawMaterial.objects.filter(is_deleted=True, quantity_in_stock__gt=0), user
+    ):
+        materials.update(trace(
+            m.quantity_in_stock,
+            MaterialMovement.objects.filter(material=m, quantity_delta__gt=0)
+            .order_by("-created_at", "-id")
+            .values_list("pk", "movement_type", "quantity_delta"),
+            {MaterialMovementType.PURCHASE, MaterialMovementType.OPENING},
+        ))
+    products = {}
+    for p in scoped(Product.objects.filter(is_deleted=True, stock_quantity__gt=0), user):
+        products.update(trace(
+            p.stock_quantity,
+            StockMovement.objects.filter(product=p, quantity_delta__gt=0)
+            .order_by("-created_at", "-id")
+            .values_list("pk", "movement_type", "quantity_delta"),
+            {MovementType.RESTOCK, MovementType.OPENING},
+        ))
+    return materials, products
+
+
+#: Ledger rows that are money out, and what each is called on the page.
+MATERIAL_OUT_TYPES = {"PURCHASE": "delivery", "RETURN_OUT": "returned", "OPENING": "opening"}
+STOCK_OUT_TYPES = {"RESTOCK": "stock", "RETURN_OUT": "stock_returned", "OPENING": "stock_opening"}
+
+
+def _out_items(user, period: Period):
+    """
+    Every payment out in the period, one dict each, oldest first.
+
+    The Audit card adds these up and the Money out page lists them - from this
+    one function, so the card and the page can never disagree. Returns
+    (items, not_counted): the second is what _left_in_deleted left out, so the
+    page can say what was left out and why.
+
+    `amount` is positive for money out and negative for money back (goods
+    returned to a supplier), unrounded; the totals round once, at the end.
+    """
+    from core.models import coded_label
     from expenses.models import Expense
-    from inventory.models import MovementType, StockMovement
-    from production.models import MaterialMovement, MaterialMovementType
+    from inventory.models import Product, StockMovement
+    from production.models import MaterialMovement, MaterialUnit
 
     start, end = period.start, period.end
-    events = []
+    skip_materials, skip_products = _left_in_deleted(user)
 
-    expenses = scoped(Expense.objects.between(start, end), user)
-    wages = running = in_batches = ZERO
-    by_category = defaultdict(lambda: [ZERO, 0])
-    for spent_on, amount, category, employee_id, run_id in expenses.values_list(
-        "spent_on", "amount", "category_name", "employee_id", "production_run_id"
-    ):
-        if employee_id:
-            wages += amount
-        else:
-            running += amount
-        if run_id:
-            in_batches += amount
-        row = by_category[category or "-"]
-        row[0] += amount
-        row[1] += 1
-        if with_events:
-            events.append((_moment(spent_on), -amount))
-
-    material_kinds = [
-        MaterialMovementType.PURCHASE,
-        MaterialMovementType.RETURN_OUT,
-        MaterialMovementType.OPENING,
-    ]
-    materials_bought = opening = ZERO
-    for created, kind, delta, unit_cost in scoped(
+    expenses = list(scoped(Expense.objects.between(start, end), user).values(
+        "id", "reference", "spent_on", "amount", "category_name", "payee", "notes",
+        "employee_id", "employee__name", "production_run_id", "recorded_by_id",
+    ))
+    deliveries = list(scoped(
         MaterialMovement.objects.filter(
-            movement_type__in=material_kinds,
+            movement_type__in=list(MATERIAL_OUT_TYPES),
             created_at__date__gte=start, created_at__date__lte=end,
         ),
         user,
-    ).values_list("created_at", "movement_type", "quantity_delta", "unit_cost"):
-        value = (delta or ZERO) * (unit_cost or ZERO)
-        if kind == MaterialMovementType.OPENING:
-            opening += value
-        else:
-            materials_bought += value  # a return to the supplier is negative
-        if with_events and value:
-            events.append((_moment(created), -value))
-
-    stock_kinds = [MovementType.RESTOCK, MovementType.RETURN_OUT, MovementType.OPENING]
-    stock_bought = ZERO
-    for created, kind, delta, unit_cost, cost_price in scoped(
+    ).values(
+        "id", "created_at", "movement_type", "quantity_delta", "unit_cost", "reference",
+        "performed_by_id", "material_id", "material__name", "material__unit",
+        "material__is_deleted",
+    ))
+    stock = list(scoped(
         StockMovement.objects.filter(
-            movement_type__in=stock_kinds,
+            movement_type__in=list(STOCK_OUT_TYPES),
             created_at__date__gte=start, created_at__date__lte=end,
         ),
         user,
-    ).values_list("created_at", "movement_type", "quantity_delta", "unit_cost",
-                  "product__cost_price"):
-        cost = unit_cost if unit_cost is not None else (cost_price or ZERO)
-        value = Decimal(delta or 0) * cost
-        if kind == MovementType.OPENING:
-            opening += value
+    ).values(
+        "id", "created_at", "movement_type", "quantity_delta", "unit_cost", "reference",
+        "performed_by_id", "product_id", "product__name", "product__unit",
+        "product__is_deleted", "product__cost_price",
+    ))
+    names = _names(
+        [r["recorded_by_id"] for r in expenses]
+        + [r["performed_by_id"] for r in deliveries]
+        + [r["performed_by_id"] for r in stock]
+    )
+
+    items, not_counted = [], []
+    for r in expenses:
+        staff = bool(r["employee_id"])
+        items.append({
+            "id": r["id"], "moment": _moment(r["spent_on"]), "day": r["spent_on"],
+            "has_time": False,
+            "kind": "wages" if staff else "running",
+            "type": "wage" if staff else "expense",
+            "amount": r["amount"] or ZERO,
+            "title": r["category_name"] or "",
+            "party": r["employee__name"] or r["payee"] or "",
+            "note": (r["notes"] or "").strip()[:160],
+            "reference": r["reference"] or "",
+            "by": names.get(r["recorded_by_id"], ""),
+            "in_batch": bool(r["production_run_id"]),
+            "target": None, "quantity": None, "unit_display": "", "unit_cost": None,
+            "deleted": False,
+        })
+
+    def ledger_rows(rows, kinds, skips, target, unit_group, unit_choices, fallback_cost=None):
+        for r in rows:
+            moment = _moment(r["created_at"])
+            cost = r["unit_cost"]
+            if cost is None and fallback_cost:
+                cost = r[fallback_cost]
+            cost = cost or ZERO
+            delta = Decimal(r["quantity_delta"] or 0)
+            base = {
+                "id": r["id"], "moment": moment, "day": moment.date(), "has_time": True,
+                "kind": "materials", "type": kinds[r["movement_type"]],
+                "title": r[f"{target}__name"] or "",
+                "party": "", "note": "",
+                "reference": r["reference"] or "",
+                "by": names.get(r["performed_by_id"], ""),
+                "in_batch": False,
+                "target": r[f"{target}_id"],
+                "unit_display": coded_label(unit_group, r[f"{target}__unit"], unit_choices),
+                "unit_cost": cost,
+                "deleted": bool(r[f"{target}__is_deleted"]),
+            }
+            skipped = Decimal(skips.get(r["id"], 0))
+            if skipped:
+                not_counted.append({**base, "quantity": skipped, "amount": skipped * cost})
+            counted = delta - skipped
+            if counted:
+                items.append({**base, "quantity": counted, "amount": counted * cost})
+
+    ledger_rows(deliveries, MATERIAL_OUT_TYPES, skip_materials, "material",
+                "MATERIAL_UNIT", MaterialUnit.choices)
+    ledger_rows(stock, STOCK_OUT_TYPES, skip_products, "product",
+                "PRODUCT_UNIT", Product.Unit.choices, fallback_cost="product__cost_price")
+
+    items.sort(key=lambda i: (i["moment"], i["id"]))
+    not_counted.sort(key=lambda i: (i["moment"], i["id"]))
+    return items, not_counted
+
+
+def _out_totals(items, not_counted=()) -> dict:
+    """The Audit card's figures, from _out_items."""
+    wages = running = in_batches = materials = stock_bought = opening = ZERO
+    by_category = defaultdict(lambda: [ZERO, 0])
+    for i in items:
+        amount = i["amount"]
+        if i["type"] in ("expense", "wage"):
+            if i["kind"] == "wages":
+                wages += amount
+            else:
+                running += amount
+            if i["in_batch"]:
+                in_batches += amount
+            row = by_category[i["title"] or "-"]
+            row[0] += amount
+            row[1] += 1
+        elif i["type"] in ("opening", "stock_opening"):
+            opening += amount
+        elif i["type"] in ("delivery", "returned"):
+            materials += amount  # a return to the supplier is negative
         else:
-            stock_bought += value
-        if with_events and value:
-            events.append((_moment(created), -value))
+            stock_bought += amount
 
     expense_total = wages + running
-    materials_and_stock = materials_bought + stock_bought + opening
+    materials_and_stock = materials + stock_bought + opening
     total = expense_total + materials_and_stock
     categories = sorted(
         ({"label": label, "total": money(t), "count": n} for label, (t, n) in by_category.items()),
         key=lambda r: (-r["total"], r["label"]),
     )
-    result = {
+    return {
         "total": money(total),
         "expenses": money(expense_total),
         "wages": money(wages),
         "running": money(running),
         "in_batches": money(in_batches),
-        "materials": money(materials_bought),
+        "materials": money(materials),
         "stock_bought": money(stock_bought),
         "opening": money(opening),
         # Finished goods bought in, and stock the business already had.
@@ -363,17 +493,43 @@ def money_out(user, period: Period, with_events=False):
             {"key": "running", "amount": money(running)},
         ],
         "categories": categories,
+        # Deliveries of items deleted with their stock still in them.
+        "not_counted": money(sum((i["amount"] for i in not_counted), ZERO)),
+        "not_counted_count": len(not_counted),
     }
-    return (result, events) if with_events else result
+
+
+def money_out(user, period: Period, with_events=False):
+    """
+    Everything that left the business, by kind.
+
+    Raw materials count when they are BOUGHT, not when a batch uses them: a
+    bag of cement is money spent the day it arrives, and counting it again
+    when it is mixed would spend it twice. Opening balances count too - stock
+    the business already had is money the owner put in before the first sale.
+    Deliveries of an item that was deleted with the goods still in it do not
+    (see _left_in_deleted).
+    """
+    items, not_counted = _out_items(user, period)
+    result = _out_totals(items, not_counted)
+    if not with_events:
+        return result
+    return result, [(i["moment"], -i["amount"]) for i in items if i["amount"]]
 
 
 # ---------------------------------------------------------------------------
 # Money in
 # ---------------------------------------------------------------------------
-def money_in(user, period: Period, with_events=False):
+#: Settled without money changing hands - a debt cleared by taking the goods
+#: back, or written off with a repayment row. Neither is money that came in.
+NOT_CASH_METHODS = ("GOODS_RETURN", "WRITE_OFF")
+
+
+def _in_items(user, period: Period):
     """
-    Cash that actually arrived: what was paid at the till, plus debts paid
-    off during the period - each counted on the day the money came.
+    Every payment in during the period, one dict each, oldest first: what was
+    paid at the till for each sale, and each debt repayment, on the day the
+    money came. The Audit card adds them up; the Money in page lists them.
 
     A sale's amount_paid is NOT used as it stands: it grows as the customer
     pays the debt off, so a sale from March would carry May's repayment back
@@ -381,40 +537,85 @@ def money_in(user, period: Period, with_events=False):
     What was paid at the till is the total less what went on credit.
     """
     from credit.models import Repayment
-    from sales.models import Transaction
+    from sales.models import PaymentMethod, Transaction
 
     start, end = period.start, period.end
-    events = []
-    at_till = ZERO
-    for created, total, paid, principal in scoped(
+    sales = list(scoped(
         Transaction.objects.active().filter(
             created_at__date__gte=start, created_at__date__lte=end
         ),
         user,
-    ).values_list("created_at", "total_amount", "amount_paid", "debt_record__principal"):
-        amount = (total - principal) if principal is not None else paid
-        amount = max(amount or ZERO, ZERO)
-        at_till += amount
-        if with_events and amount:
-            events.append((_moment(created), amount))
-
-    repaid = ZERO
-    for paid_at, amount in scoped(
+    ).values(
+        "id", "reference", "created_at", "total_amount", "amount_paid",
+        "debt_record__principal", "customer__name", "customer_name_snapshot",
+        "sold_by_id", "payment_method",
+    ))
+    repayments = list(scoped(
         Repayment.objects.filter(
             is_reversed=False, paid_at__date__gte=start, paid_at__date__lte=end
-        ),
+        ).exclude(method__in=NOT_CASH_METHODS),
         user,
-    ).values_list("paid_at", "amount"):
-        repaid += amount
-        if with_events and amount:
-            events.append((_moment(paid_at), amount))
+    ).values(
+        "id", "reference", "paid_at", "amount", "method", "debt_id",
+        "debt__reference", "debt__customer__name", "received_by_id",
+    ))
+    names = _names(
+        [r["sold_by_id"] for r in sales] + [r["received_by_id"] for r in repayments]
+    )
+    sale_methods = dict(PaymentMethod.choices)
+    repay_methods = dict(Repayment.Method.choices)
 
+    items = []
+    for r in sales:
+        principal = r["debt_record__principal"]
+        total = r["total_amount"] or ZERO
+        amount = (total - principal) if principal is not None else (r["amount_paid"] or ZERO)
+        amount = max(amount, ZERO)
+        moment = _moment(r["created_at"])
+        items.append({
+            "id": r["id"], "moment": moment, "day": moment.date(), "has_time": True,
+            "kind": "till", "type": "sale", "amount": amount,
+            "total": total, "on_credit": principal or ZERO,
+            "title": r["customer__name"] or r["customer_name_snapshot"] or "",
+            "reference": r["reference"] or "",
+            "method": r["payment_method"] or "",
+            "method_display": sale_methods.get(r["payment_method"], ""),
+            "by": names.get(r["sold_by_id"], ""),
+            "target": r["id"],
+        })
+    for r in repayments:
+        moment = _moment(r["paid_at"])
+        items.append({
+            "id": r["id"], "moment": moment, "day": moment.date(), "has_time": True,
+            "kind": "repaid", "type": "repayment", "amount": r["amount"] or ZERO,
+            "total": None, "on_credit": None,
+            "title": r["debt__customer__name"] or "",
+            "reference": r["debt__reference"] or r["reference"] or "",
+            "method": r["method"] or "",
+            "method_display": repay_methods.get(r["method"], ""),
+            "by": names.get(r["received_by_id"], ""),
+            "target": r["debt_id"],
+        })
+    items.sort(key=lambda i: (i["moment"], i["type"], i["id"]))
+    return items
+
+
+def money_in(user, period: Period, with_events=False):
+    """
+    Cash that actually arrived: what was paid at the till, plus debts paid
+    off during the period - each counted on the day the money came.
+    """
+    items = _in_items(user, period)
+    at_till = sum((i["amount"] for i in items if i["kind"] == "till"), ZERO)
+    repaid = sum((i["amount"] for i in items if i["kind"] == "repaid"), ZERO)
     result = {
         "total": money(at_till + repaid),
         "at_till": money(at_till),
         "repaid": money(repaid),
     }
-    return (result, events) if with_events else result
+    if not with_events:
+        return result
+    return result, [(i["moment"], i["amount"]) for i in items if i["amount"]]
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +671,10 @@ def holdings(user) -> dict:
 
     materials = []
     material_value = ZERO
-    for m in scoped(RawMaterial.objects.alive().filter(is_active=True), user).order_by("name"):
+    # Every material that is not deleted - switched off ones too, as on the
+    # Materials page: a material nobody orders any more is still worth what
+    # is left of it.
+    for m in scoped(RawMaterial.objects.alive(), user).order_by("name"):
         if not m.quantity_in_stock:
             continue
         value = money(m.quantity_in_stock * (m.unit_cost or ZERO))
@@ -478,6 +682,7 @@ def holdings(user) -> dict:
         materials.append({
             "id": m.pk, "name": m.name, "quantity": m.quantity_in_stock,
             "unit_display": m.get_unit_display(), "unit_cost": m.unit_cost, "value": value,
+            "status": m.stock_status, "reorder_level": m.reorder_level,
         })
     materials.sort(key=lambda r: -r["value"])
 
@@ -495,7 +700,9 @@ def holdings(user) -> dict:
             "id": p.pk, "name": p.name, "quantity": p.stock_quantity,
             "unit_display": p.get_unit_display(), "unit_cost": cost,
             "your_cost_set": p.audit_cost is not None,
+            "batch_cost": p.cost_price, "selling_price": p.selling_price,
             "value": value, "retail_value": retail,
+            "status": p.stock_status,
         })
     products.sort(key=lambda r: -r["value"])
 

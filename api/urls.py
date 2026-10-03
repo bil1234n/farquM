@@ -106,6 +106,7 @@ urlpatterns = [
     # for what one unit of a product really costs. Not to be confused with
     # the audit LOG below, which is who did what.
     path("audit/", audit_views.audit_report, name="audit_report"),
+    path("audit/detail/<slug:kind>/", audit_views.audit_detail, name="audit_detail"),
     path(
         "audit/products/<int:pk>/cost/",
         audit_views.product_cost,
