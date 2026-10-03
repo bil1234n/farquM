@@ -68,7 +68,51 @@ def audit_detail(request, kind):
         q.get("range", ""), q.get("date_from", ""), q.get("date_to", ""),
         user=request.user,
     )
-    return Response(jsonable(build_detail(request.user, period, kind)))
+    # q, type, by, state, min, max, sort narrow the list of payments - see
+    # reports.audit_detail.filter_lines.
+    return Response(jsonable(build_detail(request.user, period, kind, filters=q)))
+
+
+@api_view(["POST"])
+@permission_classes([requires("costing.view")])
+def correct_delivery(request, source, pk):
+    """
+    Put right a delivery ("material") or a restock ("product") that was
+    entered wrong: {"quantity": "4", "unit_cost": "3750", "note": "...",
+    "change_stock": false}. A quantity of 0 means it never happened. See
+    reports/corrections.py for why the stock only changes when asked.
+    """
+    from reports.corrections import CorrectionError, can_correct
+    from reports.corrections import correct_delivery as correct
+
+    if not can_correct(request.user, source):
+        return Response(
+            {"detail": "You may not correct deliveries."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    data = request.data or {}
+    raw_flag = data.get("change_stock", False)
+    change_stock = raw_flag is True or str(raw_flag).lower() in ("1", "true", "yes", "on")
+    try:
+        row = correct(
+            source, pk, user=request.user,
+            quantity=data.get("quantity", ""),
+            unit_cost=data.get("unit_cost"),
+            note=data.get("note", ""),
+            change_stock=change_stock,
+            request=request,
+        )
+    except CorrectionError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(jsonable({
+        "id": row.pk,
+        "source": source,
+        "corrected": row.is_corrected,
+        "quantity": row.counted_quantity,
+        "unit_cost": row.counted_unit_cost,
+        "recorded_quantity": row.quantity_delta,
+        "recorded_unit_cost": row.unit_cost,
+    }))
 
 
 def _history(product, limit=10):

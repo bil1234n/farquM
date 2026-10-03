@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Correct a delivery{% endblock %}
+{% block page_title %}Correct a delivery{% endblock %}
+{% block breadcrumb %}
+  <div class="crumb">
+    <a href="{{ back }}"><span>Money out</span></a> &middot; <span>{{ item.name }}</span>
+  </div>
+{% endblock %}
+
+{% block content %}
+{% comment %}
+  Putting right a delivery entered wrong (reports/corrections.py). What was
+  typed stays on record; the money is counted from the correction; the store
+  changes only when the box is ticked.
+{% endcomment %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-truck me-1"></i>
+        {% if source == "material" %}<span>Delivery received</span>{% else %}<span>Stock bought</span>{% endif %}
+        &middot; {{ item.name }}
+      </div>
+      <div class="card-body">
+        <table class="table table-sm audit-breakdown mb-3">
+          <tbody>
+            <tr><td><span>Entered on</span></td><td class="num">{{ row.created_at|date:"d M Y, H:i" }}</td></tr>
+            <tr><td><span>Entered by</span></td><td class="num">{{ row.performed_by.display_name|default:"-" }}</td></tr>
+            <tr><td><span>Entered as</span></td><td class="num">{{ row.quantity_delta|floatformat:"-3" }} <span>{{ unit }}</span> &times; <span class="money">{{ row.unit_cost|money }}</span></td></tr>
+            {% if row.is_corrected %}
+              <tr class="fw-semibold"><td><span>Counted now as</span></td><td class="num">{{ counted_quantity|floatformat:"-3" }} <span>{{ unit }}</span> &times; <span class="money">{{ counted_unit_cost|money }}</span></td></tr>
+              <tr><td><span>Corrected by</span></td><td class="num">{{ row.corrected_by.display_name|default:"-" }} &middot; {{ row.corrected_at|date:"d M Y" }}</td></tr>
+              {% if row.correction_note %}<tr><td><span>Why</span></td><td class="num fst-italic">{{ row.correction_note }}</td></tr>{% endif %}
+            {% endif %}
+            <tr><td><span>In the store now</span></td><td class="num">{{ store|floatformat:"-3" }} <span>{{ unit }}</span></td></tr>
+            {% if row.reference %}<tr><td><span>Reference</span></td><td class="num mono">{{ row.reference }}</td></tr>{% endif %}
+          </tbody>
+        </table>
+
+        {% if error %}<div class="alert alert-danger small">{{ error }}</div>{% endif %}
+
+        <form method="post" class="audit-cost-form">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ back }}">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="fix_qty"><span>Quantity really delivered</span></label>
+              <div class="input-group input-group-sm">
+                <input id="fix_qty" name="quantity" inputmode="decimal" class="form-control" required
+                       value="{% if posted %}{{ posted.quantity }}{% else %}{{ counted_quantity|floatformat:'-3' }}{% endif %}">
+                <span class="input-group-text"><span>{{ unit }}</span></span>
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold" for="fix_cost"><span>Cost per unit</span></label>
+              <input id="fix_cost" name="unit_cost" inputmode="decimal" class="form-control form-control-sm"
+                     value="{% if posted %}{{ posted.unit_cost }}{% else %}{{ counted_unit_cost }}{% endif %}">
+            </div>
+          </div>
+          <input name="note" maxlength="255" class="form-control form-control-sm mt-2"
+                 placeholder="Why (optional)" value="{% if posted %}{{ posted.note }}{% else %}{{ row.correction_note }}{% endif %}">
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" name="change_stock" value="1" id="fix_stock"
+                   {% if posted and posted.change_stock %}checked{% endif %}>
+            <label class="form-check-label small" for="fix_stock"><span>Also change the store by the difference</span></label>
+          </div>
+          <div class="text-muted-sm mt-1">
+            <span>Leave this unticked if the store has been counted since - the count has put the stock right already.</span>
+          </div>
+          <div class="d-flex flex-wrap gap-2 mt-3">
+            <button class="btn btn-primary btn-sm"><i class="bi bi-check2 me-1"></i><span>Save correction</span></button>
+            <button class="btn btn-outline-danger btn-sm" name="never" value="1"
+                    onclick="return confirm(this.dataset.ask)" data-ask="This delivery will count as nothing. Continue?">
+              <i class="bi bi-x-circle me-1"></i><span>It never happened</span></button>
+            <a class="btn btn-link btn-sm" href="{{ back }}"><span>Cancel</span></a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="alert alert-light border small">
+      <i class="bi bi-info-circle me-1"></i>
+      <span>What was typed stays on record, and the change is written to the audit log with your name.</span>
+      <span>The Audit counts the money from the corrected figures.</span>
+      <span>Putting the quantity and the cost back as they were entered removes the correction.</span>
+    </div>
+  </div>
+</div>
+{% endblock %}

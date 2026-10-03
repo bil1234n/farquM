@@ -65,6 +65,7 @@ from reports.selectors import (
     inventory_valuation,
     profit_summary,
     receivables_summary,
+    running_split,
     sales_by_staff,
     sales_summary,
     top_products,
@@ -1826,6 +1827,11 @@ def profit_report(request):
             spent_on__gte=start, spent_on__lte=end
         )
     )
+    # The cost of the goods is at the owner's own cost where he has set one,
+    # and that cost already holds its share of the running costs - so only
+    # the rest are taken off (reports.selectors.running_split).
+    running = running_costs(spent)
+    in_your_costs, taken = running_split(running, data["covered"])
     return Response({
         "start": start, "end": end,
         "revenue": str(data["revenue"]),
@@ -1836,7 +1842,11 @@ def profit_report(request):
         # Batch costs are inside the cost of the goods already (see
         # expenses.services.running_costs), so profit takes them off once.
         "expenses_in_product_cost": str(spent["in_product_cost"]),
-        "net_profit": str(data["gross_profit"] - running_costs(spent)),
+        "expenses_in_your_costs": str(in_your_costs),
+        "net_profit": str(data["gross_profit"] - taken),
+        # The same, from the costs copied onto each sale alone - the books.
+        "cogs_recorded": str(data["cogs_recorded"]),
+        "net_profit_recorded": str(data["gross_recorded"] - running),
         "count": data["count"],
         "valuation": {k: str(v) for k, v in inventory_valuation(user=user).items()},
     })

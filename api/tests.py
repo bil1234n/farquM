@@ -1466,6 +1466,12 @@ class EditableUnitTests(ApiTestBase):
 
     def test_renaming_a_unit_re_words_every_product_that_uses_it(self):
         """The whole point: one edit, and the products follow."""
+        from core.models import forget_labels
+
+        # The labels are cached in the process; the rename below is rolled
+        # back with the test, the cache is not - and "Each" would leak into
+        # whichever test runs next in this process.
+        self.addCleanup(forget_labels)
         self.product.unit = "PIECE"
         self.product.save(update_fields=["unit"])
 

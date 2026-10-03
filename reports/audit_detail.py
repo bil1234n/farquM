@@ -92,8 +92,125 @@ def series(entries, period: Period, keys) -> list[dict]:
 _ROW_EXTRAS = (
     "party", "note", "in_batch", "target", "quantity", "unit_display", "deleted",
     "method", "method_display",
+    # A delivery, and how it was put right (reports/corrections.py).
+    "source", "in_store", "corrected", "cancelled", "recorded_quantity",
+    "correction_note", "corrected_by", "corrected_at", "can_correct", "can_edit",
 )
-_ROW_MONEY = ("unit_cost", "total", "on_credit")
+_ROW_MONEY = ("unit_cost", "total", "on_credit", "recorded_unit_cost")
+
+
+# ---------------------------------------------------------------------------
+# Finding a line
+# ---------------------------------------------------------------------------
+#: What the type filter offers, each a group of line types.
+TYPE_GROUPS = {
+    "deliveries": ("delivery", "returned", "opening"),
+    "stock": ("stock", "stock_returned", "stock_opening"),
+    "expenses": ("expense",),
+    "wages": ("wage",),
+    "sales": ("sale",),
+    "repayments": ("repayment",),
+}
+SORTS = ("newest", "oldest", "largest", "smallest")
+STATES = ("corrected", "cancelled")
+
+#: The words a text search looks through.
+_SEARCHED = ("title", "party", "note", "reference", "by", "unit_display",
+             "method_display", "correction_note")
+
+
+def _number(raw):
+    try:
+        value = Decimal(str(raw).replace(",", "").strip())
+    except Exception:
+        return None
+    return value if value.is_finite() else None
+
+
+def filter_lines(items, filters=None):
+    """
+    The lines a search asks for, in the order asked for.
+
+    `filters` - a dict or a QueryDict, every key optional:
+
+        q      words that must all appear (name, payee, note, reference,
+               who recorded it, ...), in any order and any case
+        type   one of TYPE_GROUPS
+        by     who recorded it, exactly as the page lists them
+        state  "corrected" or "cancelled"
+        min, max   the amount, either way
+        sort   newest (the default), oldest, largest, smallest
+
+    Returns (lines, applied): the matching lines, and the filters as they
+    were understood - what the page shows back in its search form.
+    """
+    filters = filters or {}
+    q = (filters.get("q") or "").strip()[:100]
+    group = filters.get("type") or ""
+    group = group if group in TYPE_GROUPS else ""
+    by = (filters.get("by") or "").strip()
+    state = filters.get("state") or ""
+    state = state if state in STATES else ""
+    sort = filters.get("sort") or ""
+    sort = sort if sort in SORTS else "newest"
+    lo, hi = _number(filters.get("min")), _number(filters.get("max"))
+    words = q.lower().split()
+
+    lines = []
+    for i in items:
+        if group and i["type"] not in TYPE_GROUPS[group]:
+            continue
+        if by and (i.get("by") or "") != by:
+            continue
+        if state == "corrected" and not i.get("corrected"):
+            continue
+        if state == "cancelled" and not i.get("cancelled"):
+            continue
+        amount = abs(i["amount"])
+        if (lo is not None and amount < lo) or (hi is not None and amount > hi):
+            continue
+        if words:
+            text = " ".join(str(i.get(k) or "") for k in _SEARCHED).lower()
+            if not all(w in text for w in words):
+                continue
+        lines.append(i)
+
+    if sort == "oldest":
+        lines.sort(key=lambda i: (i["moment"], i["id"]))
+    elif sort == "largest":
+        lines.sort(key=lambda i: (-abs(i["amount"]), i["moment"]))
+    elif sort == "smallest":
+        lines.sort(key=lambda i: (abs(i["amount"]), i["moment"]))
+    else:
+        lines.sort(key=lambda i: (i["moment"], i["id"]), reverse=True)
+
+    applied = {
+        "q": q, "type": group, "by": by, "state": state, "sort": sort,
+        "min": f"{lo:f}" if lo is not None else "",
+        "max": f"{hi:f}" if hi is not None else "",
+    }
+    return lines, applied
+
+
+def _search_block(items, filters):
+    """What a payments page says about its list: the lines a search found,
+    how many and how much, and what can be searched for."""
+    lines, applied = filter_lines(items, filters)
+    counts = {
+        key: sum(1 for i in items if i["type"] in types)
+        for key, types in TYPE_GROUPS.items()
+    }
+    return {
+        "items": [_row(i) for i in lines[:MAX_ITEMS]],
+        "items_count": len(items),
+        "items_matching": len(lines),
+        "matching_total": money(sum((i["amount"] for i in lines), ZERO)),
+        "filters": applied,
+        "searching": any(applied[k] for k in ("q", "type", "by", "state", "min", "max")),
+        "people": sorted({i["by"] for i in items if i.get("by")}, key=str.lower),
+        "type_counts": {k: n for k, n in counts.items() if n},
+        "corrected_count": sum(1 for i in items if i.get("corrected")),
+    }
 
 
 def _row(item) -> dict:
@@ -121,7 +238,7 @@ def _row(item) -> dict:
 # ---------------------------------------------------------------------------
 # Money out
 # ---------------------------------------------------------------------------
-def money_out_detail(user, period: Period) -> dict:
+def money_out_detail(user, period: Period, filters=None) -> dict:
     items, not_counted = _out_items(user, period)
     totals = _out_totals(items, not_counted)
     before = None if period.key == "all" else money_out(user, period.previous())["total"]
@@ -129,7 +246,7 @@ def money_out_detail(user, period: Period) -> dict:
     def grouped(types):
         rows = {}
         for i in items:
-            if i["type"] not in types:
+            if i["type"] not in types or i.get("cancelled"):
                 continue
             r = rows.setdefault(i["target"], {
                 "id": i["target"], "name": i["title"], "unit_display": i["unit_display"],
@@ -143,7 +260,6 @@ def money_out_detail(user, period: Period) -> dict:
             r["amount"] = money(r["amount"])
         return out
 
-    newest = items[::-1]
     return {
         "kind": "money_out",
         "period": _period(period),
@@ -160,8 +276,7 @@ def money_out_detail(user, period: Period) -> dict:
         "categories": totals["categories"],
         "by_material": grouped({"delivery", "returned", "opening"}),
         "by_product": grouped({"stock", "stock_returned", "stock_opening"}),
-        "items": [_row(i) for i in newest[:MAX_ITEMS]],
-        "items_count": len(items),
+        **_search_block(items, filters),
         "not_counted": {
             "amount": totals["not_counted"],
             "count": len(not_counted),
@@ -173,7 +288,7 @@ def money_out_detail(user, period: Period) -> dict:
 # ---------------------------------------------------------------------------
 # Money in
 # ---------------------------------------------------------------------------
-def money_in_detail(user, period: Period) -> dict:
+def money_in_detail(user, period: Period, filters=None) -> dict:
     items = _in_items(user, period)
     paid = [i for i in items if i["amount"]]
     at_till = sum((i["amount"] for i in paid if i["kind"] == "till"), ZERO)
@@ -212,19 +327,19 @@ def money_in_detail(user, period: Period) -> dict:
             {"key": "repaid", "amount": money(repaid)},
         ],
         "by_person": by_person,
-        "items": [_row(i) for i in paid[::-1][:MAX_ITEMS]],
-        "items_count": len(paid),
+        **_search_block(paid, filters),
     }
 
 
 # ---------------------------------------------------------------------------
 # Profit
 # ---------------------------------------------------------------------------
-def profit_detail(user, period: Period) -> dict:
+def profit_detail(user, period: Period, filters=None) -> dict:
     """
     Profit after all costs, opened up. Every bucket is worked out the way the
-    card is - sales, less the cost copied onto each sale line, less running
-    costs (expenses not paid against a batch) - so the bars add up to it.
+    card is - sales, less what was sold at the owner's own cost where he has
+    set one (else the cost copied onto the sale line), less the running costs
+    his costs do not already hold - so the bars add up to it.
     """
     from expenses.models import Expense
     from sales.models import Transaction, TransactionItem
@@ -244,20 +359,29 @@ def profit_detail(user, period: Period) -> dict:
         user,
     ).values_list("created_at", "total_amount"):
         entries.append((local_day(created), "revenue", total or ZERO))
-    for created, unit_cost, quantity in scoped(
+    # What was sold, at the owner's own cost where he has set one - as the
+    # headline (reports.selectors.line_cost_used).
+    for created, unit_cost, yours, quantity in scoped(
         TransactionItem.objects.filter(
             transaction__is_voided=False,
             transaction__created_at__date__gte=start,
             transaction__created_at__date__lte=end,
         ),
         user,
-    ).values_list("transaction__created_at", "unit_cost", "quantity"):
-        entries.append((local_day(created), "cost", (unit_cost or ZERO) * (quantity or 0)))
+    ).values_list("transaction__created_at", "unit_cost", "product__audit_cost", "quantity"):
+        cost = yours if yours is not None else (unit_cost or ZERO)
+        entries.append((local_day(created), "cost", cost * (quantity or 0)))
+    # Only the running costs his costs do not already hold come off, day by
+    # day in the same proportion as in the headline, so the bars add up to it.
+    share = (
+        Decimal(pr["running_costs"]) / Decimal(pr["running_total"])
+        if pr["running_total"] else Decimal("1")
+    )
     running_by_category = defaultdict(lambda: [ZERO, 0])
     for spent_on, amount, category in scoped(
         Expense.objects.between(start, end).filter(production_run__isnull=True), user
     ).values_list("spent_on", "amount", "category_name"):
-        entries.append((spent_on, "running", amount or ZERO))
+        entries.append((spent_on, "running", (amount or ZERO) * share))
         row = running_by_category[category or "-"]
         row[0] += amount or ZERO
         row[1] += 1
@@ -272,13 +396,20 @@ def profit_detail(user, period: Period) -> dict:
         })
 
     products = []
-    covered = at_yours = ZERO
-    for r in costing(user, period, Decimal(pr["running_costs"])):
+    for r in costing(user, period, Decimal(pr["running_total"])):
         if not r["sold"]:
             continue
+        # At his cost where he has set one, as everywhere else.
+        if r["your_cost"] is not None:
+            cost = money(r["your_cost"] * r["sold"])
+        else:
+            cost = r["recorded_cost"]
+        made = money(r["revenue"] - cost)
         products.append({
             "id": r["id"], "name": r["name"], "unit_display": r["unit_display"],
             "sold": r["sold"], "revenue": r["revenue"],
+            "cost": cost, "profit": made, "margin": _pct(made, r["revenue"]),
+            "at_your_cost": r["your_cost"] is not None,
             "recorded_cost": r["recorded_cost"], "profit_recorded": r["profit_recorded"],
             "margin_recorded": _pct(r["profit_recorded"], r["revenue"]),
             "your_cost": r["your_cost"],
@@ -288,9 +419,6 @@ def profit_detail(user, period: Period) -> dict:
                 if r["profit_at_your_cost"] is not None else None
             ),
         })
-        if r["profit_at_your_cost"] is not None:
-            covered += r["revenue"]
-            at_yours += r["profit_at_your_cost"]
 
     categories = sorted(
         ({"label": label, "total": money(t), "count": n}
@@ -307,14 +435,18 @@ def profit_detail(user, period: Period) -> dict:
             "cost_of_sold": pr["cost_of_sold"],
             "gross": pr["gross"],
             "running_costs": pr["running_costs"],
+            "running_total": pr["running_total"],
+            # Running costs already inside the owner's costs, not taken off.
+            "running_included": pr["running_included"],
             "profit": pr["profit"],
             "margin": pr["margin"],
             "sales_count": pr["sales_count"],
             "outstanding": pr["outstanding"],
-            # What the owner's own costs say the products made, and how much
-            # of the sales those costs cover - see the Audit's two profits.
-            "at_your_costs": money(at_yours) if covered else None,
-            "covered": _pct(covered, pr["revenue"]),
+            # Share of the sales whose products carry the owner's cost.
+            "covered": pr["covered"],
+            # The books - the batch costs and every running cost - to compare.
+            "profit_recorded": pr["profit_recorded"],
+            "cost_recorded": pr["cost_recorded"],
         },
         "series_keys": ["profit"],
         "series": rows,
@@ -332,7 +464,7 @@ def profit_detail(user, period: Period) -> dict:
 # ---------------------------------------------------------------------------
 # On hand
 # ---------------------------------------------------------------------------
-def on_hand_detail(user, period: Period) -> dict:
+def on_hand_detail(user, period: Period, filters=None) -> dict:
     """What the business holds right now. The period plays no part."""
     from credit.models import DebtRecord
 
@@ -376,6 +508,10 @@ BUILDERS = {
 }
 
 
-def build_detail(user, period: Period, kind: str) -> dict:
-    """One card's page. `kind` is one of KINDS; anything else is a KeyError."""
-    return BUILDERS[kind](user, period)
+def build_detail(user, period: Period, kind: str, filters=None) -> dict:
+    """
+    One card's page. `kind` is one of KINDS; anything else is a KeyError.
+    `filters` narrow the list of payments on money-out and money-in (see
+    filter_lines); the totals and charts always cover the whole period.
+    """
+    return BUILDERS[kind](user, period, filters)

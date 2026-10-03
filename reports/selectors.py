@@ -16,7 +16,7 @@ the request user, and they all do.
 import datetime as dt
 from decimal import Decimal
 
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Sum
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum
 from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
 
@@ -95,8 +95,37 @@ def sales_summary(start, end, user=None):
     }
 
 
-def cost_of_goods_sold(start, end, user=None) -> Decimal:
-    """COGS from the per-line cost snapshots - Admin-facing figure."""
+def line_cost_used(prefix=""):
+    """
+    What the goods on a sold line cost, as a database expression: the units
+    times the owner's own cost for the product where he has set one in the
+    Audit (Product.audit_cost), otherwise the cost copied onto the line when
+    it was sold - the batch or purchase cost.
+
+    He sets his figure precisely because a batch cannot see the electricity
+    and the wages. Once he has, every profit is worked out from it: a profit
+    built on the batch cost would contradict the cost he has just written
+    down. His figure is applied to every sale of the product, past ones too -
+    it is his judgement of what one unit costs, not a price that changed on a
+    given day. `prefix` reaches the line from another model ("items__").
+    """
+    return ExpressionWrapper(
+        Coalesce(F(f"{prefix}product__audit_cost"), F(f"{prefix}unit_cost"))
+        * F(f"{prefix}quantity"),
+        output_field=DEC,
+    )
+
+
+def goods_cost(start, end, user=None) -> dict:
+    """
+    The cost of what was sold in a period, both ways, and how much of the
+    sales the owner's own costs cover:
+
+        used      at his cost where he has set one, else the recorded cost -
+                  every profit uses this
+        recorded  the cost copied onto each line when it was sold - the books
+        covered   the share of the sales (0 to 1) whose products carry his cost
+    """
     from sales.models import TransactionItem
 
     qs = _apply_user(TransactionItem.objects.all(), user).filter(
@@ -104,19 +133,68 @@ def cost_of_goods_sold(start, end, user=None) -> Decimal:
         transaction__created_at__date__gte=start,
         transaction__created_at__date__lte=end,
     )
-    total = qs.aggregate(
-        t=Coalesce(Sum(cost_expr()), ZERO, output_field=DEC)
-    )["t"]
-    return money(total)
+    agg = qs.aggregate(
+        used=Coalesce(Sum(line_cost_used()), ZERO, output_field=DEC),
+        recorded=Coalesce(Sum(cost_expr()), ZERO, output_field=DEC),
+        sales=Coalesce(Sum("line_total", output_field=DEC), ZERO, output_field=DEC),
+        covered=Coalesce(
+            Sum("line_total", filter=Q(product__audit_cost__isnull=False), output_field=DEC),
+            ZERO, output_field=DEC,
+        ),
+    )
+    covered = agg["covered"] / agg["sales"] if agg["sales"] > ZERO else ZERO
+    return {
+        "used": money(agg["used"]),
+        "recorded": money(agg["recorded"]),
+        "covered": min(max(covered, ZERO), Decimal("1")),
+    }
+
+
+def cost_of_goods_sold(start, end, user=None, recorded=False) -> Decimal:
+    """COGS - at the owner's own cost where set (see line_cost_used), or, with
+    `recorded`, from the per-line snapshots alone. Admin-facing figure."""
+    return goods_cost(start, end, user=user)["recorded" if recorded else "used"]
+
+
+def running_split(running, covered):
+    """
+    (included, taken): the running costs the owner's own costs already hold,
+    and the rest - what a profit still has to take off.
+
+    His cost for a product is everything one unit costs, the electricity and
+    the wages included. For the share of the sales his costs cover, those
+    running costs are inside the cost of what was sold already; taking them
+    off a second time would count the electricity twice. The rest are taken
+    off as before. With no cost of his set, nothing changes.
+    """
+    running = Decimal(running or 0)
+    included = money(running * Decimal(covered or 0))
+    return included, money(running - included)
 
 
 def profit_summary(start, end, user=None):
-    """Gross profit for a period. Never shown to a Manager."""
+    """
+    Gross profit for a period, at the owner's own costs where he has set them
+    (see line_cost_used). Never shown to a Manager.
+
+    `cogs_recorded` and `gross_recorded` are the same figures from the costs
+    copied onto each sale alone - the books, for comparison - and `covered`
+    is the share of the sales his costs cover, for running_split.
+    """
     sales = sales_summary(start, end, user=user)
-    cogs = cost_of_goods_sold(start, end, user=user)
+    goods = goods_cost(start, end, user=user)
+    cogs = goods["used"]
     gross = money(sales["revenue"] - cogs)
     margin = money(gross / sales["revenue"] * 100) if sales["revenue"] > ZERO else ZERO
-    return {**sales, "cogs": cogs, "gross_profit": gross, "margin_percent": margin}
+    return {
+        **sales,
+        "cogs": cogs,
+        "gross_profit": gross,
+        "margin_percent": margin,
+        "cogs_recorded": goods["recorded"],
+        "gross_recorded": money(sales["revenue"] - goods["recorded"]),
+        "covered": goods["covered"],
+    }
 
 
 def daily_series(start, end, user=None):
@@ -164,7 +242,8 @@ def top_products(start, end, limit=10, include_cost=False, user=None):
         .annotate(
             units=Coalesce(Sum("quantity"), 0),
             revenue=Coalesce(Sum("line_total", output_field=DEC), ZERO, output_field=DEC),
-            cost=Coalesce(Sum(cost_expr()), ZERO, output_field=DEC),
+            # At the owner's own cost where he has set one - see line_cost_used.
+            cost=Coalesce(Sum(line_cost_used()), ZERO, output_field=DEC),
         )
         .order_by("-revenue")[:limit]
     )

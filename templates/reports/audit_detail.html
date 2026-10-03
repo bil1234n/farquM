@@ -92,8 +92,9 @@
         <div><div class="label"><span>Sales</span></div><div class="amount money">{{ f.revenue|money }}</div></div>
         <div><div class="label"><span>Cost of what was sold</span></div><div class="amount money">{{ f.cost_of_sold|money }}</div></div>
         <div><div class="label"><span>Running costs</span></div><div class="amount money">{{ f.running_costs|money }}</div></div>
+        {% if f.running_included %}<div><div class="label"><span>Running costs in your costs</span></div><div class="amount money">{{ f.running_included|money }}</div></div>{% endif %}
         {% if f.margin is not None %}<div><div class="label"><span>Margin</span></div><div class="amount">{{ f.margin }}%</div></div>{% endif %}
-        {% if f.at_your_costs is not None %}<div><div class="label"><span>Profit at your cost</span></div><div class="amount money">{{ f.at_your_costs|money }}</div></div>{% endif %}
+        {% if f.covered %}<div><div class="label"><span>By the batch costs</span></div><div class="amount money {% if f.profit_recorded < 0 %}text-danger{% endif %}">{{ f.profit_recorded|money }}</div></div>{% endif %}
         {% if f.outstanding %}<div><div class="label"><span>Still owed on these sales</span></div><div class="amount money">{{ f.outstanding|money }}</div></div>{% endif %}
       {% else %}
         <div><div class="label"><span>Raw materials</span></div><div class="amount money">{{ f.materials_value|money }}</div></div>
@@ -300,19 +301,20 @@
   <div class="table-responsive">
     <table class="table table-hover align-middle mb-0 audit-table">
       <thead><tr>
-        <th>Product</th><th class="num">Sold</th><th class="num">Sales</th><th class="num">Recorded cost</th>
-        <th class="num">Profit</th><th class="num">Margin</th><th class="num">Profit at your cost</th>
+        <th>Product</th><th class="num">Sold</th><th class="num">Sales</th><th class="num">Cost</th>
+        <th class="num">Profit</th><th class="num">Margin</th><th class="num">By the batch costs</th>
       </tr></thead>
       <tbody>
         {% for r in detail.products %}
           <tr>
-            <td><div class="fw-semibold">{{ r.name }}</div></td>
+            <td><div class="fw-semibold">{{ r.name }}</div>
+              {% if r.at_your_cost %}<span class="badge text-bg-light border"><span>Your cost</span></span>{% else %}<span class="badge text-bg-light border"><span>batch cost</span></span>{% endif %}</td>
             <td class="num">{{ r.sold }} <span class="text-muted-sm">{{ r.unit_display }}</span></td>
             <td class="num money">{{ r.revenue|money }}</td>
-            <td class="num money">{{ r.recorded_cost|money }}</td>
-            <td class="num money {% if r.profit_recorded < 0 %}text-danger{% endif %}">{{ r.profit_recorded|money }}</td>
-            <td class="num">{% if r.margin_recorded is not None %}{{ r.margin_recorded }}%{% else %}-{% endif %}</td>
-            <td class="num money {% if r.profit_at_your_cost is not None and r.profit_at_your_cost < 0 %}text-danger{% endif %}">{% if r.profit_at_your_cost is not None %}{{ r.profit_at_your_cost|money }}{% else %}<span class="text-muted">Not set</span>{% endif %}</td>
+            <td class="num money">{{ r.cost|money }}</td>
+            <td class="num money fw-semibold {% if r.profit < 0 %}text-danger{% endif %}">{{ r.profit|money }}</td>
+            <td class="num">{% if r.margin is not None %}{{ r.margin }}%{% else %}-{% endif %}</td>
+            <td class="num money text-muted">{{ r.profit_recorded|money }}</td>
           </tr>
         {% empty %}
           <tr><td colspan="7"><div class="empty-state py-4"><i class="bi bi-receipt"></i><span>Nothing was sold in this period.</span></div></td></tr>
@@ -321,7 +323,7 @@
     </table>
   </div>
   <div class="card-footer text-muted-sm">
-    <span>Profit here is sales less the cost recorded on each sale. Running costs are taken off the whole business, not product by product.</span>
+    <span>Profit here is sales less the cost of what was sold: your cost where you have set one, otherwise the batch cost recorded on each sale. Running costs are taken off the whole business, not product by product.</span>
   </div>
 </div>
 <div class="card mb-3">
@@ -386,24 +388,97 @@
 </div>
 {% endif %}
 
-{# ---------- Every line ---------- #}
+{# ---------- Every line, and finding one ---------- #}
 {% if kind == "money-out" or kind == "money-in" %}
-<div class="card mb-3">
+<div class="card mb-3" id="payments">
   <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
     <span><i class="bi bi-list-ul me-1"></i>{% if kind == "money-out" %}<span>Every payment out</span>{% else %}<span>Every payment in</span>{% endif %}</span>
-    <span class="text-muted-sm"><span>Newest first</span>{% if detail.items_count > detail.items|length %} &middot; <span>Showing the latest</span> {{ detail.items|length }} / {{ detail.items_count }}{% endif %}</span>
+    <span class="text-muted-sm">
+      {% if detail.searching %}
+        <span>Found</span> {{ detail.items_matching }} / {{ detail.items_count }} &middot; <span class="money">{{ detail.matching_total|money }}</span>
+      {% else %}
+        {% if detail.filters.sort == "oldest" %}<span>Oldest first</span>{% elif detail.filters.sort == "largest" %}<span>Largest first</span>{% elif detail.filters.sort == "smallest" %}<span>Smallest first</span>{% else %}<span>Newest first</span>{% endif %}
+      {% endif %}
+      {% if detail.items_matching > detail.items|length %} &middot; <span>Showing the latest</span> {{ detail.items|length }} / {{ detail.items_matching }}{% endif %}
+    </span>
+  </div>
+  <div class="card-body border-bottom no-print">
+    {% comment %}
+      Advanced search. Plain GET, so a search can be bookmarked and the
+      browser's back button undoes it; the period travels with it.
+    {% endcomment %}
+    <form method="get" action="#payments" class="row g-2 align-items-end audit-search">
+      {% for k, v in query.items %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <div class="col-12 col-md-4">
+        <label class="form-label" for="pay_q">Search</label>
+        <input id="pay_q" name="q" value="{{ detail.filters.q }}" class="form-control form-control-sm"
+               placeholder="Name, payee, note, reference or who recorded it">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_type">Kind</label>
+        <select id="pay_type" name="type" class="form-select form-select-sm">
+          <option value="">All</option>
+          {% for key, n in detail.type_counts.items %}
+            <option value="{{ key }}" {% if detail.filters.type == key %}selected{% endif %}>{% if key == "deliveries" %}Deliveries{% elif key == "stock" %}Stock bought{% elif key == "expenses" %}Expenses{% elif key == "wages" %}Staff payments{% elif key == "sales" %}Sales{% else %}Debt payments{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_by">Recorded by</label>
+        <select id="pay_by" name="by" class="form-select form-select-sm">
+          <option value="">Anyone</option>
+          {% for name in detail.people %}<option value="{{ name }}" {% if detail.filters.by == name %}selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+      </div>
+      {% if kind == "money-out" %}
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_state">Corrections</label>
+        <select id="pay_state" name="state" class="form-select form-select-sm">
+          <option value="">All</option>
+          <option value="corrected" {% if detail.filters.state == "corrected" %}selected{% endif %}>Corrected</option>
+          <option value="cancelled" {% if detail.filters.state == "cancelled" %}selected{% endif %}>Never happened</option>
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_sort">Order</label>
+        <select id="pay_sort" name="sort" class="form-select form-select-sm">
+          <option value="newest" {% if detail.filters.sort == "newest" %}selected{% endif %}>Newest first</option>
+          <option value="oldest" {% if detail.filters.sort == "oldest" %}selected{% endif %}>Oldest first</option>
+          <option value="largest" {% if detail.filters.sort == "largest" %}selected{% endif %}>Largest first</option>
+          <option value="smallest" {% if detail.filters.sort == "smallest" %}selected{% endif %}>Smallest first</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_min">Amount from</label>
+        <input id="pay_min" name="min" value="{{ detail.filters.min }}" inputmode="decimal" class="form-control form-control-sm">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label" for="pay_max">Amount to</label>
+        <input id="pay_max" name="max" value="{{ detail.filters.max }}" inputmode="decimal" class="form-control form-control-sm">
+      </div>
+      <div class="col-12 col-md-auto d-flex gap-2">
+        <button class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i><span>Search</span></button>
+        {% if detail.searching or detail.filters.sort != "newest" %}
+          <a class="btn btn-outline-secondary btn-sm" href="?{{ audit_query }}#payments"><span>Clear</span></a>
+        {% endif %}
+      </div>
+    </form>
   </div>
   <div class="table-responsive">
     <table class="table table-sm align-middle mb-0 audit-items">
-      <thead><tr><th>Date</th><th>What</th><th>Details</th><th>By</th><th class="num">Amount</th></tr></thead>
+      <thead><tr><th>Date</th><th>What</th><th>Details</th><th>By</th><th class="num">Amount</th><th class="no-print"></th></tr></thead>
       <tbody>
         {% for i in detail.items %}
-          <tr>
+          <tr {% if i.cancelled %}class="text-muted"{% endif %}>
             <td class="when">{{ i.at|date:"d M Y" }}{% if i.has_time %}<div>{{ i.at|date:"H:i" }}</div>{% endif %}</td>
             <td><div class="what">{% if i.title %}{{ i.title }}{% else %}-{% endif %}</div>
-              <div class="sub"><span>{{ i.type_label }}</span>{% if i.in_batch %} &middot; <span>Paid against a batch</span>{% endif %}{% if i.deleted %} &middot; <span>Deleted</span>{% endif %}</div></td>
+              <div class="sub"><span>{{ i.type_label }}</span>{% if i.in_batch %} &middot; <span>Paid against a batch</span>{% endif %}{% if i.deleted %} &middot; <span>Deleted</span>{% endif %}</div>
+              {% if i.cancelled %}<span class="badge text-bg-secondary"><span>Never happened</span></span>{% elif i.corrected %}<span class="badge text-bg-warning"><span>Corrected</span></span>{% endif %}</td>
             <td class="sub">
               {% if i.quantity is not None %}{{ i.quantity|floatformat:"-3" }} <span>{{ i.unit_display }}</span> &times; <span class="money">{{ i.unit_cost|money }}</span>{% endif %}
+              {% if i.corrected %}<div><span>Entered as</span> {{ i.recorded_quantity|floatformat:"-3" }} &times; <span class="money">{{ i.recorded_unit_cost|money }}</span>{% if i.corrected_by %} &middot; <span>corrected by</span> {{ i.corrected_by }}{% endif %}</div>
+                {% if i.correction_note %}<div class="fst-italic">{{ i.correction_note }}</div>{% endif %}{% endif %}
               {% if i.party %}{{ i.party }}{% endif %}
               {% if i.type == "sale" and i.on_credit %}<span>On credit</span> <span class="money">{{ i.on_credit|money }}</span>{% endif %}
               {% if i.method_display %}{{ i.method_display }}{% endif %}
@@ -411,10 +486,17 @@
               {% if i.note %}<div>{{ i.note }}</div>{% endif %}
             </td>
             <td class="sub">{{ i.by|default:"-" }}</td>
-            <td class="num money fw-semibold {% if kind == 'money-in' or i.amount < 0 %}in{% endif %}">{{ i.amount|money }}</td>
+            <td class="num money fw-semibold {% if kind == 'money-in' or i.amount < 0 %}in{% endif %}">{% if i.cancelled %}<s>{{ i.recorded_quantity|floatformat:"-3" }} &times; {{ i.recorded_unit_cost|money }}</s><div>{{ i.amount|money }}</div>{% else %}{{ i.amount|money }}{% endif %}</td>
+            <td class="text-end no-print">
+              {% if i.can_correct %}
+                <a class="btn btn-sm btn-outline-primary text-nowrap" href="{% url 'reports:audit_correct' i.source i.id %}?next={{ request.get_full_path|urlencode }}"><i class="bi bi-pencil me-1"></i><span>Correct</span></a>
+              {% elif i.can_edit and i.type == "expense" or i.can_edit and i.type == "wage" %}
+                <a class="btn btn-sm btn-outline-primary text-nowrap" href="{% url 'expenses:expense_edit' i.id %}"><i class="bi bi-pencil me-1"></i><span>Edit</span></a>
+              {% endif %}
+            </td>
           </tr>
         {% empty %}
-          <tr><td colspan="5"><div class="empty-state py-4"><i class="bi bi-inbox"></i><span>Nothing in this period.</span></div></td></tr>
+          <tr><td colspan="6"><div class="empty-state py-4"><i class="bi bi-inbox"></i>{% if detail.searching %}<span>Nothing matches this search.</span>{% else %}<span>Nothing in this period.</span>{% endif %}</div></td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -108,6 +108,11 @@ urlpatterns = [
     path("audit/", audit_views.audit_report, name="audit_report"),
     path("audit/detail/<slug:kind>/", audit_views.audit_detail, name="audit_detail"),
     path(
+        "audit/corrections/<slug:source>/<int:pk>/",
+        audit_views.correct_delivery,
+        name="audit_correct_delivery",
+    ),
+    path(
         "audit/products/<int:pk>/cost/",
         audit_views.product_cost,
         name="audit_product_cost",

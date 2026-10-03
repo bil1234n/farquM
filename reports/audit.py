@@ -370,7 +370,9 @@ def _out_items(user, period: Period):
     ).values(
         "id", "created_at", "movement_type", "quantity_delta", "unit_cost", "reference",
         "performed_by_id", "material_id", "material__name", "material__unit",
-        "material__is_deleted",
+        "material__is_deleted", "material__quantity_in_stock",
+        "corrected_quantity", "corrected_unit_cost", "corrected_at", "corrected_by_id",
+        "correction_note",
     ))
     stock = list(scoped(
         StockMovement.objects.filter(
@@ -381,13 +383,21 @@ def _out_items(user, period: Period):
     ).values(
         "id", "created_at", "movement_type", "quantity_delta", "unit_cost", "reference",
         "performed_by_id", "product_id", "product__name", "product__unit",
-        "product__is_deleted", "product__cost_price",
+        "product__is_deleted", "product__cost_price", "product__stock_quantity",
+        "corrected_quantity", "corrected_unit_cost", "corrected_at", "corrected_by_id",
+        "correction_note",
     ))
     names = _names(
         [r["recorded_by_id"] for r in expenses]
         + [r["performed_by_id"] for r in deliveries]
         + [r["performed_by_id"] for r in stock]
+        + [r["corrected_by_id"] for r in deliveries + stock]
     )
+    has = getattr(user, "has_access", None)
+    may_fix = {
+        "material": bool(has and has("material.adjust")),
+        "product": bool(has and has("stock.adjust")),
+    }
 
     items, not_counted = [], []
     for r in expenses:
@@ -406,16 +416,29 @@ def _out_items(user, period: Period):
             "in_batch": bool(r["production_run_id"]),
             "target": None, "quantity": None, "unit_display": "", "unit_cost": None,
             "deleted": False,
+            # Corrected or cancelled on the expense itself (expenses app).
+            "can_edit": bool(has and has("expense.record")),
         })
 
-    def ledger_rows(rows, kinds, skips, target, unit_group, unit_choices, fallback_cost=None):
+    def ledger_rows(rows, kinds, skips, target, unit_group, unit_choices, store,
+                    fallback_cost=None):
+        source = "material" if target == "material" else "product"
+        fixable = {"PURCHASE", "RESTOCK"}
         for r in rows:
             moment = _moment(r["created_at"])
-            cost = r["unit_cost"]
-            if cost is None and fallback_cost:
-                cost = r[fallback_cost]
-            cost = cost or ZERO
-            delta = Decimal(r["quantity_delta"] or 0)
+            recorded_cost = r["unit_cost"]
+            if recorded_cost is None and fallback_cost:
+                recorded_cost = r[fallback_cost]
+            recorded_cost = recorded_cost or ZERO
+            recorded = Decimal(r["quantity_delta"] or 0)
+            # A delivery put right afterwards is counted as it should have
+            # been (reports/corrections.py); what was typed stays on record.
+            corrected = r["corrected_at"] is not None
+            delta = Decimal(r["corrected_quantity"]) if corrected else recorded
+            cost = (
+                r["corrected_unit_cost"]
+                if corrected and r["corrected_unit_cost"] is not None else recorded_cost
+            )
             base = {
                 "id": r["id"], "moment": moment, "day": moment.date(), "has_time": True,
                 "kind": "materials", "type": kinds[r["movement_type"]],
@@ -428,18 +451,34 @@ def _out_items(user, period: Period):
                 "unit_display": coded_label(unit_group, r[f"{target}__unit"], unit_choices),
                 "unit_cost": cost,
                 "deleted": bool(r[f"{target}__is_deleted"]),
+                "source": source,
+                "in_store": r[store],
+                "corrected": corrected,
+                "cancelled": corrected and delta == 0,
+                "recorded_quantity": recorded,
+                "recorded_unit_cost": recorded_cost,
+                "correction_note": r["correction_note"] or "",
+                "corrected_by": names.get(r["corrected_by_id"], "") if corrected else "",
+                "corrected_at": r["corrected_at"],
+                "can_correct": (
+                    may_fix[source] and r["movement_type"] in fixable and recorded > 0
+                    and not r[f"{target}__is_deleted"]
+                ),
             }
             skipped = Decimal(skips.get(r["id"], 0))
             if skipped:
                 not_counted.append({**base, "quantity": skipped, "amount": skipped * cost})
-            counted = delta - skipped
-            if counted:
+            counted = max(delta - skipped, ZERO) if corrected else delta - skipped
+            # A delivery corrected to nothing stays in the list, at nothing,
+            # so it can still be found - and put back.
+            if counted or corrected:
                 items.append({**base, "quantity": counted, "amount": counted * cost})
 
     ledger_rows(deliveries, MATERIAL_OUT_TYPES, skip_materials, "material",
-                "MATERIAL_UNIT", MaterialUnit.choices)
+                "MATERIAL_UNIT", MaterialUnit.choices, "material__quantity_in_stock")
     ledger_rows(stock, STOCK_OUT_TYPES, skip_products, "product",
-                "PRODUCT_UNIT", Product.Unit.choices, fallback_cost="product__cost_price")
+                "PRODUCT_UNIT", Product.Unit.choices, "product__stock_quantity",
+                fallback_cost="product__cost_price")
 
     items.sort(key=lambda i: (i["moment"], i["id"]))
     not_counted.sort(key=lambda i: (i["moment"], i["id"]))
@@ -622,26 +661,50 @@ def money_in(user, period: Period, with_events=False):
 # Profit
 # ---------------------------------------------------------------------------
 def profit(user, period: Period) -> dict:
-    """Profit after all costs - the figure that needs no guessing."""
+    """
+    Profit after all costs, at the owner's own costs where he has set them.
+
+        profit = sales
+               - what was sold, at his cost for each product that has one
+                 (else the cost copied onto the sale)
+               - the running costs his costs do not already hold
+
+    His cost is everything one unit costs, electricity and wages included, so
+    for the share of the sales it covers the running costs are already in;
+    the rest are taken off (reports.selectors.running_split). With no cost of
+    his set this is exactly the books.
+
+    `profit_recorded` is the books: sales less the costs copied onto each
+    sale, less every running cost. The two drifting apart over a long period
+    means his costs are missing something - the Audit says so (_insights).
+    """
     from expenses.services import running_costs, summarize
     from expenses.models import Expense
 
-    from .selectors import cost_of_goods_sold, sales_summary
+    from .selectors import goods_cost, running_split, sales_summary
 
     sales = sales_summary(period.start, period.end, user=user)
-    cogs = cost_of_goods_sold(period.start, period.end, user=user)
+    goods = goods_cost(period.start, period.end, user=user)
     summary = summarize(scoped(Expense.objects.between(period.start, period.end), user))
-    running = running_costs(summary)
-    value = money(sales["revenue"] - cogs - running)
+    running = money(running_costs(summary))
+    included, taken = running_split(running, goods["covered"])
+    value = money(sales["revenue"] - goods["used"] - taken)
+    recorded = money(sales["revenue"] - goods["recorded"] - running)
     return {
         "revenue": sales["revenue"],
         "sales_count": sales["count"],
         "outstanding": sales["outstanding"],
-        "cost_of_sold": cogs,
-        "running_costs": money(running),
-        "gross": money(sales["revenue"] - cogs),
+        "cost_of_sold": goods["used"],
+        # The running costs this profit takes off; the rest are in his costs.
+        "running_costs": taken,
+        "running_total": running,
+        "running_included": included,
+        "covered": (goods["covered"] * 100).quantize(Decimal("0.1"), ROUND_HALF_UP),
+        "gross": money(sales["revenue"] - goods["used"]),
         "profit": value,
         "margin": _pct(value, sales["revenue"]),
+        "cost_recorded": goods["recorded"],
+        "profit_recorded": recorded,
     }
 
 
@@ -966,7 +1029,7 @@ def _insights(report: dict) -> list[dict]:
             (r["profit_at_your_cost"] for r in sold_rows if r["profit_at_your_cost"] is not None),
             ZERO,
         )
-        books = pr["profit"]
+        books = pr["profit_recorded"]
         scale = max(abs(books), pr["revenue"] * Decimal("0.05"), Decimal("1"))
         diff = (at_yours - books) / scale
         if diff > ESTIMATE_TOLERANCE:
@@ -1071,7 +1134,9 @@ def build_report(user, period: Period, product_id=None) -> dict:
     spent, out_events = money_out(user, period, with_events=True)
     came, in_events = money_in(user, period, with_events=True)
     pr = profit(user, period)
-    rows = costing(user, period, Decimal(pr["running_costs"]))
+    # The suggestion shares out every running cost, whether or not some of
+    # them are already inside costs the owner has set.
+    rows = costing(user, period, Decimal(pr["running_total"]))
 
     previous = None
     if period.key != "all":

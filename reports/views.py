@@ -23,6 +23,7 @@ from .selectors import (
     period_bounds,
     profit_summary,
     receivables_summary,
+    running_split,
     sales_by_staff,
     sales_summary,
     top_products,
@@ -158,10 +159,10 @@ class DashboardView(PermissionRequiredMixin, TemplateView):
                 # an owner actually means by "did we make money this month".
                 # A batch's own costs are already inside the cost of the goods
                 # sold (they went into its cost per unit), so they are taken
-                # off once, there - see expenses.services.running_costs.
-                ctx["month_net_profit"] = (
-                    month_profit["gross_profit"] - running_costs(spent)
-                )
+                # off once, there - see expenses.services.running_costs. So is
+                # the share the owner's own costs hold (running_split).
+                _, taken = running_split(running_costs(spent), month_profit["covered"])
+                ctx["month_net_profit"] = month_profit["gross_profit"] - taken
 
         # ---- Which dashboard is this? -------------------------------------
         profile = profile_for(user)
@@ -408,7 +409,8 @@ class AuditDetailView(PermissionRequiredMixin, TemplateView):
             q.get("range", ""), q.get("date_from", ""), q.get("date_to", ""),
             user=self.request.user,
         )
-        detail = build_detail(self.request.user, period, kind)
+        # The list of payments can be searched (reports.audit_detail.filter_lines).
+        detail = build_detail(self.request.user, period, kind, filters=q)
 
         # Bars, in the order of the detail's keys (which is the colour order).
         keys = detail.get("series_keys") or []
@@ -521,6 +523,82 @@ def audit_set_cost(request, pk):
     keep = {k: v for k, v in request.POST.items() if k in ("range", "date_from", "date_to") and v}
     keep["product"] = product.pk
     return redirect(f"{reverse('reports:audit')}?{urlencode(keep)}#cost")
+
+
+def audit_correct(request, source, pk):
+    """
+    Put right a delivery or restock entered wrong - from the Money out page.
+    GET shows it with the form; POST corrects it and goes back to the list
+    (reports/corrections.py has the rules).
+    """
+    from django.contrib import messages
+    from django.http import Http404
+    from django.shortcuts import redirect
+    from django.urls import reverse
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    from core.models import coded_label
+    from inventory.models import StockMovement
+    from production.models import MaterialMovement, MaterialUnit
+
+    from .corrections import SOURCES, CorrectionError, can_correct, correct_delivery
+
+    blocked = require(request, "costing.view")
+    if blocked:
+        return blocked
+    if source not in SOURCES:
+        raise Http404("No such delivery.")
+    if not can_correct(request.user, source):
+        messages.error(request, "You may not correct deliveries.")
+        return redirect("reports:audit_detail", kind="money-out")
+
+    Ledger = MaterialMovement if source == "material" else StockMovement
+    row = (
+        Ledger.objects.select_related(source, "performed_by", "corrected_by")
+        .filter(pk=pk, movement_type=SOURCES[source]["movement_type"]).first()
+    )
+    item = getattr(row, source, None) if row else None
+    if row is None or not scoped(type(item).objects.filter(pk=item.pk), request.user).exists():
+        raise Http404("No such delivery.")
+
+    back = request.POST.get("next") or request.GET.get("next") or ""
+    if not back.startswith("/reports/audit/") or not url_has_allowed_host_and_scheme(
+        back, allowed_hosts={request.get_host()}
+    ):
+        back = reverse("reports:audit_detail", kwargs={"kind": "money-out"}) + "#payments"
+
+    error = ""
+    if request.method == "POST":
+        never = "never" in request.POST
+        try:
+            correct_delivery(
+                source, row.pk, user=request.user,
+                quantity="0" if never else request.POST.get("quantity", ""),
+                unit_cost=request.POST.get("unit_cost") or None,
+                note=request.POST.get("note", ""),
+                change_stock=bool(request.POST.get("change_stock")),
+                request=request,
+            )
+        except CorrectionError as exc:
+            error = str(exc)
+        else:
+            if never:
+                messages.success(request, "Marked as never happened. It no longer counts as money out.")
+            else:
+                messages.success(request, "Delivery corrected.")
+            return redirect(back)
+
+    unit = (
+        coded_label("MATERIAL_UNIT", item.unit, MaterialUnit.choices)
+        if source == "material" else item.get_unit_display()
+    )
+    store = item.quantity_in_stock if source == "material" else item.stock_quantity
+    return render(request, "reports/audit_correct.html", {
+        "row": row, "item": item, "source": source, "unit": unit, "store": store,
+        "counted_quantity": row.counted_quantity, "counted_unit_cost": row.counted_unit_cost,
+        "back": back, "error": error,
+        "posted": request.POST if request.method == "POST" else None,
+    })
 
 
 class InventoryReportView(PermissionRequiredMixin, TemplateView):

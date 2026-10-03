@@ -528,6 +528,27 @@ class StockMovement(TimeStampedModel):
         related_name="stock_movements",
     )
 
+    # -- A restock that was entered wrong -----------------------------------
+    # As on production.MaterialMovement: what was typed stays, the row says
+    # what it should have been, and the money is counted from that. The
+    # stock changes only when asked - see reports/corrections.py.
+    corrected_quantity = models.IntegerField(
+        null=True, blank=True,
+        help_text="What was really received; 0 when the restock never happened.",
+    )
+    corrected_unit_cost = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    corrected_at = models.DateTimeField(null=True, blank=True)
+    corrected_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    correction_note = models.CharField(max_length=255, blank=True)
+
     objects = StockMovementQuerySet.as_manager()
 
     class Meta:
@@ -550,6 +571,23 @@ class StockMovement(TimeStampedModel):
     @property
     def abs_quantity(self) -> int:
         return abs(self.quantity_delta)
+
+    @property
+    def is_corrected(self) -> bool:
+        return self.corrected_at is not None
+
+    @property
+    def counted_quantity(self) -> int:
+        """What the money is counted from: the correction, else what was typed."""
+        if self.corrected_quantity is not None:
+            return self.corrected_quantity
+        return self.quantity_delta
+
+    @property
+    def counted_unit_cost(self):
+        if self.corrected_unit_cost is not None:
+            return self.corrected_unit_cost
+        return self.unit_cost
 
     def delete(self, *args, **kwargs):
         raise PermissionError(

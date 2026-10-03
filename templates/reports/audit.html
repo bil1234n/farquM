@@ -98,6 +98,7 @@
       <div class="hint"><span>Sales</span> {{ pr.revenue|money }}{% if pr.margin is not None %} &middot; <span>{{ pr.margin }}%</span>{% endif %}</div>
       <div class="hint"><span>Cost of what was sold</span> {{ pr.cost_of_sold|money }}</div>
       <div class="hint"><span>Running costs</span> {{ pr.running_costs|money }}</div>
+      {% if pr.running_included %}<div class="hint"><span>Running costs in your costs</span> {{ pr.running_included|money }}</div>{% endif %}
       {% if ch.profit is not None %}
         <div class="audit-delta {% if ch.profit > 0 %}is-good{% elif ch.profit < 0 %}is-bad{% endif %}">
           <i class="bi {% if ch.profit > 0 %}bi-arrow-up-right{% elif ch.profit < 0 %}bi-arrow-down-right{% else %}bi-dash{% endif %}"></i>
@@ -423,8 +424,8 @@
 <div class="alert alert-light border small">
   <i class="bi bi-info-circle me-1"></i>
   <strong><span>How these figures are worked out.</span></strong>
-  <span>Profit after all costs is sales, less the recorded cost of what was sold, less the running costs of the period. It needs no guesses.</span>
+  <span>Profit after all costs is sales, less what was sold at your cost (at the batch cost for a product without one), less the running costs your costs do not already include.</span>
   <span>Your cost is your own figure for one unit with everything included; the margins and the profit at your cost use it.</span>
-  <span>When the two profits disagree over a long period, your costs are missing something.</span>
+  <span>"By the batch costs" is the same profit from the batch costs and every running cost: when the two disagree over a long period, your costs are missing something.</span>
 </div>
 {% endblock %}

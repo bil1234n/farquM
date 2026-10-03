@@ -313,6 +313,34 @@ class MaterialMovement(TimeStampedModel):
         related_name="material_movements",
     )
 
+    # -- A delivery that was entered wrong ----------------------------------
+    # What was typed stays on the row - the ledger is a record, and a record
+    # that can be rewritten proves nothing. A delivery found to be wrong (the
+    # quantity mistyped, the wrong price, or one that never happened at all)
+    # carries what it SHOULD have been, and money is counted from that (the
+    # Audit's money out). Whether the store changes as well is a separate,
+    # explicit step, because it has often been put right by a stock count
+    # already. See reports/corrections.py.
+    corrected_quantity = models.DecimalField(
+        max_digits=QUANTITY_DIGITS,
+        decimal_places=QUANTITY_DECIMALS,
+        null=True,
+        blank=True,
+        help_text="What was really delivered; 0 when the delivery never happened.",
+    )
+    corrected_unit_cost = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True
+    )
+    corrected_at = models.DateTimeField(null=True, blank=True)
+    corrected_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    correction_note = models.CharField(max_length=255, blank=True)
+
     class Meta:
         ordering = ["-created_at", "-id"]
         verbose_name = "Material movement"
@@ -342,6 +370,23 @@ class MaterialMovement(TimeStampedModel):
         if self.unit_cost is None:
             return Decimal("0.00")
         return (self.abs_quantity * self.unit_cost).quantize(Decimal("0.01"))
+
+    @property
+    def is_corrected(self) -> bool:
+        return self.corrected_at is not None
+
+    @property
+    def counted_quantity(self) -> Decimal:
+        """What the money is counted from: the correction, else what was typed."""
+        if self.corrected_quantity is not None:
+            return self.corrected_quantity
+        return self.quantity_delta
+
+    @property
+    def counted_unit_cost(self):
+        if self.corrected_unit_cost is not None:
+            return self.corrected_unit_cost
+        return self.unit_cost
 
     def delete(self, *args, **kwargs):
         raise PermissionError(

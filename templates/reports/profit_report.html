@@ -31,7 +31,7 @@
     <div class="hint">{{ profit.count }} sale{{ profit.count|pluralize }}</div></div></div>
   <div class="col-6 col-lg-3"><div class="stat-card accent-warning">
     <div class="label">Cost of Goods Sold</div><div class="value money">{{ profit.cogs|money }}</div>
-    <div class="hint">From per-line cost snapshots</div></div></div>
+    <div class="hint"><span>At your cost where set, else the cost on each sale</span></div></div></div>
   <div class="col-6 col-lg-3"><div class="stat-card accent-success">
     <div class="label">Gross Profit</div><div class="value money text-success">{{ profit.gross_profit|money }}</div>
     <div class="hint">Revenue minus COGS</div></div></div>
@@ -47,6 +47,7 @@
   last month's margins &mdash; historical profit stays accurate. Voided transactions are excluded
   throughout. Money still owed on credit is counted as revenue but has not yet been collected;
   compare against the receivables report.
+  <span>Where you have set your own cost for a product in the Audit, its sales use that cost instead, and the running costs it already includes are not taken off again.</span>
 </div>
 
 <div class="row g-3">

@@ -181,10 +181,11 @@ class TransactionQuerySet(models.QuerySet):
         quantity is an integer and unit_cost a decimal, so the multiplication
         needs an explicit output_field or Django raises "mixed types".
         """
+        from reports.selectors import line_cost_used
+
         dec = models.DecimalField(max_digits=16, decimal_places=2)
-        cost = models.ExpressionWrapper(
-            F("items__unit_cost") * F("items__quantity"), output_field=dec
-        )
+        # At the owner's own cost for a product where he has set one.
+        cost = line_cost_used("items__")
         return self.annotate(cost_total=Sum(cost)).annotate(
             profit=models.ExpressionWrapper(
                 F("total_amount") - F("cost_total"), output_field=dec
@@ -357,12 +358,17 @@ class Transaction(OwnedModel, TimeStampedModel):
 
     @property
     def total_cost(self) -> Decimal:
-        """Cost of goods sold, from the per-line snapshots. Admin-facing."""
-        dec = models.DecimalField(max_digits=16, decimal_places=2)
-        line_cost = models.ExpressionWrapper(
-            F("unit_cost") * F("quantity"), output_field=dec
-        )
-        return money(self.items.aggregate(c=Sum(line_cost))["c"] or ZERO)
+        """
+        Cost of the goods on this sale. Admin-facing.
+
+        At the owner's own cost for a product where he has set one in the
+        Audit, otherwise from the per-line snapshot - the same rule as every
+        other profit (reports.selectors.line_cost_used), so a sale's profit
+        and the month's never tell two stories.
+        """
+        from reports.selectors import line_cost_used
+
+        return money(self.items.aggregate(c=Sum(line_cost_used()))["c"] or ZERO)
 
     @property
     def gross_profit(self) -> Decimal:
