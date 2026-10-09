@@ -6,9 +6,13 @@ api/tests.py (ExpenseTests); these check that the browser reaches the same
 rules, sees only what it should, and adds up the same way.
 """
 import datetime as dt
+import io
+import tempfile
 from decimal import Decimal
 
-from django.test import Client, TestCase
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import User
@@ -326,3 +330,114 @@ class ExpenseLinesPageTests(ExpenseWebBase):
         self.assertContains(response, "Line 2: Choose what the money was spent on.")
         self.assertContains(response, '"amount": "1200"')
         self.assertFalse(Expense.objects.exists())
+
+
+def _png() -> bytes:
+    """A real PNG, so Django's ImageField validator accepts it."""
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (30, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _upload(name="photo.png") -> SimpleUploadedFile:
+    return SimpleUploadedFile(name, _png(), content_type="image/png")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="faruq-payroll-"))
+class EmployeePhotoPageTests(ExpenseWebBase):
+    """A face, an address and an identity card on somebody on the payroll."""
+
+    def setUp(self):
+        super().setUp()
+        # A manager who may look at the payroll but no longer change it.
+        self.looker = User.objects.create_user(
+            "yonas", password="pw", role="MANAGER",
+            denied_permissions=["employee.manage"],
+        )
+
+    def test_the_form_saves_an_address_and_both_pictures(self):
+        response = self.client_for(self.manager).post(
+            "/expenses/employees/new/",
+            {
+                "name": "Almaz Kebede",
+                "job_name": "Loader",
+                "phone": "0911223344",
+                "address": "Kebele 08, by the water tower",
+                "monthly_salary": "6000",
+                "id_number": "ETH-4412",
+                "is_active": "on",
+                "photo": _upload("face.png"),
+                "id_photo": _upload("kebele.png"),
+            },
+        )
+        person = Employee.objects.get(name="Almaz Kebede")
+        self.assertRedirects(
+            response, f"/expenses/employees/{person.pk}/",
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(person.address, "Kebele 08, by the water tower")
+        self.assertEqual(person.id_number, "ETH-4412")
+        self.assertTrue(person.photo)
+        self.assertTrue(person.id_photo)
+
+    def test_the_page_shows_the_card_to_a_manager_and_hides_it_from_a_looker(self):
+        self.guard.id_number = "ETH-1"
+        self.guard.id_photo.save("card.png", ContentFile(_png()), save=True)
+
+        allowed = self.client_for(self.manager).get(
+            f"/expenses/employees/{self.guard.pk}/"
+        ).content.decode()
+        self.assertIn(self.guard.id_photo.url, allowed)
+
+        refused = self.client_for(self.looker).get(
+            f"/expenses/employees/{self.guard.pk}/"
+        ).content.decode()
+        self.assertNotIn(self.guard.id_photo.url, refused)
+        self.assertIn("not allowed to open it", refused)
+        # The number is working information and stays visible.
+        self.assertIn("ETH-1", refused)
+
+    def test_ticking_remove_takes_a_picture_off(self):
+        self.guard.photo.save("face.png", ContentFile(_png()), save=True)
+        self.client_for(self.manager).post(
+            f"/expenses/employees/{self.guard.pk}/edit/",
+            {
+                "name": self.guard.name,
+                "monthly_salary": "4500",
+                "is_active": "on",
+                "remove_photo": "on",
+            },
+        )
+        self.guard.refresh_from_db()
+        self.assertFalse(self.guard.photo)
+
+    def test_a_new_picture_beats_a_forgotten_remove_tick(self):
+        """
+        Somebody picks a replacement and leaves the box ticked. That means
+        "replace" - throwing the new file away would be the one reading
+        nobody intends.
+        """
+        self.guard.photo.save("old.png", ContentFile(_png()), save=True)
+        self.client_for(self.manager).post(
+            f"/expenses/employees/{self.guard.pk}/edit/",
+            {
+                "name": self.guard.name,
+                "monthly_salary": "4500",
+                "is_active": "on",
+                "remove_photo": "on",
+                "photo": _upload("new.png"),
+            },
+        )
+        self.guard.refresh_from_db()
+        self.assertTrue(self.guard.photo)
+        self.assertIn("new", self.guard.photo.name)
+
+    def test_the_payroll_is_searched_by_the_number_on_the_card(self):
+        Employee.objects.create(name="Almaz", id_number="ETH-4412")
+        html = self.client_for(self.manager).get(
+            "/expenses/employees/", {"q": "4412"}
+        ).content.decode()
+        self.assertIn("Almaz", html)
+        self.assertNotIn("Tesfaye Guard", html)

@@ -54,7 +54,7 @@
   <div class="row g-2 align-items-end">
     <div class="col-md-6">
       <label class="form-label">Search</label>
-      <input type="search" name="q" value="{{ q }}" class="form-control" placeholder="Name, phone or job" data-i18n-placeholder="r3.ph_employee">
+      <input type="search" name="q" value="{{ q }}" class="form-control" placeholder="Name, phone, job or ID number" data-i18n-placeholder="r9.ph_employee">
     </div>
     <div class="col-md-4">
       <div class="form-check">
@@ -83,7 +83,12 @@
           <tr class="{% if not p.is_active %}table-secondary{% endif %}">
             <td>
               <div class="d-flex align-items-center gap-2">
-                <div class="avatar">{{ p.name|slice:":2"|upper }}</div>
+                {% if p.photo_url %}
+                  <img class="person-photo" style="width:34px;height:34px"
+                       src="{{ p.photo_url }}" alt="{{ p.name }}" loading="lazy">
+                {% else %}
+                  <div class="avatar">{{ p.initials }}</div>
+                {% endif %}
                 <div>
                   <a href="{% url 'expenses:employee_detail' p.pk %}" class="fw-semibold">{{ p.name }}</a>
                   {% note_mark p.note_tag compact=True %}

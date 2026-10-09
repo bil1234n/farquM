@@ -1,0 +1,40 @@
+{% comment %}
+  One picture on a person's form: what is on file now, a chooser, and - only
+  when there is something to take off - a tick box that takes it off.
+
+  Include with:
+    {% include "partials/photo_field.html" with field=form.photo remove=form.remove_photo current=object.photo_url %}
+
+  `locked` renders the slot without the picture, for somebody who may see
+  that an ID is on file but may not look at it (core.models.PersonRecord).
+{% endcomment %}
+<div class="photo-field">
+  <label class="form-label" for="{{ field.id_for_label }}"><span>{{ field.label }}</span></label>
+  <div class="photo-field-row">
+    {% if locked %}
+      <div class="photo-thumb photo-thumb-locked" title="{{ locked_hint }}">
+        <i class="bi bi-shield-lock"></i>
+      </div>
+    {% elif current %}
+      <a class="photo-thumb" href="{{ current }}" target="_blank" rel="noopener">
+        <img src="{{ current }}" alt="{{ field.label }}" loading="lazy">
+      </a>
+    {% else %}
+      <div class="photo-thumb photo-thumb-empty"><i class="bi bi-camera"></i></div>
+    {% endif %}
+
+    <div class="photo-field-body">
+      {{ field }}
+      {% if field.help_text %}<div class="form-text"><span>{{ field.help_text }}</span></div>{% endif %}
+      {% for error in field.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+      {% if remove %}
+        <div class="form-check mt-1">
+          {{ remove }}
+          <label class="form-check-label small" for="{{ remove.id_for_label }}">
+            <span>{{ remove.label }}</span>
+          </label>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>

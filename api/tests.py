@@ -22,10 +22,13 @@ is a sales assistant knowing the margin on a bag of cement.
 """
 import datetime as dt
 import io
+import tempfile
 from decimal import Decimal
 
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
+from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 
 from accounts.models import RegistrationPasscode, RoleDefinition, User
 from accounts.roles import ensure_system_roles
@@ -2346,3 +2349,164 @@ class ExpenseLinesApiTests(Round3Base):
             "/api/expenses/", {"payment_method": "CASH"}, content_type="application/json"
         )
         self.assertEqual(response.status_code, 400)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="faruq-people-"))
+class PersonPhotoApiTests(ApiTestBase):
+    """
+    A face and an identity card on a customer and on somebody on the payroll.
+
+    The rule being guarded is not "the field saves" - it is that the ID
+    picture reaches only somebody who may edit that person, while everybody
+    else is still told one exists. See core.models.PersonRecord.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A seller whose access to edit customers has been taken away in
+        # Access Control: he still serves them, he no longer opens their
+        # papers.
+        self.viewer = User.objects.create_user(
+            "selam", password="pw", role="SALES", manager=self.manager,
+            denied_permissions=["customer.edit"],
+        )
+        # The same shape on the payroll side.
+        self.payroll_viewer = User.objects.create_user(
+            "yonas", password="pw", role="MANAGER",
+            denied_permissions=["employee.manage"],
+        )
+
+    # -- Customers -----------------------------------------------------------
+    def test_a_customer_is_registered_with_both_pictures(self):
+        response = self.as_(self.sales).post(
+            "/api/customers/",
+            {
+                "name": "Chaltu",
+                "phone": "0922",
+                "address": "Bole, behind the mosque",
+                "id_number": "ETH-77123",
+                "photo": upload("face.png"),
+                "id_photo": upload("kebele.png"),
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertTrue(body["photo_url"])
+        self.assertTrue(body["id_photo_url"])
+        self.assertTrue(body["has_id_photo"])
+        self.assertEqual(body["id_number"], "ETH-77123")
+        # The file itself is never echoed back - only where to find it.
+        self.assertNotIn("photo", body)
+
+    def test_a_seller_who_may_not_edit_is_told_an_id_exists_but_not_shown_it(self):
+        customer = Customer.objects.create(
+            name="Hawi", phone="0933", owner=self.viewer, id_number="ETH-5"
+        )
+        customer.id_photo.save("card.png", ContentFile(png_bytes()), save=True)
+
+        row = self.as_(self.viewer).get(f"/api/customers/{customer.pk}/").json()
+        self.assertTrue(row["has_id_photo"])
+        self.assertFalse(row["can_see_id"])
+        self.assertIsNone(row["id_photo_url"])
+        # The number is working information and is not hidden - it is what
+        # gets read out over a phone, and alone it identifies nobody.
+        self.assertEqual(row["id_number"], "ETH-5")
+
+    def test_a_seller_who_may_edit_gets_the_id_picture(self):
+        customer = Customer.objects.create(
+            name="Hawi", phone="0933", owner=self.sales
+        )
+        customer.id_photo.save("card.png", ContentFile(png_bytes()), save=True)
+
+        row = self.as_(self.sales).get(f"/api/customers/{customer.pk}/").json()
+        self.assertTrue(row["can_see_id"])
+        self.assertTrue(row["id_photo_url"])
+
+    def test_a_customer_is_found_by_the_number_on_their_card(self):
+        Customer.objects.create(
+            name="Chaltu", phone="0922", owner=self.sales, id_number="ETH-77123"
+        )
+        rows = self.as_(self.sales).get(
+            "/api/customers/", {"q": "77123"}
+        ).json()["results"]
+        self.assertEqual([r["name"] for r in rows], ["Chaltu"])
+
+    def test_a_picture_is_replaced_and_cleared(self):
+        customer = Customer.objects.create(
+            name="Hawi", phone="0933", owner=self.sales
+        )
+        customer.photo.save("old.png", ContentFile(png_bytes()), save=True)
+        first = customer.photo.name
+
+        self.as_(self.sales).patch(
+            f"/api/customers/{customer.pk}/",
+            encode_multipart(BOUNDARY, {"photo": upload("new.png")}),
+            content_type=MULTIPART_CONTENT,
+        )
+        customer.refresh_from_db()
+        self.assertNotEqual(customer.photo.name, first)
+
+        # An explicit null takes it off again. Without this the only way to
+        # remove a photograph would be to delete the customer.
+        self.as_(self.sales).patch(
+            f"/api/customers/{customer.pk}/",
+            {"photo": None},
+            content_type="application/json",
+        )
+        customer.refresh_from_db()
+        self.assertFalse(customer.photo)
+
+    def test_rubbish_in_the_photo_field_is_refused(self):
+        response = self.as_(self.sales).post(
+            "/api/customers/",
+            {
+                "name": "Chaltu", "phone": "0944",
+                "photo": SimpleUploadedFile(
+                    "x.png", b"not an image", content_type="image/png"
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # -- The payroll ---------------------------------------------------------
+    def test_somebody_is_added_to_the_payroll_with_an_address_and_pictures(self):
+        response = self.as_(self.manager).post(
+            "/api/employees/",
+            {
+                "name": "Tesfaye",
+                "phone": "0955",
+                "address": "Kebele 08, by the water tower",
+                "monthly_salary": "4500.00",
+                "id_number": "DRV-9",
+                "photo": upload("face.png"),
+                "id_photo": upload("licence.png"),
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body["address"], "Kebele 08, by the water tower")
+        self.assertTrue(body["photo_url"])
+        self.assertTrue(body["id_photo_url"])
+
+    def test_the_payroll_hides_an_id_from_somebody_who_may_only_look(self):
+        from expenses.models import Employee
+
+        person = Employee.objects.create(name="Tesfaye", id_number="DRV-9")
+        person.id_photo.save("licence.png", ContentFile(png_bytes()), save=True)
+
+        row = self.as_(self.payroll_viewer).get(
+            f"/api/employees/{person.pk}/"
+        ).json()
+        self.assertTrue(row["has_id_photo"])
+        self.assertFalse(row["can_see_id"])
+        self.assertIsNone(row["id_photo_url"])
+
+    def test_somebody_on_the_payroll_is_found_by_their_card_number(self):
+        from expenses.models import Employee
+
+        Employee.objects.create(name="Tesfaye", id_number="DRV-9")
+        Employee.objects.create(name="Almaz", id_number="DRV-10")
+        rows = self.as_(self.manager).get(
+            "/api/employees/", {"q": "DRV-9"}
+        ).json()["results"]
+        self.assertEqual([r["name"] for r in rows], ["Tesfaye"])

@@ -173,6 +173,57 @@ class NoteTagMixin(serializers.Serializer):
 NOTE_TAG_FIELDS = ["note_tag", "note_tag_label", "note_tag_color"]
 
 
+class PersonPhotoMixin(serializers.Serializer):
+    """
+    The two pictures a person record carries, over the API.
+
+    WRITE AND READ ARE DIFFERENT FIELDS
+    -----------------------------------
+    `photo` and `id_photo` are write-only: a client sends a file (multipart)
+    or an explicit null to clear one. The read side is `photo_url` /
+    `id_photo_url`, because no client should have to know how the storage
+    backend builds a path - on Cloudinary it is not a path at all.
+
+    THE ID PICTURE CAN COME BACK NULL EVEN WHEN THERE IS ONE
+    -------------------------------------------------------
+    `id_photo_url` is served only to a reader who may edit this person; see
+    core.models.PersonRecord. `has_id_photo` still says a picture exists, and
+    `can_see_id` says why the URL is missing - so a phone can draw a locked
+    card instead of an empty space that looks like a bug.
+    """
+
+    photo = serializers.ImageField(required=False, allow_null=True, write_only=True)
+    id_photo = serializers.ImageField(required=False, allow_null=True, write_only=True)
+    photo_url = serializers.SerializerMethodField()
+    id_photo_url = serializers.SerializerMethodField()
+    has_id_photo = serializers.BooleanField(read_only=True)
+    can_see_id = serializers.SerializerMethodField()
+
+    def _absolute(self, url):
+        if not url:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(url) if request else url
+
+    def get_photo_url(self, obj) -> str | None:
+        return self._absolute(obj.photo_url)
+
+    def get_id_photo_url(self, obj) -> str | None:
+        request = self.context.get("request")
+        return self._absolute(obj.id_photo_for(getattr(request, "user", None)))
+
+    def get_can_see_id(self, obj) -> bool:
+        request = self.context.get("request")
+        return obj.may_see_id(getattr(request, "user", None))
+
+
+#: Both pictures and the number on the card, for a serializer's Meta.fields.
+PERSON_PHOTO_FIELDS = [
+    "photo", "id_photo", "photo_url", "id_photo_url",
+    "has_id_photo", "can_see_id", "id_number",
+]
+
+
 class OwnerNameMixin:
     """
     Adds a read-only `owner_name` telling you whose record this is.
@@ -667,7 +718,9 @@ class CreditAccountSerializer(serializers.ModelSerializer):
         ]
 
 
-class CustomerSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializer):
+class CustomerSerializer(
+    NoteTagMixin, PersonPhotoMixin, OwnerNameMixin, serializers.ModelSerializer
+):
     outstanding_balance = DerivedDecimal()
     credit_limit = DerivedDecimal()
     available_credit = DerivedDecimal()
@@ -679,7 +732,7 @@ class CustomerSerializer(NoteTagMixin, OwnerNameMixin, serializers.ModelSerializ
         model = Customer
         fields = [
             "id", "name", "phone", "alternate_phone", "email", "address",
-            "customer_type", "customer_type_display",
+            "customer_type", "customer_type_display", *PERSON_PHOTO_FIELDS,
             "is_credit_approved", "is_active", "notes", "note_tag", "note_tag_label", "note_tag_color",
             "outstanding_balance", "credit_limit", "available_credit", "credit_account",
             "owner_name",

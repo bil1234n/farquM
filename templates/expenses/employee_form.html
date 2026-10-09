@@ -8,7 +8,11 @@
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-lg-8">
-    <form method="post" novalidate>
+    {% comment %}
+      enctype matters: without it the browser posts the file inputs as plain
+      names and neither photograph ever leaves the machine.
+    {% endcomment %}
+    <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
       <div class="card mb-3">
         <div class="card-header"><i class="bi bi-person-vcard me-1"></i> Employee</div>
@@ -38,6 +42,12 @@
               <label class="form-label" for="{{ form.phone.id_for_label }}">{{ form.phone.label }}</label>
               {{ form.phone }}
             </div>
+            <div class="col-12">
+              <label class="form-label" for="{{ form.address.id_for_label }}"><span>Address</span></label>
+              {{ form.address }}
+              <div class="form-text"><span>{{ form.address.help_text }}</span></div>
+              {% for e in form.address.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
             <div class="col-md-6">
               <label class="form-label" for="{{ form.monthly_salary.id_for_label }}">{{ form.monthly_salary.label }}</label>
               <div class="input-group">
@@ -64,6 +74,32 @@
               <div class="mt-2">
                 <div class="form-label small text-muted mb-1">Mark</div>
                 {{ form.note_tag }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-camera me-1"></i> <span>Photo and ID</span></div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {% include "partials/photo_field.html" with field=form.photo remove=form.remove_photo current=form.instance.photo_url %}
+            </div>
+            <div class="col-md-6">
+              {% include "partials/photo_field.html" with field=form.id_photo remove=form.remove_id_photo current=form.instance.id_photo_url %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.id_number.id_for_label }}"><span>{{ form.id_number.label }}</span></label>
+              {{ form.id_number }}
+              <div class="form-text"><span>{{ form.id_number.help_text }}</span></div>
+              {% for e in form.id_number.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="text-muted-sm pb-1">
+                <i class="bi bi-shield-lock me-1"></i>
+                <span>Only staff who may add and edit employees can open the ID photo.</span>
               </div>
             </div>
           </div>

@@ -418,6 +418,9 @@ class EmployeeListView(PermissionRequiredMixin, ListView):
             qs = qs.filter(
                 Q(name__icontains=self.q) | Q(phone__icontains=self.q)
                 | Q(job_name__icontains=self.q)
+                # Somebody holding a card and asking "who is this?" has the
+                # number in front of them and nothing else.
+                | Q(id_number__icontains=self.q)
             )
         self.show_all = self.request.GET.get("all") == "1"
         if not self.show_all:
@@ -490,6 +493,9 @@ class EmployeeDetailView(PermissionRequiredMixin, DetailView):
             "paid_ever": live.aggregate(t=Sum("amount"))["t"] or ZERO,
             "last_payment": live.first(),
             "can_manage": user.has_access("employee.manage"),
+            # An ID picture is a government document, not working information
+            # - see core.models.PersonRecord.
+            "can_see_id": self.object.may_see_id(user),
             "can_pay": user.has_access("expense.record") and self.object.is_active,
         })
         return ctx
@@ -508,6 +514,9 @@ def _save_employee(request, form, *, creating):
         employee.created_by = request.user
     employee.updated_by = request.user
     employee.save()
+    # The row holds no picture where one was ticked off, so the file behind it
+    # can safely go now. See core.forms.PersonPhotoFormMixin.
+    form.drop_removed_photos()
     if job is not None:
         job.touch_use()
     return employee
@@ -520,7 +529,9 @@ def employee_create(request):
     )
     if blocked:
         return blocked
-    form = EmployeeForm(request.POST or None)
+    # request.FILES as well as POST: the form carries a photograph of the
+    # person and one of their ID card.
+    form = EmployeeForm(request.POST or None, request.FILES or None)
     if request.method == "POST" and form.is_valid():
         employee = _save_employee(request, form, creating=True)
         log_action(
@@ -540,7 +551,9 @@ def employee_edit(request, pk):
     if blocked:
         return blocked
     employee = get_object_or_404(Employee, pk=pk)
-    form = EmployeeForm(request.POST or None, instance=employee)
+    form = EmployeeForm(
+        request.POST or None, request.FILES or None, instance=employee
+    )
     if request.method == "POST" and form.is_valid():
         employee = _save_employee(request, form, creating=False)
         log_action(

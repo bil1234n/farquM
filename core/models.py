@@ -3,6 +3,12 @@ from django.conf import settings
 from django.db import models
 from django.db.models.functions import Lower
 
+from core.utils import (
+    id_photo_upload_path,
+    person_photo_upload_path,
+    validate_person_photo,
+)
+
 
 class TimeStampedModel(models.Model):
     """Adds created_at / updated_at to any model."""
@@ -300,6 +306,118 @@ def coded_label(group: str, code: str, builtin=None) -> str:
         if got:
             return str(got)
     return code.replace("_", " ").title()
+
+
+class PersonRecord(models.Model):
+    """
+    What every person in the books has besides a name: a face, an identity
+    card, and somewhere they live.
+
+    WHY ONE ABSTRACT CLASS AND NOT THE FIELDS TWICE
+    -----------------------------------------------
+    A customer and an employee are different in every other way - one buys,
+    one is paid - but a photograph of a person is the same thing in both
+    places, and so is the rule about who may look at the identity card. Two
+    copies of that rule is one copy that will eventually be wrong, and the
+    one that goes wrong is a privacy leak, not a cosmetic bug.
+
+    THE IDENTITY CARD IS NOT LIKE THE OTHER FIELDS
+    ----------------------------------------------
+    A phone number is working information: anybody serving this person needs
+    it. A photographed ID is a government document the person handed over for
+    one purpose, and a shop with ten staff should not mean ten people
+    browsing identity cards. So the picture is kept behind whoever may EDIT
+    the person - the same people who would have taken the photograph - and
+    everybody else is told it exists without being shown it (`may_see_id`).
+    The ID NUMBER is deliberately not hidden: it is what somebody reads out
+    over a phone to check a delivery, and a number without the document it
+    came on identifies nobody on its own.
+    """
+
+    #: The permission that unlocks the ID picture. Set on each concrete model.
+    id_photo_permission = ""
+
+    photo = models.ImageField(
+        upload_to=person_photo_upload_path,
+        validators=[validate_person_photo],
+        blank=True,
+        null=True,
+        help_text="A photograph of the person. Square pictures look best.",
+    )
+    id_photo = models.ImageField(
+        upload_to=id_photo_upload_path,
+        validators=[validate_person_photo],
+        blank=True,
+        null=True,
+        help_text="A photograph of their identity card, licence or passport.",
+    )
+    id_number = models.CharField(
+        max_length=60,
+        blank=True,
+        db_index=True,
+        help_text="The number on that card. Searchable from the list.",
+    )
+
+    class Meta:
+        abstract = True
+
+    # -- Pictures ------------------------------------------------------------
+    @staticmethod
+    def _url(image) -> str | None:
+        """
+        A URL for a stored image, or None.
+
+        Wrapped because a storage backend raises when the file behind the row
+        has gone - a real risk when moving between local disk and Cloudinary,
+        since the rows keep pointing at paths the new backend never had. A
+        missing picture must never take down the page it was going to sit on.
+        """
+        if not image:
+            return None
+        try:
+            return image.url
+        except Exception:
+            return None
+
+    @property
+    def photo_url(self) -> str | None:
+        return self._url(self.photo)
+
+    @property
+    def id_photo_url(self) -> str | None:
+        return self._url(self.id_photo)
+
+    @property
+    def has_id_photo(self) -> bool:
+        return bool(self.id_photo)
+
+    @property
+    def initials(self) -> str:
+        """What to show in place of a photograph nobody has taken yet."""
+        parts = (getattr(self, "name", "") or "").split()
+        if len(parts) >= 2:
+            return (parts[0][:1] + parts[1][:1]).upper()
+        return (parts[0][:2] if parts else "?").upper()
+
+    # -- Who may look at the identity card -----------------------------------
+    def may_see_id(self, user) -> bool:
+        """
+        True when `user` may open the ID picture of this person.
+
+        Being able to EDIT somebody is the test, because that is the person
+        who photographed the card in the first place. Scoping is a separate
+        question and already answered before this is ever called: a manager
+        cannot reach another manager's customer at all.
+        """
+        if not self.id_photo_permission:
+            return False
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        return user.has_access(self.id_photo_permission)
+
+    def id_photo_for(self, user) -> str | None:
+        """The ID picture's URL, but only for somebody allowed to see it."""
+        return self.id_photo_url if self.may_see_id(user) else None
 
 
 def note_tag_field():

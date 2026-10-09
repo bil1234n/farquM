@@ -113,6 +113,62 @@ def validate_avatar_file(f):
         )
 
 
+def validate_person_photo(f):
+    """
+    A photograph of a person or of their identity card.
+
+    Images only - a PDF is allowed for a receipt because a bill often arrives
+    as one, but nothing photographs an ID card into a PDF, and a file that
+    cannot be shown beside the person's name is no use on a customer card.
+
+    The limit is the receipt limit rather than the 3 MB used for a profile
+    picture: an ID card is photographed to be READ later - a licence number,
+    an expiry date - and squeezing it harder than a receipt would be the one
+    picture in the system too blurred to do its job.
+    """
+    max_bytes = settings.MAX_RECEIPT_SIZE_MB * 1024 * 1024
+    if f.size > max_bytes:
+        raise ValidationError(
+            f"Image too large ({f.size / 1048576:.1f} MB). "
+            f"Maximum is {settings.MAX_RECEIPT_SIZE_MB} MB."
+        )
+    ext = f.name.rsplit(".", 1)[-1].lower() if "." in f.name else ""
+    allowed = ["jpg", "jpeg", "png", "webp"]
+    if ext not in allowed:
+        raise ValidationError(
+            f"Unsupported image type '.{ext}'. Allowed: " + ", ".join(allowed)
+        )
+
+
+def _person_photo_path(instance, filename, kind):
+    """
+    media/people/<customer|employee>/<id>/<kind>/<timestamp>_<filename>
+
+    The timestamp is not decoration: without it a replacement photo keeps the
+    old path, and Cloudinary - and every CDN in front of it - goes on serving
+    the picture that was just replaced. See avatar_upload_path.
+
+    The two kinds are kept in separate folders so that a bucket listing, a
+    backup, or a future "delete the ID pictures of people who have left"
+    never has to guess which file is which from its name.
+    """
+    stamp = timezone.now().strftime("%Y%m%d%H%M%S")
+    safe = filename.replace(" ", "_")
+    who = instance._meta.model_name
+    pk = getattr(instance, "pk", None) or "new"
+    return f"people/{who}/{pk}/{kind}/{stamp}_{safe}"
+
+
+def person_photo_upload_path(instance, filename):
+    """Where a person's own photograph is stored."""
+    return _person_photo_path(instance, filename, "photo")
+
+
+def id_photo_upload_path(instance, filename):
+    """Where the photograph of a person's identity card is stored."""
+    return _person_photo_path(instance, filename, "id")
+
+
 def percentage(part, whole) -> Decimal:
     part, whole = money(part), money(whole)
     if whole == ZERO:

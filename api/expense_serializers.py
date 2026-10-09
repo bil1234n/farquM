@@ -10,10 +10,17 @@ from core.models import Option
 from core.utils import ZERO
 from expenses.models import Employee, Expense, ExpenseMethod
 
-from .serializers import NOTE_TAG_FIELDS, NoteTagField, NoteTagMixin, OwnerNameMixin
+from .serializers import (
+    NOTE_TAG_FIELDS,
+    PERSON_PHOTO_FIELDS,
+    NoteTagField,
+    NoteTagMixin,
+    OwnerNameMixin,
+    PersonPhotoMixin,
+)
 
 
-class EmployeeSerializer(NoteTagMixin, serializers.ModelSerializer):
+class EmployeeSerializer(NoteTagMixin, PersonPhotoMixin, serializers.ModelSerializer):
     """
     One person on the payroll, with what they were paid this month and this
     year - so the list answers "has Kebede had his salary?" without opening
@@ -35,8 +42,9 @@ class EmployeeSerializer(NoteTagMixin, serializers.ModelSerializer):
     class Meta:
         model = Employee
         fields = [
-            "id", "name", "job", "job_name", "phone", "monthly_salary",
-            "hired_on", "is_active", "notes", *NOTE_TAG_FIELDS,
+            "id", "name", "job", "job_name", "phone", "address",
+            "monthly_salary", "hired_on", "is_active", "notes",
+            *NOTE_TAG_FIELDS, *PERSON_PHOTO_FIELDS,
             "paid_this_month", "paid_this_year", "last_paid_on", "created_at",
         ]
         read_only_fields = ["created_at"]

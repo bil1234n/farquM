@@ -1,5 +1,16 @@
 {% load widget_tweaks %}
-{# Reusable form renderer. Include with: {% include "partials/form_fields.html" with form=form %} #}
+{% comment %}
+   Reusable form renderer.
+   Include with: {% include "partials/form_fields.html" with form=form %}
+
+   wide_fields  names that take the full width instead of half.
+   skip_fields  names this page lays out itself further down. Matching is by
+                substring, so "photo" also skips id_photo and remove_photo -
+                which is the point: a picture needs its own slot, not a bare
+                file input in the middle of a grid. Anything skipped MUST be
+                rendered by the including template or the user's typing is
+                silently dropped on save.
+{% endcomment %}
 
 {% if form.non_field_errors %}
   <div class="alert alert-danger py-2 px-3 small">
@@ -9,7 +20,8 @@
 
 <div class="row g-3">
   {% for field in form %}
-    {% if field.field.widget.input_type == "hidden" %}
+    {% if skip_fields and field.name in skip_fields %}
+    {% elif field.field.widget.input_type == "hidden" %}
       {{ field }}
     {% else %}
       <div class="{% if field.field.widget.input_type == 'checkbox' %}col-12{% elif field.name in wide_fields %}col-12{% else %}col-md-6{% endif %}">

@@ -13,7 +13,7 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
-from core.forms import NoteTagField, NoteTagFormMixin
+from core.forms import NoteTagField, NoteTagFormMixin, PersonPhotoFormMixin
 
 from .models import Employee, ExpenseMethod
 
@@ -223,7 +223,9 @@ class VoidExpenseForm(StyledFormMixin, forms.Form):
     )
 
 
-class EmployeeForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
+class EmployeeForm(
+    NoteTagFormMixin, PersonPhotoFormMixin, StyledFormMixin, forms.ModelForm
+):
     """Somebody on the payroll. No login needed - just who they are and pay."""
 
     job = forms.IntegerField(required=False, widget=forms.HiddenInput)
@@ -232,14 +234,27 @@ class EmployeeForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
     class Meta:
         model = Employee
         fields = [
-            "name", "phone", "monthly_salary", "hired_on", "is_active",
+            "name", "phone", "address", "monthly_salary", "hired_on",
+            "photo", "id_photo", "id_number", "is_active",
             "notes", "note_tag",
         ]
         widgets = {
             "hired_on": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "address": forms.Textarea(attrs={"rows": 2}),
             "notes": forms.Textarea(attrs={"rows": 2}),
         }
-        labels = {"name": "Full name", "monthly_salary": "Monthly salary"}
+        labels = {
+            "name": "Full name",
+            "monthly_salary": "Monthly salary",
+            "photo": "Employee photo",
+            "id_photo": "ID photo",
+            "id_number": "ID number",
+        }
+        help_texts = {
+            "photo": "Optional. Shows beside their name on the payroll.",
+            "id_photo": "Optional. Kebele card, licence or passport.",
+            "id_number": "Optional. The number written on that card.",
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

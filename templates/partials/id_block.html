@@ -1,0 +1,34 @@
+{% comment %}
+  The identity card on a person's page.
+
+  The NUMBER is shown to anybody who may open the person: it is what gets
+  read out over a phone to check a delivery, and on its own it identifies
+  nobody. The PICTURE is a government document, so it is shown only to
+  whoever may edit this person - see core.models.PersonRecord.may_see_id,
+  which is what sets `can_see_id` in the view.
+
+  Include with:
+    {% include "partials/id_block.html" with person=customer can_see_id=can_see_id %}
+{% endcomment %}
+{% if person.id_number or person.has_id_photo %}
+  <hr class="my-2">
+  <div class="text-muted mb-1"><span>Identity</span></div>
+  {% if person.id_number %}
+    <div class="d-flex justify-content-between py-1">
+      <span class="text-muted"><span>ID number</span></span>
+      <span class="mono">{{ person.id_number }}</span>
+    </div>
+  {% endif %}
+  {% if person.has_id_photo %}
+    {% if can_see_id %}
+      <a class="id-card mt-2" href="{{ person.id_photo_url }}" target="_blank" rel="noopener">
+        <img src="{{ person.id_photo_url }}" alt="ID" loading="lazy">
+      </a>
+    {% else %}
+      <div class="id-locked mt-2">
+        <i class="bi bi-shield-lock"></i>
+        <span>An ID photo is on file. You are not allowed to open it.</span>
+      </div>
+    {% endif %}
+  {% endif %}
+{% endif %}

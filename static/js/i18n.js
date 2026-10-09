@@ -74,15 +74,27 @@
     Object.keys(counts).forEach(function (id) {
       var tpl = counts[id];
       var order = [];
+      /* ONE pass over the placeholders, not one per kind. Two passes record
+         `order` in the order the passes ran rather than the order the
+         placeholders appear in, and a template mixing the two kinds - e.g.
+         "{0}% margin · COGS {$1}" - then fills them back the wrong way
+         round: the Amharic dashboard read "ETB 10,248.50% margin · COGS
+         25.17". Capture groups are numbered by position, so `order` has to
+         be built by position too. */
       var re = tpl
         .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")   // escape everything first
-        .replace(/\\\{\\\$(\d+)\\\}/g, function (m, i) {
-          order.push(parseInt(i, 10)); return "(.+?)";
-        })
-        .replace(/\\\{(\d+)\\\}/g, function (m, i) {
-          order.push(parseInt(i, 10)); return "([\\d][\\d.,]*)";
+        .replace(/\\\{(\\\$)?(\d+)\\\}/g, function (m, text, i) {
+          order.push(parseInt(i, 10));
+          return text ? "(.+?)" : "([\\d][\\d.,]*)";
         })
         .replace(/\\\(s\\\)/g, "s?");
+      /* A template ENDING in {$n} has to take the whole rest of the node.
+         "(.+?)" is lazy, and with nothing after it to force the engine on,
+         it settles for a single character: "Paid in October" came out as
+         "በO የተከፈለctober". Anchoring the last group fixes that without
+         touching templates whose placeholder has text after it, where the
+         lazy match is what lets a template cover only part of a node. */
+      re = re.replace(/\(\.\+\?\)$/, "(.+)$");
       try {
         patterns.push({ id: id, re: new RegExp(re, "i"), order: order });
       } catch (e) {

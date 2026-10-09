@@ -24,7 +24,13 @@ from django.db.models import Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import AuthoredModel, OwnedModel, TimeStampedModel, note_tag_field
+from core.models import (
+    AuthoredModel,
+    OwnedModel,
+    PersonRecord,
+    TimeStampedModel,
+    note_tag_field,
+)
 from core.utils import ZERO, receipt_upload_path, validate_receipt_file
 
 
@@ -37,8 +43,12 @@ class ExpenseMethod(models.TextChoices):
     CHEQUE = "CHEQUE", "Cheque"
 
 
-class Employee(AuthoredModel):
+class Employee(PersonRecord, AuthoredModel):
     """Somebody on the payroll. No login needed."""
+
+    #: Whoever may add and edit the payroll may open an identity card. See
+    #: core.models.PersonRecord.
+    id_photo_permission = "employee.manage"
 
     name = models.CharField(max_length=160, db_index=True)
     # Managed pick-list plus a snapshot of the wording, like every other
@@ -53,6 +63,10 @@ class Employee(AuthoredModel):
     )
     job_name = models.CharField(max_length=120, blank=True)
     phone = models.CharField(max_length=30, blank=True)
+    address = models.TextField(
+        blank=True,
+        help_text="Where they live - the kebele, the landmark, the house.",
+    )
     monthly_salary = models.DecimalField(
         max_digits=12,
         decimal_places=2,

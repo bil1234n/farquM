@@ -4,23 +4,41 @@ from django import forms
 from django.utils import timezone
 
 from accounts.forms import StyledFormMixin
-from core.forms import NoteTagField, NoteTagFormMixin, ReceiptField
+from core.forms import (
+    NoteTagField,
+    NoteTagFormMixin,
+    PersonPhotoFormMixin,
+    ReceiptField,
+)
 from core.scoping import scoped
 from core.utils import ZERO, default_due_date
 
 from .models import Customer, PaymentMethod, Receipt, Transaction
 
 
-class CustomerForm(NoteTagFormMixin, StyledFormMixin, forms.ModelForm):
+class CustomerForm(
+    NoteTagFormMixin, PersonPhotoFormMixin, StyledFormMixin, forms.ModelForm
+):
     class Meta:
         model = Customer
         fields = [
             "name", "phone", "alternate_phone", "email", "address",
-            "customer_type", "is_credit_approved", "is_active", "notes", "note_tag",
+            "customer_type", "photo", "id_photo", "id_number",
+            "is_credit_approved", "is_active", "notes", "note_tag",
         ]
         widgets = {
             "address": forms.Textarea(attrs={"rows": 2}),
             "notes": forms.Textarea(attrs={"rows": 2}),
+        }
+        labels = {
+            "photo": "Customer photo",
+            "id_photo": "ID photo",
+            "id_number": "ID number",
+        }
+        help_texts = {
+            "photo": "Optional. Helps the counter recognise a regular.",
+            "id_photo": "Optional. Kebele card, licence or passport.",
+            "id_number": "Optional. The number written on that card.",
         }
 
     def __init__(self, *args, **kwargs):

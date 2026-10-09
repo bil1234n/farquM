@@ -286,6 +286,9 @@ class EmployeeViewSet(
         "PUT": "employee.manage",
     }
     action_permissions = {"payments": ("employee.view",)}
+    # Multipart as well as JSON: the person's photograph and the picture of
+    # their ID arrive as file parts, while an ordinary edit stays JSON.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     # The payroll is short but not always 25 long: the phone asks for the
     # whole list in one page (page_size), up to the usual ceiling.
     pagination_class = StandardPagination
@@ -297,8 +300,13 @@ class EmployeeViewSet(
             qs = qs.filter(is_active=True)
         q = (params.get("q") or "").strip()
         if q:
-            qs = qs.filter(Q(name__icontains=q) | Q(phone__icontains=q)
-                           | Q(job_name__icontains=q))
+            qs = qs.filter(
+                Q(name__icontains=q) | Q(phone__icontains=q)
+                | Q(job_name__icontains=q)
+                # Somebody holding a card and asking "who is this?" has the
+                # number in front of them and nothing else.
+                | Q(id_number__icontains=q)
+            )
         return qs.order_by("-is_active", "name")
 
     def _job(self, serializer):

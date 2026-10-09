@@ -4,38 +4,67 @@
 {% block title %}{{ title }}{% endblock %}
 {% block page_title %}{{ title }}{% endblock %}
 {% block breadcrumb %}
-  <div class="crumb">The phone number is the customer's unique identifier and must not repeat.</div>
+  <div class="crumb"><span>The phone number is the customer's unique identifier and must not repeat.</span></div>
 {% endblock %}
 
 {% block content %}
-<div class="row">
-  <div class="col-lg-9">
-    <form method="post" novalidate>
-      {% csrf_token %}
-      <div class="card">
-        <div class="card-header"><i class="bi bi-person-vcard me-1"></i> Customer Details</div>
+{% comment %}
+  enctype matters: without it the browser posts the file inputs as plain
+  names and the two photographs never leave the machine.
+{% endcomment %}
+<form method="post" enctype="multipart/form-data" novalidate>
+  {% csrf_token %}
+  <div class="row">
+    <div class="col-lg-9">
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-person-vcard me-1"></i> <span>Customer Details</span></div>
         <div class="card-body">
-          {% include "partials/form_fields.html" with form=form wide_fields="address,notes,note_tag" %}
-        </div>
-        <div class="card-footer bg-light d-flex justify-content-between">
-          <a href="{% url 'sales:customer_list' %}" class="btn btn-outline-secondary btn-sm">Cancel</a>
-          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Save Customer</button>
+          {% include "partials/form_fields.html" with form=form wide_fields="address,notes,note_tag" skip_fields="photo,id_photo,id_number" %}
         </div>
       </div>
-    </form>
-  </div>
 
-  <div class="col-lg-3">
-    <div class="card">
-      <div class="card-header"><i class="bi bi-info-circle me-1"></i> About credit approval</div>
-      <div class="card-body small text-muted">
-        <p>A customer can only buy on <strong>"Pay Later"</strong> terms once an administrator
-        ticks <em>credit approved</em>.</p>
-        <p>Their credit limit is then set on the borrower profile. A sale that would push
-        them past that limit is refused at the point of sale, before any stock moves.</p>
-        <p class="mb-0">Managers can register customers but cannot grant credit approval.</p>
+      <div class="card">
+        <div class="card-header"><i class="bi bi-camera me-1"></i> <span>Photo and ID</span></div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {% include "partials/photo_field.html" with field=form.photo remove=form.remove_photo current=form.instance.photo_url %}
+            </div>
+            <div class="col-md-6">
+              {% include "partials/photo_field.html" with field=form.id_photo remove=form.remove_id_photo current=form.instance.id_photo_url %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="{{ form.id_number.id_for_label }}"><span>{{ form.id_number.label }}</span></label>
+              {{ form.id_number }}
+              <div class="form-text"><span>{{ form.id_number.help_text }}</span></div>
+              {% for e in form.id_number.errors %}<div class="invalid-feedback d-block">{{ e }}</div>{% endfor %}
+            </div>
+          </div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'sales:customer_list' %}" class="btn btn-outline-secondary btn-sm"><span>Cancel</span></a>
+          <button class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i> <span>Save Customer</span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-3">
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-info-circle me-1"></i> <span>About credit approval</span></div>
+        <div class="card-body small text-muted">
+          <p><span>A customer can only buy on "Pay Later" terms once an administrator ticks credit approved.</span></p>
+          <p><span>Their credit limit is then set on the borrower profile. A sale that would push them past that limit is refused at the point of sale, before any stock moves.</span></p>
+          <p class="mb-0"><span>Managers can register customers but cannot grant credit approval.</span></p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><i class="bi bi-shield-lock me-1"></i> <span>About the ID photo</span></div>
+        <div class="card-body small text-muted">
+          <p><span>Both pictures are optional. Nobody is turned away for not carrying a card.</span></p>
+          <p class="mb-0"><span>Only staff who may edit customers can open the ID photo. Everybody else sees that one is on file and no more.</span></p>
+        </div>
       </div>
     </div>
   </div>
-</div>
+</form>
 {% endblock %}

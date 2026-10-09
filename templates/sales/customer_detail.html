@@ -68,6 +68,19 @@
     <div class="card mb-3">
       <div class="card-header"><i class="bi bi-person-vcard me-1"></i> Contact</div>
       <div class="card-body small">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          {% if customer.photo_url %}
+            <a href="{{ customer.photo_url }}" target="_blank" rel="noopener">
+              <img class="person-photo" src="{{ customer.photo_url }}" alt="{{ customer.name }}" loading="lazy">
+            </a>
+          {% else %}
+            <div class="avatar" style="width:44px;height:44px;font-size:.9rem">{{ customer.initials }}</div>
+          {% endif %}
+          <div>
+            <div class="fw-semibold">{{ customer.name }}</div>
+            <div class="text-muted">{{ customer.get_customer_type_display }}</div>
+          </div>
+        </div>
         <div class="d-flex justify-content-between py-1">
           <span class="text-muted">Phone</span><span class="mono">{{ customer.phone }}</span>
         </div>
@@ -86,6 +99,7 @@
           <div class="text-muted mb-1">Address</div>
           <div>{{ customer.address|linebreaksbr }}</div>
         {% endif %}
+        {% include "partials/id_block.html" with person=customer can_see_id=can_see_id %}
         {% if customer.notes or customer.note_tag %}
           <hr class="my-2">
           {% note_block customer.notes customer.note_tag %}

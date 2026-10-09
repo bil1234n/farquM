@@ -258,3 +258,98 @@ class NoteTagFormMixin:
                 note_field=self.note_text_field,
                 label=old.label if old.label and old.label != "Note tag" else "Mark",
             )
+
+
+class PersonPhotoFormMixin:
+    """
+    The two pictures every person record can carry, on a ModelForm.
+
+    WHAT IT ADDS
+    ------------
+    * both file inputs accept images only, and neither is ever required - a
+      customer registered over the phone has no photograph and never will;
+    * a "remove" tick box, but only for a picture that actually exists, so
+      the form never offers an action that would do nothing;
+    * a new upload BEATS a ticked remove box. Somebody who picks a new photo
+      and forgets to untick "remove" means "replace", not "delete" - and the
+      other reading throws away the file they just chose.
+
+    DELETING THE OLD BLOB IS A SEPARATE STEP
+    ----------------------------------------
+    The row is cleared first and the file deleted afterwards (and only on a
+    commit), because the other order leaves the record pointing at a file
+    that no longer exists if the delete succeeds and the save then fails.
+    Views that save the instance themselves call `drop_removed_photos()`
+    once the save has gone through.
+    """
+
+    #: The image fields this form looks after.
+    photo_fields = ("photo", "id_photo")
+    #: Wording for the tick box beside each one.
+    remove_labels = {
+        "photo": "Remove this photo",
+        "id_photo": "Remove this ID photo",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._removed_files = []
+        for name in self.photo_fields:
+            field = self.fields.get(name)
+            if field is None:
+                continue
+            field.required = False
+            # A plain FileInput, not Django's ClearableFileInput. The
+            # clearable one prints "Currently: people/customer/4/id/2026...png"
+            # with a Clear box beside it - a storage path shown to a
+            # shopkeeper, and a second way to remove a picture standing right
+            # next to the tick box below. The slot shows the picture itself.
+            field.widget = forms.FileInput(
+                attrs={"class": "form-control", "accept": "image/*"}
+            )
+            instance = getattr(self, "instance", None)
+            if instance is not None and instance.pk and getattr(instance, name, None):
+                self.fields[f"remove_{name}"] = forms.BooleanField(
+                    required=False,
+                    label=self.remove_labels.get(name, "Remove this picture"),
+                )
+
+    def _clear_removed(self, obj):
+        """Blank every picture whose box is ticked and no new file replaces."""
+        self._removed_files = []
+        for name in self.photo_fields:
+            if name not in self.fields:
+                continue
+            if not self.cleaned_data.get(f"remove_{name}"):
+                continue
+            if self.files and self.files.get(self.add_prefix(name)):
+                continue  # Replaced, not removed.
+            current = getattr(obj, name, None)
+            if current:
+                self._removed_files.append(current)
+            setattr(obj, name, None)
+
+    def drop_removed_photos(self):
+        """
+        Delete the files behind the pictures just removed.
+
+        Called after the row has been saved. A failure here is ignored on
+        purpose: an orphaned blob costs a few kilobytes, and raising would
+        undo an edit the user has already been told was saved.
+        """
+        for old in self._removed_files:
+            try:
+                old.delete(save=False)
+            except Exception:
+                pass
+        self._removed_files = []
+
+    def save(self, commit=True):
+        obj = super().save(commit=False)
+        self._clear_removed(obj)
+        if commit:
+            obj.save()
+            if hasattr(self, "save_m2m"):
+                self.save_m2m()
+            self.drop_removed_photos()
+        return obj

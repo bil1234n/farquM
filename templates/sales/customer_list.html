@@ -22,7 +22,8 @@
     <div class="col-md-6">
       <label class="form-label">Search</label>
       <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
-             placeholder="Name, phone number or email...">
+             placeholder="Name, phone, email or ID number"
+             data-i18n-placeholder="r9.ph_customer">
     </div>
     <div class="col-md-4">
       <label class="form-label">Filter</label>
@@ -53,10 +54,20 @@
         {% for c in customers %}
           <tr>
             <td>
-              <a href="{% url 'sales:customer_detail' c.pk %}" class="fw-semibold">{{ c.name }}</a>
-              {% note_mark c.note_tag compact=True %}
-              {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
-              {% if c.email %}<div class="text-muted-sm">{{ c.email }}</div>{% endif %}
+              <div class="d-flex align-items-center gap-2">
+                {% if c.photo_url %}
+                  <img class="person-photo" style="width:34px;height:34px"
+                       src="{{ c.photo_url }}" alt="{{ c.name }}" loading="lazy">
+                {% else %}
+                  <div class="avatar">{{ c.initials }}</div>
+                {% endif %}
+                <div>
+                  <a href="{% url 'sales:customer_detail' c.pk %}" class="fw-semibold">{{ c.name }}</a>
+                  {% note_mark c.note_tag compact=True %}
+                  {% if not c.is_active %}<span class="badge text-bg-secondary ms-1">Inactive</span>{% endif %}
+                  {% if c.email %}<div class="text-muted-sm">{{ c.email }}</div>{% endif %}
+                </div>
+              </div>
             </td>
             <td class="mono">{{ c.phone }}</td>
             <td><span class="badge text-bg-light text-dark">{{ c.get_customer_type_display }}</span></td>

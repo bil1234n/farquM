@@ -910,6 +910,9 @@ class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
     permission_classes = [ActionPermission]
+    # Multipart as well as JSON: a customer's photograph and the picture of
+    # their ID arrive as file parts, while an ordinary edit stays JSON.
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     permission_map = {
         "GET": "customer.view",
         "POST": "customer.create",
@@ -938,6 +941,9 @@ class CustomerViewSet(viewsets.ModelViewSet):
             qs = qs.filter(
                 Q(name__icontains=q) | Q(phone__icontains=q)
                 | Q(alternate_phone__icontains=q) | Q(email__icontains=q)
+                # Somebody holding a card and asking "who is this?" has the
+                # number in front of them and nothing else.
+                | Q(id_number__icontains=q)
             )
         if params.get("filter") == "debtors":
             qs = qs.filter(credit_account__outstanding_balance__gt=0)

@@ -176,6 +176,11 @@ class AuthorStampMixin:
         obj.save()
         if hasattr(form, "save_m2m"):
             form.save_m2m()
+        # A picture ticked off on the form was cleared on the row by the save
+        # above; only now is it safe to delete the file behind it. See
+        # core.forms.PersonPhotoFormMixin.
+        if hasattr(form, "drop_removed_photos"):
+            form.drop_removed_photos()
         self.object = obj
         # Deliberately NOT calling ModelFormMixin.form_valid() here - it would
         # call form.save() a second time and issue a redundant UPDATE.

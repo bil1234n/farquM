@@ -58,6 +58,9 @@ class CustomerListView(OwnerScopedMixin, PermissionRequiredMixin, ListView):
             qs = qs.filter(
                 Q(name__icontains=q) | Q(phone__icontains=q)
                 | Q(alternate_phone__icontains=q) | Q(email__icontains=q)
+                # Somebody holding a card and asking "who is this?" has the
+                # number in front of them and nothing else.
+                | Q(id_number__icontains=q)
             )
         if flt == "debtors":
             qs = qs.filter(credit_account__outstanding_balance__gt=0)
@@ -98,6 +101,9 @@ class CustomerDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailView):
             if hasattr(self.object, "debts") else []
         )
         ctx["account"] = getattr(self.object, "credit_account", None)
+        # An ID picture is a government document, not working information -
+        # see core.models.PersonRecord.
+        ctx["can_see_id"] = self.object.may_see_id(self.request.user)
         return ctx
 
 

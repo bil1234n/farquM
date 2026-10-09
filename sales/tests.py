@@ -5,9 +5,13 @@ keeper's dashboard, and the light-only look.
 The rules themselves are tested through the API (api/tests.py) - these check
 that the web pages reach the same rules and show what they should.
 """
+import io
+import tempfile
 from decimal import Decimal
 
-from django.test import Client, TestCase
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, TestCase, override_settings
 
 from accounts.models import User
 from accounts.roles import ensure_system_roles
@@ -304,3 +308,90 @@ class LightOnlyTests(WebRound3Base):
         self.assertNotIn("faruq.theme", html)
         login = Client().get("/accounts/login/").content.decode()
         self.assertNotIn("themeToggle", login)
+
+
+def _png() -> bytes:
+    """A real PNG, so Django's ImageField validator accepts it."""
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (30, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _upload(name="photo.png") -> SimpleUploadedFile:
+    return SimpleUploadedFile(name, _png(), content_type="image/png")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="faruq-customers-"))
+class CustomerPhotoPageTests(WebRound3Base):
+    """A face and an identity card on the customer book."""
+
+    def setUp(self):
+        super().setUp()
+        # A seller whose access to edit customers has been taken away in
+        # Access Control: he still serves them, he no longer opens their
+        # papers.
+        self.looker = User.objects.create_user(
+            "selam", password="pw", role="SALES", manager=self.manager,
+            denied_permissions=["customer.edit"],
+        )
+
+    def test_registering_a_customer_with_both_pictures(self):
+        response = self.client_for(self.sales).post(
+            "/sales/customers/add/",
+            {
+                "name": "Chaltu",
+                "phone": "0922",
+                "address": "Bole, behind the mosque",
+                "customer_type": "REGULAR",
+                "id_number": "ETH-77123",
+                "photo": _upload("face.png"),
+                "id_photo": _upload("kebele.png"),
+            },
+        )
+        self.assertEqual(response.status_code, 302, response.content[:400])
+        person = Customer.objects.get(name="Chaltu")
+        self.assertEqual(person.id_number, "ETH-77123")
+        self.assertTrue(person.photo)
+        self.assertTrue(person.id_photo)
+
+    def test_the_form_posts_as_multipart(self):
+        """
+        Without enctype the browser sends file inputs as bare names and the
+        pictures never leave the machine - and nothing on screen says so.
+        """
+        html = self.client_for(self.sales).get(
+            "/sales/customers/add/"
+        ).content.decode()
+        self.assertIn('enctype="multipart/form-data"', html)
+
+    def test_the_card_is_shown_to_a_seller_and_hidden_from_a_looker(self):
+        self.customer.id_number = "ETH-5"
+        self.customer.id_photo.save("card.png", ContentFile(_png()), save=True)
+
+        allowed = self.client_for(self.sales).get(
+            f"/sales/customers/{self.customer.pk}/"
+        ).content.decode()
+        self.assertIn(self.customer.id_photo.url, allowed)
+
+        # The same customer, reached by somebody who may not edit: the record
+        # says a card is on file and stops there.
+        self.customer.owner = self.looker
+        self.customer.save(update_fields=["owner"])
+        refused = self.client_for(self.looker).get(
+            f"/sales/customers/{self.customer.pk}/"
+        ).content.decode()
+        self.assertNotIn(self.customer.id_photo.url, refused)
+        self.assertIn("not allowed to open it", refused)
+        self.assertIn("ETH-5", refused)
+
+    def test_the_book_is_searched_by_the_number_on_the_card(self):
+        Customer.objects.create(
+            name="Chaltu", phone="0922", owner=self.sales, id_number="ETH-77123"
+        )
+        html = self.client_for(self.sales).get(
+            "/sales/customers/", {"q": "77123"}
+        ).content.decode()
+        self.assertIn("Chaltu", html)
+        self.assertNotIn(">Abebe<", html)

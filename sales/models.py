@@ -18,7 +18,13 @@ from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
-from core.models import AuthoredModel, OwnedModel, TimeStampedModel, note_tag_field
+from core.models import (
+    AuthoredModel,
+    OwnedModel,
+    PersonRecord,
+    TimeStampedModel,
+    note_tag_field,
+)
 from core.utils import ZERO, money, receipt_upload_path, validate_receipt_file
 
 
@@ -36,7 +42,12 @@ class CustomerQuerySet(models.QuerySet):
         return self.filter(credit_account__outstanding_balance__gt=0)
 
 
-class Customer(AuthoredModel, OwnedModel):
+class Customer(PersonRecord, AuthoredModel, OwnedModel):
+    #: Photographing the card and opening it again are the same job, so the
+    #: permission to edit a customer is the one that unlocks it. See
+    #: core.models.PersonRecord.
+    id_photo_permission = "customer.edit"
+
     class CustomerType(models.TextChoices):
         WALK_IN = "WALK_IN", "Walk-in"
         REGULAR = "REGULAR", "Regular"
