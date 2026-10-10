@@ -17,6 +17,7 @@ from inventory.services import deduct_for_sale, reverse_sale
 
 from .models import (
     Customer,
+    ExtraCharge,
     PaymentMethod,
     PaymentStatus,
     Transaction,
@@ -39,6 +40,7 @@ def create_sale(
     amount_paid: Decimal = ZERO,
     discount_amount: Decimal = ZERO,
     tax_amount: Decimal = ZERO,
+    extra_charges: list[dict] | None = None,
     payment_method: str = PaymentMethod.CASH,
     payment_channel_id=None,
     payment_channel_name: str = "",
@@ -79,6 +81,31 @@ def create_sale(
     if amount_paid < ZERO:
         raise SaleError("Amount paid cannot be negative.")
 
+    # Extras on top of the goods - transport, a loading worker... A sale can
+    # carry several. Each is [{"label", "amount", "on_debt"}]; a line with no
+    # amount is simply dropped, and one with an amount must say what it is for.
+    extras: list[dict] = []
+    for raw in extra_charges or []:
+        extra_amount = money(raw.get("amount") or ZERO)
+        extra_label = " ".join((raw.get("label") or "").split())[:120]
+        if extra_amount < ZERO:
+            raise SaleError("An extra charge cannot be negative.")
+        if extra_amount == ZERO:
+            continue
+        if not extra_label:
+            raise SaleError(
+                "Say what each extra charge is for (transport, worker...)."
+            )
+        extras.append({
+            "label": extra_label,
+            "amount": extra_amount,
+            "on_debt": bool(raw.get("on_debt")),
+        })
+    extra_total = money(sum((e["amount"] for e in extras), ZERO))
+    extra_debt_total = money(
+        sum((e["amount"] for e in extras if e["on_debt"]), ZERO)
+    )
+
     # --- 1. Pre-flight validation ------------------------------------------
     provisional_total = ZERO
     for line in cart:
@@ -108,7 +135,21 @@ def create_sale(
             "at full price, or ask someone who can approve the discount."
         )
 
-    provisional_total = money(provisional_total - discount_amount + tax_amount)
+    goods_total = money(provisional_total - discount_amount + tax_amount)
+    provisional_total = money(goods_total + extra_total)
+
+    # Extra charges the seller said go on the customer's debt cannot be
+    # swallowed by the amount paid: whatever is collected now must leave them
+    # owing in full. Said here, in the one doorway every client uses, so the
+    # web page and the phone cannot disagree about it.
+    max_collectable = money(provisional_total - extra_debt_total)
+    if extra_debt_total > ZERO and amount_paid > max_collectable:
+        raise SaleError(
+            f"Extra charges worth {extra_debt_total} are set to go on debt, so "
+            f"no more than {max_collectable} can be collected now. Lower the "
+            "amount paid, or choose to collect those extra charges now."
+        )
+
     credit_needed = money(max(provisional_total - amount_paid, ZERO))
 
     if credit_needed > ZERO:
@@ -166,6 +207,11 @@ def create_sale(
         customer_phone_snapshot=walk_in_phone,
         discount_amount=discount_amount,
         tax_amount=tax_amount,
+        # The summary of the lines below, so a total or a one-line reading
+        # never needs a join.
+        extra_charge_amount=extra_total,
+        extra_charge_label=", ".join(e["label"] for e in extras)[:120],
+        extra_charge_on_debt=extra_debt_total > ZERO,
         amount_paid=amount_paid,
         payment_method=method,
         payment_channel=channel,
@@ -180,6 +226,18 @@ def create_sale(
         # Counted so the three banks this yard actually uses float to the top
         # of a list of thirty next time.
         channel.touch_use()
+
+    ExtraCharge.objects.bulk_create(
+        [
+            ExtraCharge(
+                transaction=txn,
+                label=e["label"],
+                amount=e["amount"],
+                on_debt=e["on_debt"],
+            )
+            for e in extras
+        ]
+    )
 
     # --- 3. Lines + stock ---------------------------------------------------
     for line in cart:

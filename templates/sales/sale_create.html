@@ -66,6 +66,7 @@
         <div class="line"><span>Subtotal</span><span class="money" id="dSubtotal">0.00</span></div>
         {% if can_discount %}<div class="line"><span>Discount</span><span class="money text-danger" id="dDiscount">0.00</span></div>{% endif %}
         <div class="line"><span>Tax</span><span class="money" id="dTax">0.00</span></div>
+        <div class="line d-none" id="dExtraLine"><span id="dExtraLabel">Extra charge</span><span class="money" id="dExtra">0.00</span></div>
         <div class="line grand"><span>Total</span><span class="money" id="dTotal">0.00</span></div>
         <div class="line"><span>Paid now</span><span class="money text-success" id="dPaid">0.00</span></div>
         <div class="line fw-bold"><span>Balance (credit)</span><span class="money text-danger" id="dBalance">0.00</span></div>
@@ -173,6 +174,37 @@
               {{ form.tax_amount }}
             </div>
           </div>
+
+          {% comment %}
+            Extra charges: things the customer pays for on top of the goods -
+            a loading worker, transport, anything that came with this sale. A
+            sale can carry as many as it needs, one row each: what it is for
+            (a pick-list that can be added to), the amount, and whether the
+            customer pays it now or it goes on their debt. All of them are
+            added to the total; one that is not paid now is simply part of what
+            is left owing, so it lands on the customer's debt through the same
+            path as any other unpaid balance.
+
+            Rows are posted as parallel arrays - extra_label[], extra_amount[],
+            extra_pay[] - exactly like the cart.
+          {% endcomment %}
+          <div class="border rounded p-2 mb-3" id="extraBox">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="form-label mb-0">
+                <i class="bi bi-truck me-1"></i> Extra charges
+                <span class="text-muted small">(optional)</span>
+              </div>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="addExtraBtn">
+                <i class="bi bi-plus-lg me-1"></i> Add
+              </button>
+            </div>
+            <div id="extraRows"></div>
+            <div class="form-text" id="extraEmpty">
+              Transport, a loading worker... something the customer pays on top of
+              the goods. Click <strong>Add</strong>, and again for each further charge.
+            </div>
+          </div>
+          {{ extra_rows|json_script:"extraRowsData" }}
 
           <div class="mb-3">
             <label class="form-label" for="{{ form.payment_method.id_for_label }}">Payment method</label>
@@ -398,9 +430,26 @@ function recalc() {
 
   const discount = numberIn($('id_discount_amount'));
   const tax      = numberIn($('id_tax_amount'));
-  const total    = Math.max(subtotal - discount + tax, 0);
+  const ex       = extraRowsInfo();
+  const extra    = ex.total;
+  const goods    = Math.max(subtotal - discount + tax, 0);
+  const total    = goods + extra;
+  // Extra charges put on debt cannot be eaten by the amount paid: what is
+  // collected now has to leave them owing in full. The server refuses it
+  // otherwise.
+  const payableNow = Math.max(total - ex.debt, 0);
+  if (ex.debt > 0 && numberIn($('id_amount_paid')) > payableNow) {
+    $('id_amount_paid').value = fmt(payableNow);
+  }
   const paid     = numberIn($('id_amount_paid'));
   const balance  = Math.max(total - paid, 0);
+
+  $('dExtraLine').classList.toggle('d-none', extra <= 0);
+  $('dExtra').textContent = fmt(extra);
+  // One charge is named on its own line; several are summed under one.
+  $('dExtraLabel').textContent =
+    (ex.count === 1 && ex.labels[0]) ? ex.labels[0] : 'Extra charges';
+  window._payableNow = payableNow;
 
   $('dSubtotal').textContent = fmt(subtotal);
   if ($('dDiscount')) $('dDiscount').textContent = fmt(discount);
@@ -451,6 +500,13 @@ function applyWalkInLock() {
   const on = walkInOn();
   const nothing = $('payNothingBtn');
   if (nothing) { nothing.disabled = on; }
+  // No account behind a one-off sale, so there is no debt to add an extra
+  // charge to: every one of them is collected now.
+  document.querySelectorAll('#extraRows .extra-pay').forEach(sel => {
+    const debtOpt = sel.querySelector('option[value="DEBT"]');
+    if (debtOpt) debtOpt.disabled = on;
+    if (on && sel.value === 'DEBT') sel.value = 'NOW';
+  });
   const due = $('id_due_date');
   if (due) {
     due.disabled = on;
@@ -469,7 +525,96 @@ if (walkInBox) {
   applyWalkInLock();
 }
 
-function payFull()    { $('id_amount_paid').value = fmt(window._saleTotal || 0); recalc(); }
+// ---- Extra charges -----------------------------------------------------
+// Any number of rows: what it is for, how much, and whether it is paid now or
+// goes on the customer's debt. Summed here only to draw the totals - the
+// server re-reads the rows and is the one that decides.
+function extraRowsInfo() {
+  let total = 0, debt = 0, count = 0;
+  const labels = [];
+  document.querySelectorAll('#extraRows .extra-row').forEach(row => {
+    const amount = numberIn(row.querySelector('.extra-amount'));
+    if (amount <= 0) return;
+    count++;
+    total += amount;
+    const pay = row.querySelector('.extra-pay');
+    const debtOpt = pay && pay.querySelector('option[value="DEBT"]');
+    if (pay && pay.value === 'DEBT' && debtOpt && !debtOpt.disabled) debt += amount;
+    // The pick-list widget keeps the chosen wording in a hidden input.
+    const label = row.querySelector('[name="extra_label[]"]');
+    labels.push(((label && label.value) || '').trim());
+  });
+  return {total, debt, count, labels};
+}
+
+function addExtraRow(label, amount, pay) {
+  const wrap = document.createElement('div');
+  wrap.className = 'extra-row border rounded p-2 mb-2 bg-body-tertiary';
+  wrap.innerHTML = `
+    <div class="d-flex gap-2 align-items-start">
+      <div class="flex-grow-1">
+        <label class="form-label small mb-1">What is it for?</label>
+        <div class="option-select" data-group="EXTRA_CHARGE"
+             data-name-field="extra_label[]"
+             data-placeholder="Select what it is for"></div>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-danger extra-remove"
+              style="margin-top:1.5rem" title="Remove this extra charge">
+        <i class="bi bi-trash"></i>
+      </button>
+    </div>
+    <div class="row g-2 mt-1">
+      <div class="col-6">
+        <label class="form-label small mb-1">Amount</label>
+        <input type="number" name="extra_amount[]" min="0" step="0.01" value="0.00"
+               class="form-control form-control-sm text-end extra-amount">
+      </div>
+      <div class="col-6">
+        <label class="form-label small mb-1">Paid</label>
+        <select name="extra_pay[]" class="form-select form-select-sm extra-pay">
+          <option value="NOW">Customer pays now</option>
+          ${CAN_CREDIT ? '<option value="DEBT">Add to debt</option>' : ''}
+        </select>
+      </div>
+    </div>`;
+
+  // Set from script rather than interpolated into the markup, so a label
+  // containing a quote cannot break the row.
+  wrap.querySelector('.option-select').dataset.valueName = label || '';
+  if (amount) wrap.querySelector('.extra-amount').value = amount;
+  if (pay === 'DEBT' && CAN_CREDIT) wrap.querySelector('.extra-pay').value = 'DEBT';
+
+  wrap.querySelector('.extra-amount').addEventListener('input', recalc);
+  wrap.querySelector('.extra-pay').addEventListener('change', recalc);
+  wrap.querySelector('.extra-remove').addEventListener('click', () => {
+    wrap.remove();
+    syncExtraEmpty();
+    recalc();
+  });
+
+  $('extraRows').appendChild(wrap);
+  // Draws the pick-list. Safe to call before the page has finished loading:
+  // a host that is already built is skipped.
+  if (window.OptionSelect) window.OptionSelect.scan(wrap);
+  syncExtraEmpty();
+  applyWalkInLock();
+  recalc();
+}
+
+function syncExtraEmpty() {
+  $('extraEmpty').classList.toggle(
+    'd-none', document.querySelectorAll('#extraRows .extra-row').length > 0);
+}
+
+$('addExtraBtn').addEventListener('click', () => addExtraRow());
+
+// "Pay in full" collects everything - except extra charges that are going on
+// debt, which by definition are not collected now.
+function payFull() {
+  const payable = window._payableNow != null ? window._payableNow : (window._saleTotal || 0);
+  $('id_amount_paid').value = fmt(payable);
+  recalc();
+}
 function payNothing() { $('id_amount_paid').value = '0.00'; recalc(); }
 
 // ---- Quick add / barcode scanning -------------------------------------
@@ -520,6 +665,11 @@ function addExisting(productId) {
 ['id_discount_amount', 'id_tax_amount', 'id_amount_paid'].forEach(id => {
   const el = $(id);
   if (el) el.addEventListener('input', recalc);
+});
+
+// Picking (or adding) what an extra charge is for updates the Total box.
+document.addEventListener('option:change', function (e) {
+  if (e.detail && e.detail.group === 'EXTRA_CHARGE') recalc();
 });
 
 // ---- Receipt capture --------------------------------------------------
@@ -783,6 +933,11 @@ document.addEventListener('click', function (e) {
 
 // Restore the chip if the form came back with a validation error.
 if (custSelect.value) selectCustomer(custSelect.value);
+
+// ...and the extra charges that were typed in, so an error elsewhere on the
+// sale does not cost somebody their rows.
+(JSON.parse($('extraRowsData').textContent) || []).forEach(r =>
+  addExtraRow(r.label, r.amount, r.pay));
 
 addRow();
 </script>

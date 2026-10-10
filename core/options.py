@@ -239,6 +239,21 @@ GROUPS: tuple[OptionGroup, ...] = (
         ),
     ),
     OptionGroup(
+        key="EXTRA_CHARGE",
+        label="Extra charge for",
+        add_label="Add an extra charge",
+        help="What an extra charge on a sale was for - something the customer "
+             "pays on top of the goods.",
+        defaults=(
+            "Transport",
+            "Loading worker",
+            "Offloading worker",
+            "Delivery",
+            "Packaging",
+            "Other",
+        ),
+    ),
+    OptionGroup(
         key="EMPLOYEE_PAY_TYPE",
         label="Payment type",
         add_label="Add a payment type",

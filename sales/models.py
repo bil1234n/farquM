@@ -228,6 +228,24 @@ class Transaction(OwnedModel, TimeStampedModel):
         validators=[MinValueValidator(Decimal("0"))],
     )
     tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO)
+    # Extras the customer is charged on top of the goods: a loading worker,
+    # transport, anything that came with this particular sale. The lines
+    # themselves are ExtraCharge rows; these three columns are their summary
+    # (total, joined names, whether any went on debt). The total is part of
+    # total_amount, so what is not paid at the counter becomes debt through
+    # exactly the same path as any other unpaid balance.
+    extra_charge_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, default=ZERO,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
+    extra_charge_label = models.CharField(
+        max_length=120, blank=True,
+        help_text="What the extra charge is for - transport, worker, loading...",
+    )
+    # True when the seller chose to put the extra charge on the customer's
+    # debt instead of collecting it now. Kept as the seller's stated intent;
+    # the money itself lives in amount_paid / balance_due.
+    extra_charge_on_debt = models.BooleanField(default=False)
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO, db_index=True)
     amount_paid = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO)
     balance_due = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO, db_index=True)
@@ -337,7 +355,12 @@ class Transaction(OwnedModel, TimeStampedModel):
         """Recompute money fields from the line items. Single source of truth."""
         agg = self.items.aggregate(s=Sum("line_total"))
         self.subtotal = money(agg["s"] or ZERO)
-        self.total_amount = money(self.subtotal - money(self.discount_amount) + money(self.tax_amount))
+        self.total_amount = money(
+            self.subtotal
+            - money(self.discount_amount)
+            + money(self.tax_amount)
+            + money(self.extra_charge_amount)
+        )
         self.balance_due = money(max(self.total_amount - money(self.amount_paid), ZERO))
         self.payment_status = self.derive_payment_status()
         if commit:
@@ -354,6 +377,15 @@ class Transaction(OwnedModel, TimeStampedModel):
         if self.amount_paid > ZERO:
             return PaymentStatus.PARTIAL
         return PaymentStatus.UNPAID
+
+    @property
+    def has_extra_charge(self) -> bool:
+        return money(self.extra_charge_amount) > ZERO
+
+    @property
+    def extra_charge_display(self) -> str:
+        """'Transport' for a receipt line; falls back to a generic label."""
+        return (self.extra_charge_label or "").strip() or "Extra charge"
 
     @property
     def is_credit_sale(self) -> bool:
@@ -549,6 +581,37 @@ class TransactionItem(models.Model):
     @property
     def line_profit(self) -> Decimal:
         return money(self.line_total - self.line_cost)
+
+
+class ExtraCharge(models.Model):
+    """
+    One extra the customer was charged on a sale - transport, a loading
+    worker, offloading. A sale can carry several.
+
+    `label` is a snapshot of the wording picked from the EXTRA_CHARGE list, so
+    renaming or removing that entry later does not rewrite what this sale
+    said. `on_debt` records the seller's choice: collected now, or left owing
+    on the customer's debt. The money itself lives in the sale's amount_paid /
+    balance_due; this is what the seller said about it.
+    """
+
+    transaction = models.ForeignKey(
+        Transaction, on_delete=models.CASCADE, related_name="extra_charges"
+    )
+    label = models.CharField(max_length=120)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    on_debt = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="extra_charge_amount_positive"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.label}: {self.amount}"
 
 
 # ---------------------------------------------------------------------------

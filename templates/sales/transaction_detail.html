@@ -311,6 +311,12 @@
       <div class="line"><span>Subtotal</span><span class="money">{{ txn.subtotal|money }}</span></div>
       <div class="line"><span>Discount</span><span class="money text-danger">-{{ txn.discount_amount|money }}</span></div>
       <div class="line"><span>Tax</span><span class="money">{{ txn.tax_amount|money }}</span></div>
+      {% for ec in txn.extra_charges.all %}
+        <div class="line">
+          <span>{{ ec.label }}{% if ec.on_debt %} <span class="badge text-bg-warning">on debt</span>{% endif %}</span>
+          <span class="money">{{ ec.amount|money }}</span>
+        </div>
+      {% endfor %}
       <div class="line grand"><span>Total</span><span class="money">{{ txn.total_amount|money }}</span></div>
       <div class="line"><span>Amount paid</span><span class="money text-success">{{ txn.amount_paid|money }}</span></div>
       <div class="line fw-bold">

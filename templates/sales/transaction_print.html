@@ -71,6 +71,7 @@
     <tr><td>Subtotal</td><td class="num">{{ txn.subtotal|money }}</td></tr>
     {% if txn.discount_amount %}<tr><td>Discount</td><td class="num">-{{ txn.discount_amount|money }}</td></tr>{% endif %}
     {% if txn.tax_amount %}<tr><td>Tax</td><td class="num">{{ txn.tax_amount|money }}</td></tr>{% endif %}
+    {% for ec in txn.extra_charges.all %}<tr><td>{{ ec.label }}</td><td class="num">{{ ec.amount|money }}</td></tr>{% endfor %}
     <tr class="grand"><td>Total</td><td class="num">{{ txn.total_amount|money }}</td></tr>
     <tr><td>Amount paid</td><td class="num">{{ txn.amount_paid|money }}</td></tr>
     <tr style="font-weight:bold"><td>Balance due</td><td class="num">{{ txn.balance_due|money }}</td></tr>

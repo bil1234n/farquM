@@ -289,6 +289,8 @@ def sale_create(request):
 
     if request.method == "POST":
         cart, cart_errors = _parse_cart(request)
+        extras, extra_errors = _parse_extras(request, can_credit)
+        cart_errors = list(cart_errors) + extra_errors
 
         if cart_errors:
             for err in cart_errors:
@@ -302,6 +304,7 @@ def sale_create(request):
                     amount_paid=form.cleaned_data.get("amount_paid") or ZERO,
                     discount_amount=form.cleaned_data.get("discount_amount") or ZERO,
                     tax_amount=form.cleaned_data.get("tax_amount") or ZERO,
+                    extra_charges=extras,
                     payment_method=form.cleaned_data["payment_method"],
                     payment_channel_id=form.cleaned_data.get("payment_channel"),
                     payment_channel_name=form.cleaned_data.get(
@@ -367,8 +370,72 @@ def sale_create(request):
             "show_cost": request.user.can_view_costs,
             "can_credit": can_credit,
             "can_discount": can_discount,
+            # The rows posted last time, so a sale that bounced back with an
+            # error does not lose the extra charges somebody had typed in.
+            "extra_rows": _posted_extra_rows(request),
         },
     )
+
+
+def _posted_extra_rows(request):
+    """
+    The extra-charge rows exactly as posted, one dict per row.
+
+    Parallel arrays, like the cart: extra_label[], extra_amount[], extra_pay[].
+    Empty on a GET.
+    """
+    if request.method != "POST":
+        return []
+    labels = request.POST.getlist("extra_label[]")
+    amounts = request.POST.getlist("extra_amount[]")
+    pays = request.POST.getlist("extra_pay[]")
+    return [
+        {
+            "label": labels[i] if i < len(labels) else "",
+            "amount": amount,
+            "pay": pays[i] if i < len(pays) else "NOW",
+        }
+        for i, amount in enumerate(amounts)
+    ]
+
+
+def _parse_extras(request, can_credit):
+    """
+    Turn the posted extra-charge rows into [{label, amount, on_debt}].
+
+    A row with no amount is skipped (the seller added one and thought better
+    of it). A row with an amount must say what it is for. Putting one on debt
+    needs a registered customer, and somebody who may not sell on credit has
+    every row collected now - the service enforces both again regardless.
+    """
+    from decimal import InvalidOperation
+
+    extras, errors = [], []
+    has_customer = bool(request.POST.get("customer"))
+    for idx, row in enumerate(_posted_extra_rows(request), start=1):
+        try:
+            amount = money(Decimal((row["amount"] or "0").strip() or "0"))
+        except (InvalidOperation, ValueError):
+            errors.append(f"Extra charge {idx}: the amount is not a number.")
+            continue
+        if amount < ZERO:
+            errors.append(f"Extra charge {idx}: the amount cannot be negative.")
+            continue
+        if amount == ZERO:
+            continue
+        label = " ".join((row["label"] or "").split())
+        if not label:
+            errors.append(f"Extra charge {idx}: say what it is for.")
+            continue
+        on_debt = bool(can_credit and row["pay"] == "DEBT")
+        if on_debt and not has_customer:
+            errors.append(
+                f"Extra charge {idx} ({label}): choose a registered customer to "
+                "put it on their debt, or let them pay it now."
+            )
+            continue
+        extras.append({"label": label, "amount": amount, "on_debt": on_debt})
+    return extras, errors
 
 
 def _attach_sale_receipts(request, txn, form):

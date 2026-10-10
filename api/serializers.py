@@ -799,6 +799,14 @@ class ReceiptSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(url) if request else url
 
 
+class ExtraChargeSerializer(serializers.Serializer):
+    """One extra charged on a sale - transport, a loading worker..."""
+
+    label = serializers.CharField(read_only=True)
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    on_debt = serializers.BooleanField(read_only=True)
+
+
 class TransactionSerializer(
     NoteTagMixin, OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
 ):
@@ -806,6 +814,7 @@ class TransactionSerializer(
     profit_fields = ("gross_profit", "profit_margin")
 
     items = TransactionItemSerializer(many=True, read_only=True)
+    extra_charges = ExtraChargeSerializer(many=True, read_only=True)
     receipts = ReceiptSerializer(many=True, read_only=True)
     customer_display = serializers.CharField(read_only=True)
     payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
@@ -827,7 +836,10 @@ class TransactionSerializer(
         model = Transaction
         fields = [
             "id", "reference", "customer", "customer_display",
-            "subtotal", "discount_amount", "tax_amount", "total_amount",
+            "subtotal", "discount_amount", "tax_amount",
+            "extra_charge_amount", "extra_charge_label", "extra_charge_on_debt",
+            "extra_charges",
+            "total_amount",
             "amount_paid", "balance_due",
             "payment_status", "payment_status_display",
             "payment_method", "payment_method_display",
@@ -863,6 +875,14 @@ class SaleItemInputSerializer(serializers.Serializer):
     )
 
 
+class ExtraChargeInputSerializer(serializers.Serializer):
+    label = serializers.CharField(allow_blank=True, default="", max_length=120)
+    amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal("0")
+    )
+    on_debt = serializers.BooleanField(required=False, default=False)
+
+
 class SaleCreateSerializer(serializers.Serializer):
     """
     Input for POST /api/sales/. Validation of stock and credit limits is NOT
@@ -881,6 +901,21 @@ class SaleCreateSerializer(serializers.Serializer):
     tax_amount = serializers.DecimalField(
         max_digits=14, decimal_places=2, default=Decimal("0.00")
     )
+    # Extras the customer pays for on top of the goods (transport, a loading
+    # worker...) - any number of them. Each is added to the total; one with
+    # on_debt true is left owing on the customer's debt instead of being
+    # collected now.
+    extra_charges = ExtraChargeInputSerializer(many=True, required=False)
+    # The single-charge fields an earlier build of the app sends. Folded into
+    # `extra_charges` in validate(), so an app that has not been updated yet
+    # keeps working.
+    extra_charge_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal("0.00"), min_value=Decimal("0")
+    )
+    extra_charge_label = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=120
+    )
+    extra_charge_on_debt = serializers.BooleanField(required=False, default=False)
     payment_method = serializers.CharField(default="CASH")
     # The bank or the wallet. Either half may be sent: an id for an entry
     # already in the list, a name for one the seller typed into the 'add'
@@ -923,6 +958,32 @@ class SaleCreateSerializer(serializers.Serializer):
 
         method = attrs.get("payment_method") or "CASH"
         paid = attrs.get("amount_paid") or Decimal("0.00")
+
+        # Extra charges: the list, or the single legacy charge folded into one.
+        extras = list(attrs.get("extra_charges") or [])
+        legacy = attrs.get("extra_charge_amount") or Decimal("0.00")
+        if not extras and legacy > 0:
+            extras = [{
+                "label": attrs.get("extra_charge_label") or "",
+                "amount": legacy,
+                "on_debt": attrs.get("extra_charge_on_debt", False),
+            }]
+        extras = [e for e in extras if (e.get("amount") or 0) > 0]
+        for number, extra in enumerate(extras, start=1):
+            label = (extra.get("label") or "").strip()
+            if not label:
+                raise serializers.ValidationError({
+                    "extra_charges":
+                        f"Extra charge {number}: say what it is for "
+                        "(transport, worker...)."
+                })
+            if extra.get("on_debt") and not attrs.get("customer"):
+                raise serializers.ValidationError({
+                    "extra_charges":
+                        f"Extra charge {number} ({label}): choose a registered "
+                        "customer to put it on their debt, or collect it now."
+                })
+        attrs["extra_charges"] = extras
 
         # A walk-in has no credit account to owe against, so the only shape a
         # walk-in sale can take is paid in full. Said here rather than left to

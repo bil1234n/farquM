@@ -132,6 +132,10 @@ class SaleHeaderForm(StyledFormMixin, forms.Form):
         max_digits=14, decimal_places=2, min_value=Decimal("0"),
         required=False, initial=Decimal("0.00"), label="Tax",
     )
+    # Extra charges (transport, a loading worker...) are NOT form fields: a
+    # sale can carry any number of them, so they arrive as parallel arrays
+    # (extra_label[], extra_amount[], extra_pay[]) like the cart and are
+    # parsed in sales.views._parse_extras.
     due_date = forms.DateField(
         required=False,
         widget=forms.DateInput(attrs={"type": "date"}),

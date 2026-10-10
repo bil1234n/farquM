@@ -1183,6 +1183,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
                 amount_paid=data["amount_paid"],
                 discount_amount=data["discount_amount"],
                 tax_amount=data["tax_amount"],
+                extra_charges=data.get("extra_charges", []),
                 payment_method=data["payment_method"],
                 # Which bank or wallet. Sent as an id when the seller picked
                 # one from the list and as a name when they typed a new one;
