@@ -80,6 +80,9 @@
                 <div><span class="badge text-bg-warning-subtle text-warning-emphasis border border-warning-subtle">
                   Customised</span></div>
               {% endif %}
+              {% if SEVERAL_BRANCHES %}
+                <div class="text-muted-sm mt-1"><i class="bi bi-shop me-1"></i>{% if u.works_in_every_branch %}<span>All branches</span>{% else %}{% for b in u.branches.all %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% empty %}{{ MAIN_BRANCH_NAME }}{% endfor %}{% endif %}</div>
+              {% endif %}
             </td>
             <td class="text-muted-sm">{{ u.email|default:"&mdash;" }}
               {% if u.phone %}<div>{{ u.phone }}</div>{% endif %}</td>

@@ -230,6 +230,8 @@ def record_expense_lines(
         expense.owner = owner
         expense.recorded_by = user
         expense.production_run = production_run
+        # Expense.branch_parents carries the batch's branch onto the lines
+        # when no branch is active; inside a request they are one and the same.
         if first is None:
             if receipt is not None:
                 expense.receipt = receipt
@@ -322,6 +324,12 @@ def summarize(queryset) -> dict:
     in_product_cost = live.filter(production_run__isnull=False).aggregate(
         t=Sum("amount")
     )["t"]
+    # Paid out to serve one sale - the lorry, the two loaders - and so already
+    # inside the cost of that sale (sales.ExtraCharge). The same rule as a
+    # batch's labour: in the total, taken off a profit only once.
+    in_sale_cost = live.filter(extra_charge__isnull=False).aggregate(
+        t=Sum("amount")
+    )["t"]
     by_category = [
         {
             "category": row["category_name"] or "-",
@@ -337,6 +345,7 @@ def summarize(queryset) -> dict:
         "count": head["count"] or 0,
         "staff_total": staff or ZERO,
         "in_product_cost": in_product_cost or ZERO,
+        "in_sale_cost": in_sale_cost or ZERO,
         "by_category": by_category,
     }
 
@@ -344,8 +353,13 @@ def summarize(queryset) -> dict:
 def running_costs(summary: dict):
     """
     What to take off gross profit: the total, less what is already inside the
-    cost of the goods. A batch's labour is in its cost per unit, so the sales
-    of those units already paid for it once - taking it off again would
+    cost of what was sold. A batch's labour is in its cost per unit, so the
+    sales of those units already paid for it once; the lorry hired for one
+    delivery is in the cost of that sale. Taking either off again would
     report a loss that never happened.
     """
-    return summary["total"] - summary.get("in_product_cost", ZERO)
+    return (
+        summary["total"]
+        - summary.get("in_product_cost", ZERO)
+        - summary.get("in_sale_cost", ZERO)
+    )

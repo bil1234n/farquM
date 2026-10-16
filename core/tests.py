@@ -1685,11 +1685,16 @@ class MigrationHygieneTests(SimpleTestCase):
         ("credit", "0002_debtrecord_owner"),
         ("inventory", "0002_product_owner"),
         ("sales", "0002_owner_scoping"),
+        # Creates the extra-charge table and fills it from the old single
+        # charge in one go. Already pushed, so it stays as it is - and it is
+        # safe: the rows are written after the last schema change, into a
+        # table nothing else has touched in that transaction.
+        ("sales", "0010_extracharge_lines"),
     }
 
     PROJECT_APPS = {
-        "accounts", "api", "core", "credit", "inventory", "production",
-        "reports", "sales",
+        "accounts", "api", "core", "credit", "expenses", "inventory",
+        "production", "reports", "sales",
     }
 
     @staticmethod

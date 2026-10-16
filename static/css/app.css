@@ -687,3 +687,36 @@ a.photo-thumb:hover{border-color:var(--brand)}
   display:flex;gap:.5rem;align-items:center;font-size:.8rem;color:var(--muted);
   border:1px dashed var(--line);border-radius:10px;padding:.55rem .7rem;
 }
+
+/* ---------------------------------------------------------------------------
+   Branches: the switcher at the top of every page, the label shown to
+   somebody who works in one branch, and the rows on Settings -> Branches.
+   --------------------------------------------------------------------------- */
+.branch-toggle .branch-name{display:inline-block;max-width:160px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;font-size:.78rem;font-weight:600}
+.branch-chip{display:inline-flex;align-items:center;padding:.32rem .65rem;border-radius:999px;
+  background:var(--brand-light);color:var(--brand);font-size:.78rem;font-weight:600;max-width:200px}
+.branch-chip .branch-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.branch-menu{min-width:230px}
+.branch-menu .dropdown-item{white-space:normal}
+.branch-menu .dropdown-item.active{background:var(--brand);color:#fff}
+.sidebar-brand .sub.sidebar-branch{color:#9fd3ff;font-weight:600;text-transform:none;letter-spacing:0;font-size:.74rem}
+.branch-mark{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;
+  background:var(--brand-light);color:var(--brand);font-size:1.1rem;flex-shrink:0}
+.branch-mark.is-current{background:var(--brand);color:#fff}
+.branch-card .branch-option{display:flex;align-items:center;gap:.6rem;width:100%;
+  text-align:left;border:1px solid var(--line);border-radius:10px;background:#fff;
+  padding:.55rem .7rem;margin-bottom:.45rem;color:var(--ink)}
+.branch-card .branch-option:hover{border-color:var(--brand);background:var(--brand-light)}
+.branch-card .branch-option.is-current{border-color:var(--brand);background:var(--brand-light);
+  color:var(--brand);font-weight:600}
+@media (max-width: 575.98px){
+  .topbar .branch-toggle .branch-name{display:none}
+  .topbar .branch-toggle .bi-shop{margin-right:0!important}
+  .topbar .branch-chip .branch-name{max-width:90px}
+}
+.branch-check{display:inline-flex;align-items:center;gap:.45rem;border:1px solid var(--line);
+  border-radius:999px;padding:.35rem .8rem;background:#fff;cursor:pointer;margin:0}
+.branch-check:has(input:checked){border-color:var(--brand);background:var(--brand-light);
+  color:var(--brand);font-weight:600}
+.branch-check .form-check-input{margin:0}

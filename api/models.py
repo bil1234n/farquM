@@ -10,6 +10,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from core.branching import branch_field, branch_manager
 from core.models import TimeStampedModel
 
 
@@ -79,6 +80,14 @@ class NotificationLog(TimeStampedModel):
     error = models.TextField(blank=True)
 
     read_at = models.DateTimeField(null=True, blank=True)
+
+    #: The branch the news is about, so "low stock" in one yard is not read
+    #: as news about the other. Blank for what concerns the whole business.
+    branch = branch_field(null=True)
+    branch_path = "branch"
+    branch_shared_when_blank = True
+
+    objects = branch_manager()
 
     class Meta:
         ordering = ["-created_at"]

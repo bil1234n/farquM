@@ -326,6 +326,58 @@ def seed_colors() -> list[tuple[str, str, str]]:
     ]
 
 
+def _seed_list(option_model, manager, branch_id) -> int:
+    """Write the default pick-lists for one branch. Returns how many."""
+    # The historical model of a partly-migrated database may predate a column
+    # (`code` arrived in core.0003, `color` in core.0005, `branch` in
+    # core.0008). Fill what exists.
+    columns = {f.name for f in option_model._meta.concrete_fields}
+    has_branch = "branch" in columns
+    entries = []
+    for group, code, label, order in seed_pairs():
+        values = {
+            name: value
+            for name, value in (
+                ("group", group),
+                ("code", code),
+                ("label", label),
+                ("sort_order", order),
+                ("is_active", True),
+                ("is_seeded", True),
+            )
+            if name in columns
+        }
+        if has_branch:
+            values["branch_id"] = branch_id
+        entries.append(option_model(**values))
+    manager.bulk_create(entries)
+    if "color" in columns:
+        for group, label, color in seed_colors():
+            rows = manager.filter(group=group, label__iexact=label, color="")
+            if has_branch:
+                rows = rows.filter(branch_id=branch_id)
+            rows.update(color=color)
+    return len(entries)
+
+
+def seed_branch_options(branch) -> int:
+    """
+    Give a new branch the default pick-lists - its own copy, to word and
+    trim as that branch likes. Lists are never shared between branches.
+    """
+    from core.models import Option, forget_labels
+
+    branch_id = getattr(branch, "pk", branch)
+    # The base manager: the branch being set up is usually not the one the
+    # request is working in, and the default manager would only see that one.
+    manager = Option._base_manager
+    if manager.filter(branch_id=branch_id).exists():
+        return 0
+    count = _seed_list(Option, manager, branch_id)
+    forget_labels()
+    return count
+
+
 def refill_after_flush(sender, using="default", apps=None, verbosity=1, **kwargs):
     """
     post_migrate: give an EMPTY pick-list table its defaults back.
@@ -340,42 +392,36 @@ def refill_after_flush(sender, using="default", apps=None, verbosity=1, **kwargs
     an entry deleted because the yard never uses it - must not grow back on
     the next migrate. One row of anything means the lists are in use, and what
     is in them is the business's choice.
+
+    A flush empties the branch table too, and every list belongs to a branch,
+    so the main branch is put back first. Then every branch gets its lists.
     """
     from django.apps import apps as global_apps
 
+    from core.branching import forget_main_branch
+
+    registry = apps or global_apps
     try:
-        option_model = (apps or global_apps).get_model("core", "Option")
+        option_model = registry.get_model("core", "Option")
     except LookupError:
         return  # migrated back past the table
     rows = option_model.objects.db_manager(using)
     if rows.exists():
         return
 
-    # The historical model of a partly-migrated database may predate a column
-    # (`code` arrived in core.0003, `color` in core.0005). Fill what exists.
-    columns = {f.name for f in option_model._meta.concrete_fields}
-    rows.bulk_create(
-        [
-            option_model(
-                **{
-                    name: value
-                    for name, value in (
-                        ("group", group),
-                        ("code", code),
-                        ("label", label),
-                        ("sort_order", order),
-                        ("is_active", True),
-                        ("is_seeded", True),
-                    )
-                    if name in columns
-                }
-            )
-            for group, code, label, order in seed_pairs()
-        ]
-    )
-    if "color" in columns:
-        for group, label, color in seed_colors():
-            rows.filter(group=group, label__iexact=label, color="").update(color=color)
+    branch_ids = [None]
+    if "branch" in {f.name for f in option_model._meta.concrete_fields}:
+        branch_model = registry.get_model("core", "Branch")
+        branches = branch_model.objects.db_manager(using)
+        if not branches.filter(is_main=True).exists():
+            name, n = "Main branch", 2
+            while branches.filter(name=name).exists():
+                name, n = f"Main branch {n}", n + 1
+            branches.create(name=name, is_main=True)
+        forget_main_branch()
+        branch_ids = list(branches.order_by("pk").values_list("pk", flat=True))
+
+    total = sum(_seed_list(option_model, rows, branch_id) for branch_id in branch_ids)
 
     # Unit labels are cached per process (core.models.labels_for); one taken
     # while the table was empty would keep showing the built-in wording.
@@ -386,7 +432,7 @@ def refill_after_flush(sender, using="default", apps=None, verbosity=1, **kwargs
         import sys
 
         out = kwargs.get("stdout") or sys.stdout
-        out.write(f"Put back the default pick-lists ({rows.count()} entries).\n")
+        out.write(f"Put back the default pick-lists ({total} entries).\n")
 
 
 #: Groups drawn as coloured marks; their entries carry a colour.

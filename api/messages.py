@@ -257,6 +257,36 @@ EXACT_AM: dict[str, str] = {
     "price, or ask someone who can approve the discount.":
         "ቅናሽ የመስጠት ፈቃድ የለዎትም። ሽያጩን በሙሉ ዋጋ ይመዝግቡ፣ ወይም ቅናሹን ማጽደቅ የሚችል "
         "ሰው ይጠይቁ።",
+    # Extra charges on a sale - sales/services.py.
+    "Say what each extra charge is for (transport, worker...).":
+        "እያንዳንዱ ተጨማሪ ክፍያ ለምን እንደሆነ ይግለጹ (ትራንስፖርት፣ ሠራተኛ...)።",
+    "An extra charge cannot be negative.": "ተጨማሪ ክፍያ አሉታዊ ሊሆን አይችልም።",
+    "An extra charge must be a number, for example 500.":
+        "ተጨማሪ ክፍያ ቁጥር መሆን አለበት፣ ለምሳሌ 500።",
+    "An extra charge is too large.": "ተጨማሪ ክፍያው በጣም ትልቅ ነው።",
+    "What was paid out must be a number, for example 500.":
+        "የተከፈለው ቁጥር መሆን አለበት፣ ለምሳሌ 500።",
+    "What was paid out cannot be negative.": "የተከፈለው አሉታዊ ሊሆን አይችልም።",
+    "What was paid out is too large.": "የተከፈለው በጣም ትልቅ ነው።",
+    'You do not have permission to record money paid out. Leave "We paid out" '
+    "empty, or ask someone who can record expenses.":
+        "የወጣ ገንዘብ ለመመዝገብ ፈቃድ የለዎትም። «እኛ የከፈልነው»ን ባዶ ይተዉት፣ ወይም ወጪ "
+        "መመዝገብ የሚችል ሰው ይጠይቁ።",
+    # Hand-overs - sales/delivery.py.
+    "You do not have access to this sale.": "ለዚህ ሽያጭ ፈቃድ የለዎትም።",
+    "This sale was voided, so there is nothing to hand over.":
+        "ይህ ሽያጭ ተሰርዟል፤ የሚረከብ ነገር የለም።",
+    "Broken units must be whole numbers.": "የተሰበሩት ብዛት ሙሉ ቁጥር መሆን አለበት።",
+    "Broken units cannot be negative.": "የተሰበሩት ብዛት አሉታዊ ሊሆን አይችልም።",
+    "That line is not part of this sale.": "ያ መስመር የዚህ ሽያጭ አካል አይደለም።",
+    "Quantities must be whole numbers.": "ብዛቶች ሙሉ ቁጥር መሆን አለባቸው።",
+    "A quantity cannot be negative.": "ብዛት አሉታዊ ሊሆን አይችልም።",
+    "Everything on this sale has already been handed over.":
+        "በዚህ ሽያጭ ላይ ያለው ሁሉ አስቀድሞ ተረክቧል።",
+    "Enter how many of at least one item are going out.":
+        "ቢያንስ ከአንድ ዕቃ ምን ያህል እንደሚወጣ ያስገቡ።",
+    "Give a reason for cancelling this hand-over.": "ይህን ርክክብ የሚሰርዙበትን ምክንያት ይስጡ።",
+    "This hand-over has already been cancelled.": "ይህ ርክክብ አስቀድሞ ተሰርዟል።",
 
     # -- Credit -------------------------------------------------------------
     "A debt cannot be opened without a customer.": "ያለ ደንበኛ ዕዳ መክፈት አይቻልም።",
@@ -288,6 +318,20 @@ EXACT_AM: dict[str, str] = {
     "A phone number is required.": "የስልክ ቁጥር ያስፈልጋል።",
     "A code is required.": "ኮድ ያስፈልጋል።",
     "A role with that code already exists.": "በዚያ ኮድ ሚና አስቀድሞ አለ።",
+    "There is already a category with this name.": "በዚህ ስም ምድብ አስቀድሞ አለ።",
+    "There is already a supplier with this name.": "በዚህ ስም አቅራቢ አስቀድሞ አለ።",
+    "That entry is already in this list.": "ይህ በዝርዝሩ ውስጥ አስቀድሞ አለ።",
+    # Branches - core/branches.py and core/branching.py.
+    "Give the branch a name.": "ለቅርንጫፉ ስም ይስጡ።",
+    "There is already a branch with that name.": "በዚያ ስም ቅርንጫፍ አስቀድሞ አለ።",
+    "The main branch cannot be closed.": "ዋናው ቅርንጫፍ ሊዘጋ አይችልም።",
+    "You do not work in that branch.": "በዚያ ቅርንጫፍ አይሠሩም።",
+    "Choose a branch.": "ቅርንጫፍ ይምረጡ።",
+    "You do not have permission to manage branches.": "ቅርንጫፎችን የማስተዳደር ፈቃድ የለዎትም።",
+    "That is not in this branch's books.": "ያ በዚህ ቅርንጫፍ መዝገብ ውስጥ የለም።",
+    "Your branch has been closed. Ask the owner to move you to another branch.": (
+        "ቅርንጫፍዎ ተዘግቷል። ወደ ሌላ ቅርንጫፍ እንዲያዛውርዎ ባለቤቱን ይጠይቁ።"
+    ),
     "That role no longer exists.": "ያ ሚና ከዚህ በኋላ የለም።",
     "That username is already taken.": "ያ የተጠቃሚ ስም አስቀድሞ ተይዟል።",
     "That person cannot be chosen as a supervisor.": "ያ ሰው እንደ አለቃ ሊመረጥ አይችልም።",
@@ -443,6 +487,51 @@ _PATTERNS_AM: list[tuple[str, str]] = [
     (
         r"^Expected available quantity, got (.+)$",
         "የሚገኝ ብዛት ተጠብቆ ነበር፤ የተገኘው {0}",
+    ),
+    (
+        r"^(.+?) does not work in this branch\.$",
+        "{0} በዚህ ቅርንጫፍ አይሠሩም።",
+    ),
+    # Extra charges on a sale - api/serializers.py and sales/services.py.
+    (
+        r"^Extra charge (\d+): say what it is for \(transport, worker\.\.\.\)\.$",
+        "ተጨማሪ ክፍያ {0}፦ ለምን እንደሆነ ይግለጹ (ትራንስፖርት፣ ሠራተኛ...)።",
+    ),
+    (
+        r"^Extra charge (\d+) \((.+?)\): choose a registered customer to put it "
+        r"on their debt, or collect it now\.$",
+        "ተጨማሪ ክፍያ {0} ({1})፦ በዕዳ ላይ ለመጨመር የተመዘገበ ደንበኛ ይምረጡ፣ ወይም አሁን ይሰብስቡት።",
+    ),
+    (
+        r"^(.+?): enter what the customer is charged\. If the business pays for it "
+        r"alone, record it under Expenses instead\.$",
+        "{0}፦ ደንበኛው የሚከፍለውን ያስገቡ። ድርጅቱ ብቻውን የሚከፍለው ከሆነ በወጪዎች ስር ይመዝግቡት።",
+    ),
+    (
+        r"^One sale can carry at most (\d+) extra charges\.$",
+        "አንድ ሽያጭ ቢበዛ {0} ተጨማሪ ክፍያዎች ሊኖሩት ይችላል።",
+    ),
+    (
+        r"^Extra charges worth (.+?) are set to go on debt, so no more than (.+?) "
+        r"can be collected now\. Lower the amount paid, or choose to collect "
+        r"those extra charges now\.$",
+        "{0} የሚያወጡ ተጨማሪ ክፍያዎች በዕዳ እንዲያዙ ተመርጠዋል፤ ስለዚህ አሁን ከ{1} በላይ "
+        "መሰብሰብ አይቻልም። የተከፈለውን መጠን ይቀንሱ፣ ወይም እነዚያን ተጨማሪ ክፍያዎች አሁን "
+        "ለመሰብሰብ ይምረጡ።",
+    ),
+    # Hand-overs - sales/delivery.py.
+    (
+        r"^(.+?) is listed twice\.$",
+        "{0} ሁለት ጊዜ ተዘርዝሯል።",
+    ),
+    (
+        r"^Only (\d+) of (.+?) are still waiting for this customer\.$",
+        "ለዚህ ደንበኛ የሚጠብቁት የ{1} {0} ብቻ ናቸው።",
+    ),
+    (
+        r"^(.+?): breakage is recorded with the units going out - enter how many "
+        r"of them are handed over too\.$",
+        "{0}፦ ስብራት የሚመዘገበው ከሚወጡት ብዛቶች ጋር ነው - ስንቱ እንደሚሰጥም ያስገቡ።",
     ),
     # api/exceptions.py - the last-resort answer to an unexpected error.
     (

@@ -160,8 +160,10 @@ class UserListView(PermissionRequiredMixin, ListView):
     paginate_by = 25
 
     def get_queryset(self):
-        qs = User.objects.select_related("manager").order_by(
-            "-is_active", "role", "username"
+        qs = (
+            User.objects.select_related("manager")
+            .prefetch_related("branches")
+            .order_by("-is_active", "role", "username")
         )
         q = self.request.GET.get("q", "").strip()
         role = self.request.GET.get("role", "").strip()
@@ -230,6 +232,15 @@ class UserCreateView(PermissionRequiredMixin, CreateView):
     template_name = "accounts/user_form.html"
     success_url = reverse_lazy("accounts:user_list")
 
+    def get_initial(self):
+        # Somebody added while the owner is working in a branch most likely
+        # works there - start them in it, rather than in the main branch.
+        initial = super().get_initial()
+        branch_id = getattr(self.request.user, "current_branch_id", None)
+        if branch_id:
+            initial["branches"] = [branch_id]
+        return initial
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["title"] = "Add User"
@@ -261,6 +272,11 @@ class UserUpdateView(PermissionRequiredMixin, UpdateView):
     form_class = UserUpdateForm
     template_name = "accounts/user_form.html"
     success_url = reverse_lazy("accounts:user_list")
+    # NOT the default name. UpdateView would put the person being edited
+    # into the template as `user` - the name every template uses for the
+    # person signed in - and the menu then showed the edited person's name,
+    # role and links instead of the administrator's own.
+    context_object_name = "target_user"
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

@@ -134,6 +134,7 @@
                     <tr>
                       <th>Product</th><th class="num">Sold</th><th class="num">Taken</th>
                       <th class="num">Waiting</th><th class="num">Going out now</th>
+                      <th class="num" style="width:110px"><span>Broken</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -157,10 +158,27 @@
                             <span class="text-success"><i class="bi bi-check2-circle"></i> Done</span>
                           {% endif %}
                         </td>
+                        <td class="num">
+                          {% if item.quantity_waiting %}
+                            {% comment %}
+                              Extra units broken while loading. The customer
+                              still gets what they bought; these come off the
+                              shelf as damage (sales/delivery.py).
+                            {% endcomment %}
+                            <input type="number" name="broken_{{ item.pk }}" min="0" step="1"
+                                   inputmode="numeric" placeholder="0"
+                                   class="form-control form-control-sm text-end"
+                                   aria-label="Broken while handing over {{ item.product_name }}">
+                          {% endif %}
+                        </td>
                       </tr>
                     {% endfor %}
                   </tbody>
                 </table>
+              </div>
+              <div class="text-muted-sm mb-3">
+                <i class="bi bi-info-circle me-1"></i>
+                <span>Broken: units that broke while handing over - on top of what the customer takes. They come off the stock as damage; the sale does not change.</span>
               </div>
 
               <div class="row g-2 mb-3">
@@ -229,7 +247,8 @@
                   </div>
                   <div class="small mt-1">
                     {% for line in d.lines.all %}
-                      <span class="me-3 text-nowrap">{{ line.item.product_name }} &times; {{ line.quantity }}</span>
+                      <span class="me-3 text-nowrap">{{ line.item.product_name }} &times; {{ line.quantity }}{% if line.broken %}
+                        <span class="badge text-bg-danger-subtle text-danger-emphasis ms-1"><i class="bi bi-x-octagon me-1"></i>{{ line.broken }} <span>broken</span></span>{% endif %}</span>
                     {% endfor %}
                   </div>
                   {% if d.notes or d.note_tag %}
@@ -316,6 +335,17 @@
           <span>{{ ec.label }}{% if ec.on_debt %} <span class="badge text-bg-warning">on debt</span>{% endif %}</span>
           <span class="money">{{ ec.amount|money }}</span>
         </div>
+        {% comment %}
+          What the business itself paid for this extra ("We paid out") is a
+          cost figure, and what it kept on it a profit figure - each shown only
+          to somebody who may see that kind of number.
+        {% endcomment %}
+        {% if ec.cost_amount and user.can_view_costs %}
+          <div class="line small text-muted ps-3">
+            <span><span>We paid out</span>{% if user.can_view_profit %} &middot; <span>kept</span> <span class="money">{{ ec.profit|money }}</span>{% endif %}</span>
+            <span class="money">-{{ ec.cost_amount|money }}</span>
+          </div>
+        {% endif %}
       {% endfor %}
       <div class="line grand"><span>Total</span><span class="money">{{ txn.total_amount|money }}</span></div>
       <div class="line"><span>Amount paid</span><span class="money text-success">{{ txn.amount_paid|money }}</span></div>

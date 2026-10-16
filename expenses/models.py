@@ -24,8 +24,10 @@ from django.db.models import Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
+from core.branching import branch_manager
 from core.models import (
     AuthoredModel,
+    BranchModel,
     OwnedModel,
     PersonRecord,
     TimeStampedModel,
@@ -43,7 +45,7 @@ class ExpenseMethod(models.TextChoices):
     CHEQUE = "CHEQUE", "Cheque"
 
 
-class Employee(PersonRecord, AuthoredModel):
+class Employee(BranchModel, PersonRecord, AuthoredModel):
     """Somebody on the payroll. No login needed."""
 
     #: Whoever may add and edit the payroll may open an identity card. See
@@ -83,6 +85,8 @@ class Employee(PersonRecord, AuthoredModel):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
+    objects = branch_manager()
+
     class Meta:
         ordering = ["-is_active", "name"]
         constraints = [
@@ -114,7 +118,7 @@ class ExpenseQuerySet(models.QuerySet):
         return self.active().filter(spent_on__gte=start, spent_on__lte=end)
 
 
-class Expense(OwnedModel, TimeStampedModel):
+class Expense(BranchModel, OwnedModel, TimeStampedModel):
     """One payment out of the business."""
 
     reference = models.CharField(
@@ -211,6 +215,21 @@ class Expense(OwnedModel, TimeStampedModel):
         related_name="expenses",
     )
 
+    # -- What a sale cost to serve ---------------------------------------------
+    # The lorry hired for one delivery, the two men who loaded it - the "We
+    # paid out" of an extra charge on a sale. Money out of the business like
+    # any other, and listed with the rest - but already inside the cost of
+    # that sale (sales.ExtraCharge), so a profit takes it off there and
+    # `running_costs` leaves it alone. Exactly the treatment a batch's labour
+    # gets above.
+    extra_charge = models.ForeignKey(
+        "sales.ExtraCharge",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="expenses",
+    )
+
     recorded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -230,7 +249,8 @@ class Expense(OwnedModel, TimeStampedModel):
     )
     void_reason = models.TextField(blank=True)
 
-    objects = ExpenseQuerySet.as_manager()
+    objects = branch_manager(ExpenseQuerySet)
+    branch_parents = ("extra_charge", "production_run", "employee")
 
     class Meta:
         ordering = ["-spent_on", "-id"]

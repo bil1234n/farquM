@@ -316,8 +316,20 @@ class UserViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "put", "head", "options"]
 
     def get_queryset(self):
-        qs = User.objects.all().annotate(
-            sales_count=Count("sales_transaction_owned", distinct=True)
+        from core.branching import current_branch_id
+
+        # Their sales in THIS branch: the count sits beside figures that are
+        # all this branch's, and another branch's takings are not part of it.
+        in_branch = current_branch_id()
+        sales = (
+            Q(sales_transaction_owned__branch_id=in_branch) if in_branch else Q()
+        )
+        qs = (
+            User.objects.all()
+            .annotate(
+                sales_count=Count("sales_transaction_owned", filter=sales, distinct=True)
+            )
+            .prefetch_related("branches")
         )
         params = self.request.query_params
         q = params.get("q", "").strip()
@@ -1095,7 +1107,7 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
             Transaction.objects.select_related(
                 "customer", "sold_by", "owner", "debt_record", "note_tag"
             )
-            .prefetch_related("items", "receipts")
+            .prefetch_related("items", "receipts", "extra_charges")
             .annotate(line_count=Count("items")),
             self.request.user,
         )
@@ -1183,7 +1195,9 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
                 amount_paid=data["amount_paid"],
                 discount_amount=data["discount_amount"],
                 tax_amount=data["tax_amount"],
-                extra_charges=data.get("extra_charges", []),
+                # Transport, a loading worker... with what the business paid
+                # out for each, when it did - see sales.models.ExtraCharge.
+                extra_charges=[dict(e) for e in data.get("extra_charges") or []],
                 payment_method=data["payment_method"],
                 # Which bank or wallet. Sent as an id when the seller picked
                 # one from the list and as a name when they typed a new one;

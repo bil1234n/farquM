@@ -41,6 +41,47 @@
     </div>
 
     {% comment %}
+      Where this person is working. The same as the switcher at the top of
+      every page, kept here as well because this is where the phone app
+      keeps it - under the profile, on the Account page.
+    {% endcomment %}
+    {% if SEVERAL_BRANCHES or user|can:"branch.manage" %}
+      <div class="card mb-3 branch-card">
+        <div class="card-header d-flex align-items-center">
+          <i class="bi bi-shop me-2"></i><span>Branch</span>
+          {% if user|can:"branch.manage" %}
+            <a href="{% url 'core:branch_list' %}" class="ms-auto small"><span>Manage branches</span></a>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if MY_BRANCHES|length > 1 %}
+            <div class="text-muted-sm mb-2"><span>Choose the branch to work in. Everything you see and record belongs to it.</span></div>
+            {% for b in MY_BRANCHES %}
+              <form method="post" action="{% url 'core:branch_switch' %}" class="m-0">
+                {% csrf_token %}
+                <input type="hidden" name="branch" value="{{ b.pk }}">
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button class="branch-option {% if b.pk == CURRENT_BRANCH.pk %}is-current{% endif %}" type="submit">
+                  <i class="bi {% if b.pk == CURRENT_BRANCH.pk %}bi-check-circle-fill{% else %}bi-circle{% endif %}"></i>
+                  <span class="flex-grow-1 text-truncate">{{ b.name }}</span>
+                  {% if b.is_main %}<span class="badge text-bg-light border"><span>Main</span></span>{% endif %}
+                </button>
+              </form>
+            {% endfor %}
+          {% else %}
+            <div class="branch-option is-current mb-0">
+              <i class="bi bi-check-circle-fill"></i>
+              <span class="flex-grow-1 text-truncate">{{ CURRENT_BRANCH.name|default:"—" }}</span>
+            </div>
+            {% if not SEVERAL_BRANCHES and user|can:"branch.manage" %}
+              <div class="text-muted-sm mt-2"><span>This business has one branch. Add another under Manage branches.</span></div>
+            {% endif %}
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% comment %}
       Read from the user's ACTUAL permission set, not from their role name.
       Two people with the same role can legitimately differ here, and a list
       that says "Manager" when the answer is "Manager, minus discounts" is

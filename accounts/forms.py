@@ -96,6 +96,37 @@ class ManagerFieldMixin:
         return manager
 
 
+class BranchesFieldMixin:
+    """
+    Where the person works, asked only when the business runs more than one
+    branch. With one branch the field is taken off the form altogether, so
+    saving cannot quietly empty a list nobody was shown.
+    """
+
+    def _install_branch_choices(self):
+        from core.models import Branch
+
+        if "branches" not in self.fields:
+            return
+        if Branch.objects.filter(is_active=True).count() < 2:
+            del self.fields["branches"]
+            return
+        field = self.fields["branches"]
+        # The widget first: setting the queryset is what hands it the choices.
+        field.widget = forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"})
+        field.queryset = Branch.objects.all()
+        field.required = False
+        field.label = "Branches"
+        field.help_text = (
+            "Where this person works. Leave every box empty for the main "
+            "branch only. Somebody allowed to work in every branch is not "
+            "limited by this."
+        )
+        field.label_from_instance = (
+            lambda branch: branch.name if branch.is_active else f"{branch.name} (closed)"
+        )
+
+
 class StyledFormMixin:
     """Applies Bootstrap classes without needing per-field boilerplate."""
 
@@ -130,7 +161,12 @@ class LoginForm(StyledFormMixin, AuthenticationForm):
 
 
 class UserCreateForm(
-    NoteTagFormMixin, RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, UserCreationForm
+    NoteTagFormMixin,
+    RoleFieldMixin,
+    ManagerFieldMixin,
+    BranchesFieldMixin,
+    StyledFormMixin,
+    UserCreationForm,
 ):
     class Meta:
         model = User
@@ -143,6 +179,7 @@ class UserCreateForm(
             "employee_id",
             "role",
             "manager",
+            "branches",
             "is_active",
             "notes",
             "note_tag",
@@ -153,10 +190,16 @@ class UserCreateForm(
         super().__init__(*args, **kwargs)
         self._install_role_choices()
         self._install_manager_choices()
+        self._install_branch_choices()
 
 
 class UserUpdateForm(
-    NoteTagFormMixin, RoleFieldMixin, ManagerFieldMixin, StyledFormMixin, forms.ModelForm
+    NoteTagFormMixin,
+    RoleFieldMixin,
+    ManagerFieldMixin,
+    BranchesFieldMixin,
+    StyledFormMixin,
+    forms.ModelForm,
 ):
     """Password is changed separately - never on the profile edit form."""
 
@@ -171,6 +214,7 @@ class UserUpdateForm(
             "employee_id",
             "role",
             "manager",
+            "branches",
             "is_active",
             "notes",
             "note_tag",
@@ -182,6 +226,7 @@ class UserUpdateForm(
         super().__init__(*args, **kwargs)
         self._install_role_choices()
         self._install_manager_choices()
+        self._install_branch_choices()
 
     def clean_is_active(self):
         active = self.cleaned_data["is_active"]

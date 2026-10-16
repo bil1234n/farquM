@@ -19,6 +19,15 @@ already off the shelf. It moves them from "waiting" to "gone".
 
 Every write runs in one transaction with the sale row locked, so two stock
 keepers tapping "hand over" on the same sale at once cannot both succeed.
+
+BREAKAGE ON THE WAY OUT
+-----------------------
+The one thing a hand-over DOES take off the shelf is what broke while it
+happened: a customer buys 100 blocks, three fail as they are lifted and two
+crack on the lorry, so 105 leave the stack for 100 delivered. The customer's
+figures do not change - they paid for 100 and got 100 - and the five extra
+come off the stock as damage (DeliveryLine.broken), referenced to the
+hand-over so the stock card says where they went.
 """
 import logging
 
@@ -27,6 +36,8 @@ from django.db.models import F, Sum
 from django.utils import timezone
 
 from core.scoping import can_touch
+from inventory.models import MovementType
+from inventory.services import apply_stock_movement
 
 from .models import (
     Delivery,
@@ -86,14 +97,21 @@ def record_delivery(
     notes: str = "",
     note_tag=None,
     delivered_at=None,
+    broken=None,
 ) -> Delivery:
     """
     Record goods leaving the yard against one sale.
 
-    `lines` is a list of {"item": <TransactionItem or id>, "quantity": n}. A
-    line at zero means "none of this one today" and is simply skipped, so a
-    form can post every line of the sale. `everything=True` takes whatever is
-    still waiting on every line - the common case, one tap.
+    `lines` is a list of {"item": <TransactionItem or id>, "quantity": n,
+    "broken": n}. A line at zero means "none of this one today" and is simply
+    skipped, so a form can post every line of the sale. `everything=True`
+    takes whatever is still waiting on every line - the common case, one tap.
+
+    `broken` maps an item (or its id) to how many units broke while it was
+    being handed over, for the `everything` button, which sends no lines.
+    A line's own "broken" says the same thing. Either way the customer's
+    quantities are untouched and the broken units come off the shelf as
+    damage - see the module docstring.
     """
     if not can_touch(txn, user):
         raise DeliveryError("You do not have access to this sale.")
@@ -108,6 +126,17 @@ def record_delivery(
     }
 
     wanted: dict[int, int] = {}
+    breakage: dict[int, int] = {}
+
+    def note_breakage(item_id, raw):
+        count = _whole(raw, "Broken units must be whole numbers.")
+        if count < 0:
+            raise DeliveryError("Broken units cannot be negative.")
+        if count:
+            if items.get(item_id) is None:
+                raise DeliveryError("That line is not part of this sale.")
+            breakage[item_id] = breakage.get(item_id, 0) + count
+
     if everything:
         for item in items.values():
             if item.quantity_waiting > 0:
@@ -115,14 +144,12 @@ def record_delivery(
     else:
         for entry in lines or []:
             item_id = _item_id(entry.get("item"))
-            try:
-                quantity = int(entry.get("quantity") or 0)
-            except (TypeError, ValueError):
-                raise DeliveryError("Quantities must be whole numbers.")
-            if quantity == 0:
-                continue
+            quantity = _whole(entry.get("quantity"), "Quantities must be whole numbers.")
             if quantity < 0:
                 raise DeliveryError("A quantity cannot be negative.")
+            note_breakage(item_id, entry.get("broken"))
+            if quantity == 0:
+                continue
             item = items.get(item_id)
             if item is None:
                 raise DeliveryError("That line is not part of this sale.")
@@ -134,6 +161,18 @@ def record_delivery(
                     f"are still waiting for this customer."
                 )
             wanted[item.pk] = quantity
+
+    for key, raw in (broken or {}).items():
+        note_breakage(_item_id(key), raw)
+
+    # Breakage rides on the line that was going out when it happened, so it
+    # can be read back - and undone - with the hand-over it belongs to.
+    for item_id in breakage:
+        if item_id not in wanted:
+            raise DeliveryError(
+                f"{items[item_id].product_name}: breakage is recorded with the "
+                f"units going out - enter how many of them are handed over too."
+            )
 
     if not wanted:
         if all(item.quantity_waiting == 0 for item in items.values()):
@@ -153,7 +192,10 @@ def record_delivery(
         note_tag=note_tag,
     )
     DeliveryLine.objects.bulk_create(
-        DeliveryLine(delivery=delivery, item_id=item_id, quantity=quantity)
+        DeliveryLine(
+            delivery=delivery, item_id=item_id, quantity=quantity,
+            broken=breakage.get(item_id, 0),
+        )
         for item_id, quantity in wanted.items()
     )
     for item_id, quantity in wanted.items():
@@ -161,13 +203,40 @@ def record_delivery(
             quantity_delivered=F("quantity_delivered") + quantity
         )
 
+    # What broke on the way out comes off the shelf now. Allowed below zero,
+    # like any write-off: the units are broken whatever the card says, and a
+    # stock card that refused to record it would only hide the loss.
+    for item_id, count in breakage.items():
+        item = items[item_id]
+        apply_stock_movement(
+            item.product, -count, MovementType.DAMAGE,
+            user=user,
+            reference=delivery.reference,
+            reason=(
+                f"Broken while handing over {delivery.reference} "
+                f"(sale {locked.reference})"
+            ),
+            allow_negative=True,
+        )
+
     status = refresh_status(locked)
     logger.info(
-        "Delivery %s for %s by %s: %s units, sale now %s",
+        "Delivery %s for %s by %s: %s units, %s broken, sale now %s",
         delivery.reference, locked.reference, getattr(user, "username", "?"),
-        sum(wanted.values()), status,
+        sum(wanted.values()), sum(breakage.values()), status,
     )
     return delivery
+
+
+def _whole(raw, message) -> int:
+    """A whole number from a form or a phone, blank meaning nothing."""
+    if raw in (None, ""):
+        return 0
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        raise DeliveryError(message)
+    return value
 
 
 @db_transaction.atomic
@@ -190,10 +259,20 @@ def void_delivery(delivery: Delivery, *, user, reason: str) -> Delivery:
     if locked.is_voided:
         raise DeliveryError("This hand-over has already been cancelled.")
 
-    for line in locked.lines.all():
+    for line in locked.lines.select_related("item__product"):
         TransactionItem.objects.filter(pk=line.item_id).update(
             quantity_delivered=F("quantity_delivered") - line.quantity
         )
+        # A hand-over cancelled because it was recorded by mistake takes the
+        # breakage typed with it back too - otherwise recording it again on
+        # the right sale would take the same broken units off twice.
+        if line.broken:
+            apply_stock_movement(
+                line.item.product, line.broken, MovementType.ADJUSTMENT,
+                user=user,
+                reference=locked.reference,
+                reason=f"Breakage on {locked.reference} taken back: {reason}",
+            )
 
     locked.is_voided = True
     locked.voided_at = timezone.now()

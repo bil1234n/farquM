@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from . import (
     audit_views,
+    branch_views,
     delivery_views,
     expense_views,
     option_views,
@@ -56,6 +57,11 @@ urlpatterns = [
     path("auth/logout/", views.LogoutView.as_view(), name="logout"),
     path("auth/me/", views.me, name="me"),
     path("auth/change-password/", views.change_password, name="change_password"),
+
+    # Branches - separate books for each shop or yard (core/branching.py)
+    path("branches/", branch_views.branches, name="branches"),
+    path("branches/switch/", branch_views.branch_switch, name="branch_switch"),
+    path("branches/<int:pk>/", branch_views.branch_detail, name="branch_detail"),
 
     # Push registration
     path("devices/register/", views.RegisterDeviceView.as_view(), name="device_register"),

@@ -25,6 +25,7 @@ from django.db.models import Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
+from core.branching import branch_manager
 from core.models import OwnedModel, TimeStampedModel, note_tag_field
 from core.utils import ZERO, money, receipt_upload_path, validate_receipt_file
 
@@ -73,7 +74,9 @@ class CreditAccount(TimeStampedModel):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
-    objects = CreditAccountQuerySet.as_manager()
+    objects = branch_manager(CreditAccountQuerySet)
+
+    branch_path = "customer__branch"
 
     class Meta:
         ordering = ["-outstanding_balance"]
@@ -260,7 +263,9 @@ class DebtRecord(OwnedModel, TimeStampedModel):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
-    objects = DebtRecordQuerySet.as_manager()
+    objects = branch_manager(DebtRecordQuerySet)
+
+    branch_path = "customer__branch"
 
     class Meta:
         ordering = ["-created_at"]
@@ -451,6 +456,9 @@ class Repayment(TimeStampedModel):
     )
     reversal_reason = models.TextField(blank=True)
 
+    branch_path = "debt__customer__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["-paid_at", "-id"]
         indexes = [
@@ -503,6 +511,9 @@ class RepaymentProof(TimeStampedModel):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         related_name="repayment_proofs", null=True, blank=True,
     )
+
+    branch_path = "repayment__debt__customer__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["-created_at"]

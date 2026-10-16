@@ -79,6 +79,14 @@ def notify_users(users, *, title, body, channel="general", data=None, log=True):
     payload = {str(k): str(v) for k, v in (data or {}).items()}
     payload["channel"] = channel
 
+    # With several branches, say which one the news is from: "Low stock" on
+    # its own reads as news about whichever branch the phone is showing.
+    branch_id, branch_name = _branch_of_the_news()
+    if branch_id:
+        payload["branchId"] = str(branch_id)
+        if branch_name:
+            title = f"{branch_name} · {title}"
+
     tokens_by_user = {}
     for user in users:
         toks = list(
@@ -140,6 +148,23 @@ def notify_users(users, *, title, body, channel="general", data=None, log=True):
             NotificationLog.objects.bulk_update(entries, ["error"])
 
     return delivered
+
+
+def _branch_of_the_news():
+    """(id, name-to-show) of the branch being worked in, or (None, "")."""
+    try:
+        from core.branching import current_branch_id
+        from core.models import Branch
+
+        branch_id = current_branch_id()
+        if not branch_id:
+            return None, ""
+        if Branch.objects.filter(is_active=True).count() < 2:
+            return branch_id, ""
+        name = Branch.objects.filter(pk=branch_id).values_list("name", flat=True).first()
+        return branch_id, name or ""
+    except Exception:  # pragma: no cover - a notification must never fail a sale
+        return None, ""
 
 
 def _handle_failures(tokens, response):

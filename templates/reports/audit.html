@@ -30,7 +30,7 @@
       {% for key in ranges %}
         <a href="?range={{ key }}{% if chosen %}&product={{ chosen.id }}{% endif %}"
            class="btn {% if report.period.key == key %}btn-primary{% else %}btn-outline-secondary{% endif %}">
-          {% if key == "30d" %}30 days{% elif key == "90d" %}3 months{% elif key == "365d" %}12 months{% else %}All time{% endif %}
+          <span>{% if key == "7d" %}Week{% elif key == "30d" %}Month{% elif key == "90d" %}3 months{% elif key == "365d" %}12 months{% else %}All time{% endif %}</span>
         </a>
       {% endfor %}
     </div>

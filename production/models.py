@@ -35,8 +35,10 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
 
+from core.branching import branch_manager
 from core.models import (
     AuthoredModel,
+    BranchModel,
     OwnedModel,
     SoftDeleteModel,
     TimeStampedModel,
@@ -109,7 +111,7 @@ class RawMaterialQuerySet(models.QuerySet):
         )
 
 
-class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
+class RawMaterial(BranchModel, AuthoredModel, OwnedModel, SoftDeleteModel):
     """One thing you buy in and consume: a cement, a sand, a pigment."""
 
     # Unique per owner for the same reason a SKU is: two managers keep separate
@@ -163,7 +165,7 @@ class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
     )
     is_active = models.BooleanField(default=True, db_index=True)
 
-    objects = RawMaterialQuerySet.as_manager()
+    objects = branch_manager(RawMaterialQuerySet)
 
     class Meta:
         ordering = ["name"]
@@ -180,7 +182,8 @@ class RawMaterial(AuthoredModel, OwnedModel, SoftDeleteModel):
                 name="material_unit_cost_non_negative",
             ),
             models.UniqueConstraint(
-                fields=["owner", "code"], name="material_code_unique_per_owner"
+                fields=["branch", "owner", "code"],
+                name="material_code_unique_per_branch_owner",
             ),
         ]
 
@@ -341,6 +344,9 @@ class MaterialMovement(TimeStampedModel):
     )
     correction_note = models.CharField(max_length=255, blank=True)
 
+    branch_path = "material__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["-created_at", "-id"]
         verbose_name = "Material movement"
@@ -415,6 +421,9 @@ class Recipe(AuthoredModel):
     notes = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
 
+    branch_path = "product__branch"
+    objects = branch_manager()
+
     class Meta:
         verbose_name = "Recipe"
         ordering = ["product__name"]
@@ -448,6 +457,9 @@ class RecipeItem(models.Model):
         validators=[MinValueValidator(Decimal("0.001"))],
         help_text="How much of this material one batch uses.",
     )
+
+    branch_path = "recipe__product__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["material__name"]
@@ -548,7 +560,9 @@ class ProductionRun(AuthoredModel, OwnedModel):
     )
     reversal_reason = models.CharField(max_length=255, blank=True)
 
-    objects = ProductionRunQuerySet.as_manager()
+    objects = branch_manager(ProductionRunQuerySet)
+
+    branch_path = "product__branch"
 
     class Meta:
         ordering = ["-produced_on", "-created_at", "-id"]
@@ -724,6 +738,9 @@ class ProductionMaterial(models.Model):
         blank=True,
     )
 
+    branch_path = "run__product__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["material__name"]
         constraints = [
@@ -790,6 +807,9 @@ class ProductionDamage(models.Model):
         default=0, help_text="How many units failed this way."
     )
     note = models.CharField(max_length=255, blank=True)
+
+    branch_path = "run__product__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["-quantity", "id"]
@@ -925,7 +945,9 @@ class ProductionRequest(TimeStampedModel):
         related_name="requests_fulfilled",
     )
 
-    objects = ProductionRequestQuerySet.as_manager()
+    objects = branch_manager(ProductionRequestQuerySet)
+
+    branch_path = "product__branch"
 
     class Meta:
         ordering = ["-created_at", "-id"]

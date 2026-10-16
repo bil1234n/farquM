@@ -3,6 +3,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models.functions import Lower
 
+from core.branching import branch_field, branch_manager  # noqa: F401 - re-exported
 from core.utils import (
     id_photo_upload_path,
     person_photo_upload_path,
@@ -121,6 +122,125 @@ class SoftDeleteModel(models.Model):
         self.deleted_at = None
         self.deleted_by = None
         self.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
+
+
+class Branch(TimeStampedModel):
+    """
+    One shop or yard of the business, with books of its own.
+
+    Every sale, customer, product, expense and pick-list entry belongs to
+    exactly one branch, and nothing is shared or added up between them - see
+    core.branching for how that is enforced. Accounts, roles and the business
+    settings stay business-wide.
+
+    Never deleted: a branch that has closed is switched off, and its books
+    stay readable to the owner.
+    """
+
+    name = models.CharField(max_length=120, unique=True)
+    address = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=40, blank=True)
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Off for a branch that has closed. Its records stay.",
+    )
+    #: The branch the business had before there were branches, and the one
+    #: system tasks write into. Exactly one; it cannot be switched off.
+    is_main = models.BooleanField(default=False, editable=False)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-is_main", "sort_order", "name"]
+        verbose_name_plural = "Branches"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_main"],
+                condition=models.Q(is_main=True),
+                name="branch_one_main",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    #: Name of the branch the existing books are moved into.
+    MAIN_NAME = "Main branch"
+
+    @classmethod
+    def main_id(cls):
+        found = cls.objects.filter(is_main=True).values_list("pk", flat=True).first()
+        if found is None:
+            found = cls.objects.create(name=cls._free_name(), is_main=True).pk
+        return found
+
+    @classmethod
+    def main(cls):
+        return cls.objects.get(pk=cls.main_id())
+
+    @classmethod
+    def _free_name(cls):
+        name, n = cls.MAIN_NAME, 2
+        while cls.objects.filter(name=name).exists():
+            name = f"{cls.MAIN_NAME} {n}"
+            n += 1
+        return name
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        from core.branching import forget_main_branch
+
+        forget_main_branch()
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError(
+            "A branch is never deleted - switch it off and its books stay."
+        )
+
+
+class BranchModel(models.Model):
+    """
+    A root record of one branch's books: a product, a customer, a sale.
+
+    Records that hang off one of these (a sale's lines, a product's stock
+    movements) have no column of their own; they reach their branch through
+    the parent and say how in `branch_path`. See core.branching.
+    """
+
+    branch = branch_field()
+    branch_path = "branch"
+
+    #: Relations a new record can take its branch from when no branch is
+    #: active - a test, a shell, a data fix. Inside a request the active
+    #: branch decides and these are not read. An expense for a Branch 2
+    #: employee, recorded from the shell, still belongs to Branch 2.
+    branch_parents: tuple = ()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.branch_parents:
+            from core.branching import branch_of, current_branch_id
+
+            if not current_branch_id():
+                for name in self.branch_parents:
+                    if getattr(self, f"{name}_id", None) is None:
+                        continue
+                    found = branch_of(getattr(self, name))
+                    if found is not None:
+                        self.branch_id = found
+                        break
+        super().save(*args, **kwargs)
+
+    def validate_constraints(self, exclude=None):
+        # A form never shows the branch - it is whichever one the request is
+        # in - so Django would skip every "unique within the branch" rule for
+        # touching an excluded field, and a duplicate would reach the
+        # database as an IntegrityError instead of a sentence on the form.
+        if exclude and "branch" in exclude and self.branch_id is not None:
+            exclude = set(exclude) - {"branch"}
+        return super().validate_constraints(exclude=exclude)
 
 
 class SystemSetting(models.Model):
@@ -247,41 +367,50 @@ class OptionQuerySet(models.QuerySet):
         return self.filter(group=(key or "").strip().upper())
 
 
-#: group -> {code: label}, for the lists other tables store by code.
+#: (branch, group) -> {code: label}, for the lists other tables store by code.
 #:
 #: A unit is read once per row on every product list, every sale line and
 #: every material card - one query each would turn a single page into a
 #: hundred. The table is a handful of short rows that change about twice a
 #: year, so it is held in the process and dropped whenever an Option is
-#: written. See Option.save().
+#: written. See Option.save(). Keyed by branch as well, because each branch
+#: words its own units.
 _LABEL_CACHE: dict = {}
 
 
 def labels_for(group: str) -> dict:
-    """{code: label} for one coded group, cached."""
+    """{code: label} for one coded group in the working branch, cached."""
+    from core.branching import branch_for_new_row
+
     group = (group or "").strip().upper()
-    cached = _LABEL_CACHE.get(group)
+    try:
+        branch_id = branch_for_new_row()
+    except Exception:
+        branch_id = None
+    key = (branch_id, group)
+    cached = _LABEL_CACHE.get(key)
     if cached is not None:
         return cached
     try:
-        rows = dict(
-            Option.objects.in_group(group)
-            .exclude(code="")
-            .values_list("code", "label")
-        )
+        rows = Option.objects.in_group(group).exclude(code="")
+        if branch_id is not None:
+            rows = rows.filter(branch_id=branch_id)
+        rows = dict(rows.values_list("code", "label"))
     except Exception:
         # The table may not exist yet - during the migration that creates it,
         # or on a half-built deployment. Falling back to the built-in wording
         # beats a 500 on the product list.
         return {}
-    _LABEL_CACHE[group] = rows
+    _LABEL_CACHE[key] = rows
     return rows
 
 
 def forget_labels(group: str = "") -> None:
-    """Drop the cached labels for one group, or for all of them."""
+    """Drop the cached labels for one group (every branch), or for all."""
     if group:
-        _LABEL_CACHE.pop((group or "").strip().upper(), None)
+        group = (group or "").strip().upper()
+        for key in [k for k in _LABEL_CACHE if k[1] == group]:
+            _LABEL_CACHE.pop(key, None)
     else:
         _LABEL_CACHE.clear()
 
@@ -445,7 +574,7 @@ def note_tag_field():
     )
 
 
-class Option(TimeStampedModel):
+class Option(BranchModel, TimeStampedModel):
     """
     One entry in a managed pick-list. The groups live in core/options.py.
 
@@ -510,8 +639,9 @@ class Option(TimeStampedModel):
         blank=True,
         related_name="options_added",
     )
-
-    objects = OptionQuerySet.as_manager()
+    # Each branch keeps its own lists - a bank added in one yard is not
+    # offered in the other. The `branch` column comes from BranchModel.
+    objects = branch_manager(OptionQuerySet)
 
     class Meta:
         ordering = ["sort_order", "label"]
@@ -523,9 +653,11 @@ class Option(TimeStampedModel):
         ]
         constraints = [
             models.UniqueConstraint(
+                "branch",
                 "group",
                 Lower("label"),
-                name="option_label_unique_per_group",
+                name="option_label_unique_per_branch_group",
+                violation_error_message="That entry is already in this list.",
             )
         ]
 
@@ -565,7 +697,12 @@ class Option(TimeStampedModel):
         base = "_".join(part for part in base.split("_") if part)[:32] or "OPT"
 
         candidate, suffix = base, 1
-        taken = Option.objects.in_group(self.group).exclude(pk=self.pk)
+        # Unique within this entry's own branch and list. Read past the
+        # branch filter on purpose: a branch being set up from inside another
+        # one must be checked against its own codes, not the active branch's.
+        taken = Option._base_manager.filter(
+            branch_id=self.branch_id, group=self.group
+        ).exclude(pk=self.pk)
         while taken.filter(code=candidate).exists():
             suffix += 1
             candidate = f"{base[:29]}_{suffix}"
@@ -641,20 +778,26 @@ def resolve_option(group: str, *, label: str = "", option_id=None, user=None):
     Returns (None, "") when nothing was chosen, which is a normal answer: a
     cash sale names no bank.
     """
+    from core.branching import branch_for_new_row
+
     from .options import is_known
 
     group = (group or "").strip().upper()
     label = " ".join((label or "").split())[:120]
+    # The working branch's own list. Inside a request the manager already
+    # says so; outside one (a test, a shell) this keeps every branch's list
+    # out of the answer but the one a new row would be written into.
+    in_list = Option.objects.in_group(group).filter(branch_id=branch_for_new_row())
 
     if option_id:
-        found = Option.objects.in_group(group).filter(pk=option_id).first()
+        found = in_list.filter(pk=option_id).first()
         if found is not None:
             return found, found.label
 
     if not label or not is_known(group):
         return None, label
 
-    existing = Option.objects.in_group(group).filter(label__iexact=label).first()
+    existing = in_list.filter(label__iexact=label).first()
     if existing is not None:
         if not existing.is_active:
             Option.objects.filter(pk=existing.pk).update(is_active=True)

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Edit branch{% endblock %}
+{% block page_title %}Edit branch{% endblock %}
+{% block breadcrumb %}<div class="crumb"><a href="{% url 'core:branch_list' %}"><span>Branches</span></a> &rsaquo; {{ branch.name }}</div>{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-shop me-1"></i>{{ branch.name }}
+        {% if branch.is_main %}<span class="badge text-bg-primary-subtle text-primary-emphasis border ms-1"><span>Main</span></span>{% endif %}
+      </div>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label" for="branchName"><span>Name</span></label>
+            <input class="form-control" id="branchName" name="name" maxlength="120" required value="{{ branch.name }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="branchAddress"><span>Address</span></label>
+            <input class="form-control" id="branchAddress" name="address" maxlength="255" value="{{ branch.address }}">
+          </div>
+          <div class="mb-1">
+            <label class="form-label" for="branchPhone"><span>Phone</span></label>
+            <input class="form-control" id="branchPhone" name="phone" maxlength="40" value="{{ branch.phone }}">
+          </div>
+          <div class="form-text"><span>The address and phone are printed on this branch's receipts.</span></div>
+        </div>
+        <div class="card-footer bg-light d-flex justify-content-between">
+          <a href="{% url 'core:branch_list' %}" class="btn btn-light btn-sm"><span>Cancel</span></a>
+          <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-check-lg me-1"></i><span>Save</span></button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

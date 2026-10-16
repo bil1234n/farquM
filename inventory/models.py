@@ -12,8 +12,10 @@ from django.db import models
 from django.db.models import F, Sum
 from django.urls import reverse
 
+from core.branching import branch_manager
 from core.models import (
     AuthoredModel,
+    BranchModel,
     OwnedModel,
     SoftDeleteModel,
     TimeStampedModel,
@@ -21,15 +23,31 @@ from core.models import (
 )
 
 
-class Category(TimeStampedModel):
-    name = models.CharField(max_length=120, unique=True)
-    slug = models.SlugField(max_length=140, unique=True, blank=True)
+class Category(BranchModel, TimeStampedModel):
+    # Unique within a branch, not across the business: both yards may well
+    # keep a "Blocks" category, and each is its own.
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140, blank=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+
+    objects = branch_manager()
 
     class Meta:
         ordering = ["name"]
         verbose_name_plural = "Categories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "name"],
+                name="category_name_unique_per_branch",
+                violation_error_message="There is already a category with this name.",
+            ),
+            models.UniqueConstraint(
+                fields=["branch", "slug"],
+                name="category_slug_unique_per_branch",
+                violation_error_message="There is already a category with this name.",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -49,8 +67,9 @@ class Category(TimeStampedModel):
         return self.products.alive().count()
 
 
-class Supplier(TimeStampedModel):
-    name = models.CharField(max_length=160, unique=True)
+class Supplier(BranchModel, TimeStampedModel):
+    # Unique within a branch - see Category.
+    name = models.CharField(max_length=160)
     contact_person = models.CharField(max_length=120, blank=True)
     phone = models.CharField(max_length=30, blank=True)
     email = models.EmailField(blank=True)
@@ -59,8 +78,17 @@ class Supplier(TimeStampedModel):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
+    objects = branch_manager()
+
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["branch", "name"],
+                name="supplier_name_unique_per_branch",
+                violation_error_message="There is already a supplier with this name.",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -120,7 +148,7 @@ class ProductQuerySet(models.QuerySet):
         )
 
 
-class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
+class Product(BranchModel, AuthoredModel, OwnedModel, SoftDeleteModel):
     class Unit(models.TextChoices):
         PIECE = "PIECE", "Piece"
         BOX = "BOX", "Box"
@@ -238,7 +266,7 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
         related_name="+",
     )
 
-    objects = ProductQuerySet.as_manager()
+    objects = branch_manager(ProductQuerySet)
 
     class Meta:
         ordering = ["name"]
@@ -259,13 +287,16 @@ class Product(AuthoredModel, OwnedModel, SoftDeleteModel):
                 check=models.Q(selling_price__gte=0),
                 name="product_selling_price_non_negative",
             ),
+            # Per branch as well as per owner: each branch keeps its own
+            # catalogue, numbered on its own.
             models.UniqueConstraint(
-                fields=["owner", "sku"], name="product_sku_unique_per_owner"
+                fields=["branch", "owner", "sku"],
+                name="product_sku_unique_per_branch_owner",
             ),
             models.UniqueConstraint(
-                fields=["owner", "barcode"],
+                fields=["branch", "owner", "barcode"],
                 condition=models.Q(barcode__isnull=False),
-                name="product_barcode_unique_per_owner",
+                name="product_barcode_unique_per_branch_owner",
             ),
         ]
 
@@ -436,6 +467,9 @@ class ProductCostEstimate(models.Model):
     )
     set_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
+    branch_path = "product__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["-set_at", "-id"]
         verbose_name = "Product cost estimate"
@@ -549,7 +583,9 @@ class StockMovement(TimeStampedModel):
     )
     correction_note = models.CharField(max_length=255, blank=True)
 
-    objects = StockMovementQuerySet.as_manager()
+    objects = branch_manager(StockMovementQuerySet)
+
+    branch_path = "product__branch"
 
     class Meta:
         ordering = ["-created_at", "-id"]

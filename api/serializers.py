@@ -15,7 +15,7 @@ from django.contrib.auth import authenticate
 from rest_framework import serializers
 
 from accounts.models import DataScope, RoleDefinition, User
-from core.models import Option, SystemSetting
+from core.models import Branch, Option, SystemSetting
 from core.permissions import WILDCARD, clean_codes
 from credit.models import CreditAccount, DebtRecord, Repayment, RepaymentProof
 from inventory.models import Category, Product, StockMovement, Supplier
@@ -23,6 +23,7 @@ from sales.models import (
     Customer,
     Delivery,
     DeliveryLine,
+    ExtraCharge,
     Receipt,
     Transaction,
     TransactionItem,
@@ -270,6 +271,18 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
+def branch_dict(branch) -> dict | None:
+    """A branch as the phone needs it - enough to show and to switch."""
+    if branch is None:
+        return None
+    return {
+        "id": branch.pk,
+        "name": branch.name,
+        "is_main": branch.is_main,
+        "is_active": branch.is_active,
+    }
+
+
 class UserSerializer(serializers.ModelSerializer):
     """The signed-in user's own profile. Role and status are read-only here."""
 
@@ -278,6 +291,11 @@ class UserSerializer(serializers.ModelSerializer):
     permissions = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     initials = serializers.CharField(read_only=True)
+    # Where this person is working, and where else they may go - what the
+    # Branch button on the Account screen is drawn from. See core.branching.
+    branch = serializers.SerializerMethodField()
+    my_branches = serializers.SerializerMethodField()
+    several_branches = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -285,7 +303,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id", "username", "first_name", "last_name", "display_name",
             "email", "phone", "role", "role_display", "is_active", "permissions",
             "avatar", "avatar_url", "initials", "employee_id", "date_joined",
-            "last_login",
+            "last_login", "branch", "my_branches", "several_branches",
         ]
         # role and is_active are NOT editable through this serializer. A user
         # promoting themselves to Admin by PATCHing their own profile would
@@ -331,6 +349,35 @@ class UserSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(url)
         return url
 
+    def _my_branches(self, obj):
+        cached = getattr(obj, "_serialized_branches", None)
+        if cached is None:
+            cached = list(obj.allowed_branches())
+            obj._serialized_branches = cached
+        return cached
+
+    def get_branch(self, obj):
+        found = next(
+            (b for b in self._my_branches(obj) if b.pk == obj.current_branch_id),
+            None,
+        )
+        return branch_dict(found)
+
+    def get_my_branches(self, obj):
+        return [branch_dict(b) for b in self._my_branches(obj)]
+
+    def get_several_branches(self, obj):
+        from core.models import Branch
+
+        return len(self._my_branches(obj)) > 1 or (
+            Branch.objects.filter(is_active=True).count() > 1
+        )
+
+
+#: The signed-in person's own branch fields. Not repeated for every row of
+#: the staff list, where they would cost two queries a person.
+_SELF_BRANCH_FIELDS = ("branch", "my_branches", "several_branches")
+
 
 class UserAdminSerializer(NoteTagMixin, UserSerializer):
     """
@@ -350,16 +397,30 @@ class UserAdminSerializer(NoteTagMixin, UserSerializer):
     data_scope = serializers.CharField(read_only=True)
     scope_label = serializers.CharField(read_only=True)
     is_customised = serializers.SerializerMethodField()
+    #: Where this person works: branch ids. Empty means the main branch.
+    branches = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, queryset=Branch.objects.all()
+    )
+    branch_names = serializers.SerializerMethodField()
+    works_in_every_branch = serializers.BooleanField(read_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + [
+        fields = [
+            f for f in UserSerializer.Meta.fields if f not in _SELF_BRANCH_FIELDS
+        ] + [
             "password", "notes", *NOTE_TAG_FIELDS,
             "sales_count", "outstanding", "last_activity",
             "manager", "manager_name", "data_scope", "scope_label",
             "data_scope_override", "is_customised",
+            "branches", "branch_names", "works_in_every_branch",
         ]
         read_only_fields = ["id", "date_joined", "last_login", "last_activity"]
         extra_kwargs = {"avatar": {"write_only": True, "required": False}}
+
+    def get_branch_names(self, obj):
+        from core.branches import branch_names
+
+        return branch_names(obj)
 
     def get_is_customised(self, obj):
         return bool(
@@ -428,6 +489,7 @@ class UserAdminSerializer(NoteTagMixin, UserSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password", None)
+        branches = validated_data.pop("branches", None)
         if not password:
             raise serializers.ValidationError(
                 {"password": "A password is required when creating a user."}
@@ -435,6 +497,17 @@ class UserAdminSerializer(NoteTagMixin, UserSerializer):
         user = User(**validated_data)
         user.set_password(password)
         user.save()
+        if branches is None:
+            # Added from inside a branch: that is where they most likely
+            # work. The main branch needs no entry - it is the default.
+            request = self.context.get("request")
+            current = getattr(getattr(request, "user", None), "current_branch_id", None)
+            from core.models import Branch
+
+            if current and current != Branch.main_id():
+                branches = [current]
+        if branches:
+            user.branches.set(branches)
         return user
 
     def update(self, instance, validated_data):
@@ -452,15 +525,45 @@ class UserAdminSerializer(NoteTagMixin, UserSerializer):
 # ---------------------------------------------------------------------------
 # Inventory
 # ---------------------------------------------------------------------------
-class CategorySerializer(serializers.ModelSerializer):
+class UniqueInBranchMixin:
+    """
+    Refuse a second record with the same name in the branch being worked in.
+
+    The database enforces this too, but a rule that only the database knows
+    reaches the phone as "nothing was changed" rather than as a sentence it
+    can show beside the field. The managers are branch-scoped inside a
+    request, so the lookup below only ever sees this branch.
+    """
+
+    #: (field, message) pairs.
+    unique_in_branch: tuple = ()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        model = self.Meta.model
+        for field, message in self.unique_in_branch:
+            if field not in attrs:
+                continue
+            clash = model.objects.filter(**{field: attrs[field]})
+            if self.instance is not None:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise serializers.ValidationError({field: [message]})
+        return attrs
+
+
+class CategorySerializer(UniqueInBranchMixin, serializers.ModelSerializer):
     product_count = serializers.IntegerField(read_only=True)
+    unique_in_branch = (("name", "There is already a category with this name."),)
 
     class Meta:
         model = Category
         fields = ["id", "name", "description", "is_active", "product_count"]
 
 
-class SupplierSerializer(NoteTagMixin, serializers.ModelSerializer):
+class SupplierSerializer(UniqueInBranchMixin, NoteTagMixin, serializers.ModelSerializer):
+    unique_in_branch = (("name", "There is already a supplier with this name."),)
+
     class Meta:
         model = Supplier
         fields = [
@@ -799,18 +902,31 @@ class ReceiptSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(url) if request else url
 
 
-class ExtraChargeSerializer(serializers.Serializer):
-    """One extra charged on a sale - transport, a loading worker..."""
+class ExtraChargeSerializer(FinancialFieldsMixin, serializers.ModelSerializer):
+    """
+    One extra charged on a sale - transport, a loading worker...
 
-    label = serializers.CharField(read_only=True)
-    amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
-    on_debt = serializers.BooleanField(read_only=True)
+    What it cost the business ("We paid out") is a cost figure like any
+    other, so it reaches only somebody who may see costs, and what was kept
+    on it only somebody who may see profit. The charge itself is on the
+    receipt, and everybody who can see the sale sees it.
+    """
+
+    financial_fields = ("cost_amount",)
+    profit_fields = ("profit",)
+
+    profit = DerivedDecimal()
+
+    class Meta:
+        model = ExtraCharge
+        fields = ["id", "label", "amount", "on_debt", "cost_amount", "profit"]
+        read_only_fields = fields
 
 
 class TransactionSerializer(
     NoteTagMixin, OwnerNameMixin, FinancialFieldsMixin, serializers.ModelSerializer
 ):
-    financial_fields = ("total_cost",)
+    financial_fields = ("total_cost", "extra_charge_cost")
     profit_fields = ("gross_profit", "profit_margin")
 
     items = TransactionItemSerializer(many=True, read_only=True)
@@ -838,7 +954,7 @@ class TransactionSerializer(
             "id", "reference", "customer", "customer_display",
             "subtotal", "discount_amount", "tax_amount",
             "extra_charge_amount", "extra_charge_label", "extra_charge_on_debt",
-            "extra_charges",
+            "extra_charge_cost", "extra_charges",
             "total_amount",
             "amount_paid", "balance_due",
             "payment_status", "payment_status_display",
@@ -881,6 +997,13 @@ class ExtraChargeInputSerializer(serializers.Serializer):
         max_digits=14, decimal_places=2, min_value=Decimal("0")
     )
     on_debt = serializers.BooleanField(required=False, default=False)
+    # "We paid out": what the business itself paid for this extra - the
+    # driver, the loaders. Optional. Recorded as an expense too, which needs
+    # `expense.record`; sales.services decides that, for the web page as well.
+    cost_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, min_value=Decimal("0"),
+        required=False, default=Decimal("0.00"),
+    )
 
 
 class SaleCreateSerializer(serializers.Serializer):
@@ -968,7 +1091,13 @@ class SaleCreateSerializer(serializers.Serializer):
                 "amount": legacy,
                 "on_debt": attrs.get("extra_charge_on_debt", False),
             }]
-        extras = [e for e in extras if (e.get("amount") or 0) > 0]
+        # A row with nothing charged and nothing paid out is one the "Add"
+        # button left behind. One with only a pay-out is kept, so the sale
+        # says why it cannot take it rather than dropping the figure.
+        extras = [
+            e for e in extras
+            if (e.get("amount") or 0) > 0 or (e.get("cost_amount") or 0) > 0
+        ]
         for number, extra in enumerate(extras, start=1):
             label = (extra.get("label") or "").strip()
             if not label:
@@ -1215,7 +1344,12 @@ class DeliveryLineSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DeliveryLine
-        fields = ["id", "item", "product", "product_name", "product_sku", "quantity"]
+        fields = [
+            "id", "item", "product", "product_name", "product_sku", "quantity",
+            # Extra units broken while this line went out - off the shelf as
+            # damage, never off what the customer took (sales/delivery.py).
+            "broken",
+        ]
 
 
 class DeliverySerializer(NoteTagMixin, serializers.ModelSerializer):
@@ -1232,6 +1366,7 @@ class DeliverySerializer(NoteTagMixin, serializers.ModelSerializer):
         source="voided_by.display_name", read_only=True, default=None
     )
     total_quantity = serializers.SerializerMethodField()
+    total_broken = serializers.SerializerMethodField()
 
     class Meta:
         model = Delivery
@@ -1241,15 +1376,27 @@ class DeliverySerializer(NoteTagMixin, serializers.ModelSerializer):
             "received_by_name", "received_by_phone", "vehicle",
             "notes", *NOTE_TAG_FIELDS,
             "is_voided", "voided_at", "voided_by_name", "void_reason",
-            "total_quantity", "lines",
+            "total_quantity", "total_broken", "lines",
         ]
 
     def get_total_quantity(self, obj) -> int:
         # Summed over the prefetched lines rather than with a query per row.
         return sum(line.quantity for line in obj.lines.all())
 
+    def get_total_broken(self, obj) -> int:
+        return sum(line.broken for line in obj.lines.all())
+
 
 class DeliveryLineInputSerializer(serializers.Serializer):
+    item = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=0)
+    #: Units broken while this line went out. Extra units off the shelf.
+    broken = serializers.IntegerField(min_value=0, required=False, default=0)
+
+
+class DeliveryBreakageSerializer(serializers.Serializer):
+    """Breakage for the "hand over everything" button, which sends no lines."""
+
     item = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=0)
 
@@ -1263,6 +1410,7 @@ class DeliveryCreateSerializer(serializers.Serializer):
     sale = serializers.IntegerField()
     everything = serializers.BooleanField(required=False, default=False)
     lines = DeliveryLineInputSerializer(many=True, required=False)
+    broken = DeliveryBreakageSerializer(many=True, required=False, default=list)
     received_by_name = serializers.CharField(
         max_length=160, required=False, allow_blank=True, default=""
     )

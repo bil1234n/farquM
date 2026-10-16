@@ -54,6 +54,15 @@ reconciliation tasks and migrations legitimately need every row, and a manager
 that hides rows from them corrupts totals in ways nobody notices for months.
 So filtering is explicit and always driven by a request user.
 
+BRANCHES ARE A THIRD, SEPARATE WALL
+-----------------------------------
+Everything above is about people inside ONE branch. Which branch a request
+is working in is decided before any of this runs (core.branching), and the
+default managers already keep every query inside it. scoped() and
+can_touch() still check it explicitly, so a queryset built some other way -
+or an object handed in from outside - cannot carry another branch's record
+past them. Even "sees everything" means everything in this branch.
+
 FAIL CLOSED
 -----------
 An anonymous or unknown user gets `none()`, not everything. A row with
@@ -62,6 +71,8 @@ to full-scope users only. Both are deliberate: the failure mode of this module
 must be "shows too little", never "leaks another person's books".
 """
 from django.db.models import Q
+
+from core.branching import in_branch, same_branch
 
 # path from the model being filtered to the User who owns it
 OWNER_PATHS = {
@@ -76,6 +87,7 @@ OWNER_PATHS = {
     "sales.Customer": "owner",
     "sales.Transaction": "owner",
     "sales.TransactionItem": "transaction__owner",
+    "sales.ExtraCharge": "transaction__owner",
     "sales.Receipt": "transaction__owner",
     # A hand-over is seen by whoever may see the sale it belongs to.
     "sales.Delivery": "transaction__owner",
@@ -214,6 +226,9 @@ def scoped(queryset, user, path: str | None = None):
     if not (user is not None and getattr(user, "is_authenticated", False)):
         return queryset.none()
 
+    # The branch first: even "everything" is everything in this branch.
+    queryset = in_branch(queryset)
+
     if sees_everything(user):
         return queryset
 
@@ -261,6 +276,10 @@ def can_touch(instance, user) -> bool:
     Used as a second line of defence on detail endpoints, where an ID arrives
     straight from the client and a scoped queryset was not used.
     """
+    # Another branch's record is never this user's to touch, whoever they
+    # are - the owner switches branch first, like everybody else.
+    if not same_branch(instance):
+        return False
     if sees_everything(user):
         return True
     if not _usable(user):

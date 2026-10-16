@@ -47,11 +47,28 @@ def log_action(
             entry.model_name = instance.__class__.__name__
             entry.object_id = str(getattr(instance, "pk", "") or "")
             entry.object_repr = str(instance)[:255]
+            entry.branch_id = _branch_for_entry(instance)
         entry.save()
         return entry
     except Exception:  # pragma: no cover - defensive
         logger.exception("Failed to write audit log entry")
         return None
+
+
+def _branch_for_entry(instance):
+    """
+    Which branch's log an entry about `instance` belongs in.
+
+    A record of a branch's books (a sale, a product) is logged in its own
+    branch. Anything else - an account, a role, the business settings, a
+    branch itself - belongs to the whole business, and is left blank so it
+    shows in every branch's log.
+    """
+    from core.branching import branch_of, branch_path_for, current_branch_id
+
+    if branch_path_for(type(instance)) is None:
+        return None
+    return branch_of(instance) or current_branch_id()
 
 
 def diff_instance(old, new, fields):

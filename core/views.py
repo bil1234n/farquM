@@ -693,3 +693,154 @@ def role_reset(request, pk):
     else:
         messages.error(request, "Only built-in roles have defaults to restore.")
     return redirect("core:role_update", pk=role.pk)
+
+
+# ---------------------------------------------------------------------------
+# Branches
+# ---------------------------------------------------------------------------
+def _after_switch(request) -> str:
+    """
+    Where to land after changing branch.
+
+    Back on the same page when it is a list or a form - the Products page in
+    Branch 2 is the Products page in Branch 1, with Branch 2's products on
+    it. Not when it is ONE record (a sale, a customer): that record belongs
+    to the branch just left, and in the new one it does not exist. The query
+    string is dropped for the same reason - a filter may name a record that
+    is not here.
+    """
+    from django.urls import Resolver404, resolve
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    target = (request.POST.get("next") or "").strip()
+    if not target or not url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return "/"
+    path = target.split("?", 1)[0].split("#", 1)[0]
+    try:
+        match = resolve(path)
+    except Resolver404:
+        return "/"
+    return "/" if match.kwargs else path
+
+
+@require_POST
+def branch_switch(request):
+    """Move the signed-in person into another branch they work in."""
+    from .branches import BranchError, switch_branch
+
+    if not request.user.is_authenticated:
+        return redirect("accounts:login")
+    try:
+        branch = switch_branch(request.user, request.POST.get("branch"))
+    except BranchError as exc:
+        messages.error(request, str(exc))
+        return redirect("/")
+    messages.success(request, f"You are now working in {branch.name}.")
+    return redirect(_after_switch(request))
+
+
+def branch_list(request):
+    """Every branch of the business, and the form that opens a new one."""
+    from .branches import BranchError, create_branch
+    from .models import Branch
+
+    blocked = require(
+        request, "branch.manage",
+        message="You do not have permission to manage branches.",
+    )
+    if blocked:
+        return blocked
+
+    if request.method == "POST":
+        try:
+            branch = create_branch(
+                user=request.user,
+                name=request.POST.get("name"),
+                address=request.POST.get("address"),
+                phone=request.POST.get("phone"),
+            )
+        except BranchError as exc:
+            messages.error(request, str(exc))
+        else:
+            messages.success(
+                request,
+                f"The branch {branch.name} is open. It starts empty, with "
+                f"the default lists.",
+            )
+        return redirect("core:branch_list")
+
+    from .branches import count_staff
+
+    branches = list(Branch.objects.all())
+    count_staff(branches)
+    return render(
+        request,
+        "system/branches.html",
+        {
+            "branches": branches,
+            "open_count": sum(1 for b in branches if b.is_active),
+            "active_tab": "branches",
+        },
+    )
+
+
+def branch_edit(request, pk):
+    """Rename a branch, or change its address and phone."""
+    from .branches import BranchError, update_branch
+    from .models import Branch
+
+    blocked = require(
+        request, "branch.manage",
+        message="You do not have permission to manage branches.",
+    )
+    if blocked:
+        return blocked
+
+    branch = get_object_or_404(Branch, pk=pk)
+    if request.method == "POST":
+        try:
+            update_branch(
+                branch,
+                user=request.user,
+                name=request.POST.get("name"),
+                address=request.POST.get("address"),
+                phone=request.POST.get("phone"),
+            )
+        except BranchError as exc:
+            messages.error(request, str(exc))
+            return redirect("core:branch_edit", pk=branch.pk)
+        messages.success(request, "Saved.")
+        return redirect("core:branch_list")
+    return render(
+        request,
+        "system/branch_form.html",
+        {"branch": branch, "active_tab": "branches"},
+    )
+
+
+@require_POST
+def branch_toggle(request, pk):
+    """Close a branch - its books stay - or open it again."""
+    from .branches import BranchError, set_branch_open
+    from .models import Branch
+
+    blocked = require(
+        request, "branch.manage",
+        message="You do not have permission to manage branches.",
+    )
+    if blocked:
+        return blocked
+
+    branch = get_object_or_404(Branch, pk=pk)
+    try:
+        set_branch_open(branch, user=request.user, is_open=not branch.is_active)
+    except BranchError as exc:
+        messages.error(request, str(exc))
+    else:
+        if branch.is_active:
+            messages.success(request, f"{branch.name} is open again.")
+        else:
+            messages.success(request, f"{branch.name} is closed. Its records are kept.")
+    return redirect("core:branch_list")

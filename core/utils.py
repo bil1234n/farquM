@@ -29,8 +29,11 @@ def generate_reference(prefix: str, model, field: str = "reference") -> str:
     today = timezone.localdate()
     stamp = today.strftime("%Y%m%d")
     base = f"{prefix}-{stamp}-"
+    # _base_manager, not objects: references are unique across the whole
+    # business, and the default manager only sees the branch being worked
+    # in - so it would hand Branch 2 the number Branch 1 used this morning.
     last = (
-        model.objects.filter(**{f"{field}__startswith": base})
+        model._base_manager.filter(**{f"{field}__startswith": base})
         .order_by(f"-{field}")
         .values_list(field, flat=True)
         .first()

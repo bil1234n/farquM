@@ -61,6 +61,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Right after the user is known: everything below it, every view and
+    # every query, works inside that user's branch. See core/branching.py.
+    "core.branching.BranchMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "core.middleware.CurrentUserMiddleware",
@@ -258,9 +261,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # REST API (consumed by the React Native app in ../mobile)
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
+    # DRF's own two, plus one step: once the token is read, that user's
+    # branch becomes the one the request works in (core/branch_auth.py).
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.TokenAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
+        "core.branch_auth.BranchTokenAuthentication",
+        "core.branch_auth.BranchSessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",

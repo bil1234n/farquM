@@ -232,7 +232,7 @@ class TransactionDetailView(OwnerScopedMixin, PermissionRequiredMixin, DetailVie
             super()
             .get_queryset()
             .select_related("customer", "sold_by", "voided_by", "owner", "note_tag")
-            .prefetch_related("items", "receipts")
+            .prefetch_related("items", "receipts", "extra_charges")
         )
 
     def get_context_data(self, **kwargs):
@@ -279,6 +279,10 @@ def sale_create(request):
 
     can_credit = request.user.has_access("sale.credit")
     can_discount = request.user.has_access("sale.discount")
+    # "We paid out" on an extra charge records money leaving the business,
+    # which is its own permission wherever it is entered from. Without it the
+    # extra is still charged to the customer.
+    can_record_cost = request.user.has_access("expense.record")
     form = SaleHeaderForm(
         request.POST or None,
         request.FILES or None,
@@ -289,7 +293,7 @@ def sale_create(request):
 
     if request.method == "POST":
         cart, cart_errors = _parse_cart(request)
-        extras, extra_errors = _parse_extras(request, can_credit)
+        extras, extra_errors = _parse_extras(request, can_credit, can_record_cost)
         cart_errors = list(cart_errors) + extra_errors
 
         if cart_errors:
@@ -373,6 +377,8 @@ def sale_create(request):
             # The rows posted last time, so a sale that bounced back with an
             # error does not lose the extra charges somebody had typed in.
             "extra_rows": _posted_extra_rows(request),
+            # Shows the "We paid out" box on each extra charge.
+            "can_record_cost": can_record_cost,
         },
     )
 
@@ -381,32 +387,38 @@ def _posted_extra_rows(request):
     """
     The extra-charge rows exactly as posted, one dict per row.
 
-    Parallel arrays, like the cart: extra_label[], extra_amount[], extra_pay[].
-    Empty on a GET.
+    Parallel arrays, like the cart: extra_label[], extra_amount[], extra_pay[]
+    and extra_cost[] ("We paid out" - only there for somebody who may record
+    expenses). Empty on a GET.
     """
     if request.method != "POST":
         return []
     labels = request.POST.getlist("extra_label[]")
     amounts = request.POST.getlist("extra_amount[]")
     pays = request.POST.getlist("extra_pay[]")
+    costs = request.POST.getlist("extra_cost[]")
     return [
         {
             "label": labels[i] if i < len(labels) else "",
             "amount": amount,
             "pay": pays[i] if i < len(pays) else "NOW",
+            "cost": costs[i] if i < len(costs) else "",
         }
         for i, amount in enumerate(amounts)
     ]
 
 
-def _parse_extras(request, can_credit):
+def _parse_extras(request, can_credit, can_record_cost=False):
     """
-    Turn the posted extra-charge rows into [{label, amount, on_debt}].
+    Turn the posted extra-charge rows into
+    [{label, amount, on_debt, cost_amount}].
 
-    A row with no amount is skipped (the seller added one and thought better
-    of it). A row with an amount must say what it is for. Putting one on debt
-    needs a registered customer, and somebody who may not sell on credit has
-    every row collected now - the service enforces both again regardless.
+    A row with no amount and nothing paid out is skipped (the seller added
+    one and thought better of it). A row with an amount must say what it is
+    for. Putting one on debt needs a registered customer, and somebody who may
+    not sell on credit has every row collected now - the service enforces
+    both again regardless. "We paid out" is read only for somebody who may
+    record expenses; nobody else is shown the box.
     """
     from decimal import InvalidOperation
 
@@ -421,11 +433,32 @@ def _parse_extras(request, can_credit):
         if amount < ZERO:
             errors.append(f"Extra charge {idx}: the amount cannot be negative.")
             continue
-        if amount == ZERO:
+        cost = ZERO
+        if can_record_cost:
+            try:
+                cost = money(Decimal((row["cost"] or "0").strip() or "0"))
+            except (InvalidOperation, ValueError):
+                errors.append(
+                    f"Extra charge {idx}: what we paid out is not a number."
+                )
+                continue
+            if cost < ZERO:
+                errors.append(
+                    f"Extra charge {idx}: what we paid out cannot be negative."
+                )
+                continue
+        if amount == ZERO and cost == ZERO:
             continue
         label = " ".join((row["label"] or "").split())
         if not label:
             errors.append(f"Extra charge {idx}: say what it is for.")
+            continue
+        if amount == ZERO:
+            errors.append(
+                f"Extra charge {idx} ({label}): enter what the customer is "
+                "charged. If the business pays for it alone, record it under "
+                "Expenses instead."
+            )
             continue
         on_debt = bool(can_credit and row["pay"] == "DEBT")
         if on_debt and not has_customer:
@@ -434,7 +467,10 @@ def _parse_extras(request, can_credit):
                 "put it on their debt, or let them pay it now."
             )
             continue
-        extras.append({"label": label, "amount": amount, "on_debt": on_debt})
+        extras.append({
+            "label": label, "amount": amount, "on_debt": on_debt,
+            "cost_amount": cost,
+        })
     return extras, errors
 
 
@@ -715,6 +751,13 @@ def delivery_create(request, pk):
 
     everything = "everything" in request.POST
     lines = []
+    # Units broken while handing over, per line - extra units off the shelf,
+    # never fewer for the customer (sales.delivery).
+    broken = {
+        item.pk: (request.POST.get(f"broken_{item.pk}") or "").strip()
+        for item in txn.items.all()
+        if (request.POST.get(f"broken_{item.pk}") or "").strip() not in ("", "0")
+    }
     if not everything:
         for item in txn.items.all():
             raw = (request.POST.get(f"qty_{item.pk}") or "").strip()
@@ -739,15 +782,20 @@ def delivery_create(request, pk):
             vehicle=request.POST.get("vehicle", ""),
             notes=request.POST.get("notes", ""),
             note_tag=note_tag,
+            broken=broken,
         )
     except (DeliveryError, ValidationError) as exc:
         for msg in getattr(exc, "messages", [str(exc)]):
             messages.error(request, msg)
     else:
         units = sum(line.quantity for line in delivery.lines.all())
+        smashed = sum(line.broken for line in delivery.lines.all())
         log_action(
             AuditAction.CREATE, instance=delivery,
-            description=f"Handed over {units} unit{'' if units == 1 else 's'} of {txn.reference}.",
+            description=(
+                f"Handed over {units} unit{'' if units == 1 else 's'} of {txn.reference}."
+                + (f" {smashed} broken while handing over." if smashed else "")
+            ),
         )
         txn.refresh_from_db()
         messages.success(
@@ -759,6 +807,13 @@ def delivery_create(request, pk):
                 else "The rest is still waiting for the customer."
             ),
         )
+        if smashed:
+            # Its own message rather than a clause on the one above, which
+            # the translator already knows by its exact shape.
+            messages.info(
+                request,
+                f"{smashed} broken unit{'' if smashed == 1 else 's'} taken off the stock as damage.",
+            )
     return redirect(reverse("sales:transaction_detail", args=[txn.pk]) + "#handover")
 
 

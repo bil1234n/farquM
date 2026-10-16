@@ -48,6 +48,47 @@
 
       <div class="topbar-tools ms-2">
 
+        {% comment %}
+          The branch being worked in. A switcher for whoever may move between
+          branches, a plain label for somebody who works in one, and nothing
+          at all for a business with only one branch.
+        {% endcomment %}
+        {% if SEVERAL_BRANCHES and CURRENT_BRANCH %}
+          {% if MY_BRANCHES|length > 1 %}
+            <div class="dropdown">
+              <button class="btn btn-sm btn-outline-primary dropdown-toggle branch-toggle" type="button"
+                      data-bs-toggle="dropdown" aria-expanded="false" title="Branch" data-i18n-title="r11.branch">
+                <i class="bi bi-shop me-1"></i><span class="branch-name">{{ CURRENT_BRANCH.name }}</span>
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end branch-menu">
+                <li><h6 class="dropdown-header"><span>Switch branch</span></h6></li>
+                {% for b in MY_BRANCHES %}
+                  <li>
+                    <form method="post" action="{% url 'core:branch_switch' %}" class="m-0">
+                      {% csrf_token %}
+                      <input type="hidden" name="branch" value="{{ b.pk }}">
+                      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                      <button class="dropdown-item d-flex align-items-center gap-2 {% if b.pk == CURRENT_BRANCH.pk %}active{% endif %}"
+                              type="submit">
+                        <i class="bi {% if b.pk == CURRENT_BRANCH.pk %}bi-check-circle-fill{% else %}bi-circle{% endif %}"></i>
+                        <span class="text-truncate">{{ b.name }}</span>
+                      </button>
+                    </form>
+                  </li>
+                {% endfor %}
+                {% if user|can:"branch.manage" %}
+                  <li><hr class="dropdown-divider"></li>
+                  <li><a class="dropdown-item" href="{% url 'core:branch_list' %}">
+                    <i class="bi bi-gear me-2"></i><span>Manage branches</span></a></li>
+                {% endif %}
+              </ul>
+            </div>
+          {% else %}
+            <span class="branch-chip" title="Branch" data-i18n-title="r11.branch">
+              <i class="bi bi-shop me-1"></i><span class="branch-name">{{ CURRENT_BRANCH.name }}</span></span>
+          {% endif %}
+        {% endif %}
+
         {# ---------- Language ---------- #}
         <div class="dropdown">
           <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"

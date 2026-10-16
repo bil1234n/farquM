@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Branches{% endblock %}
+{% block page_title %}Branches{% endblock %}
+{% block breadcrumb %}<div class="crumb"><span>Each branch keeps books of its own</span></div>{% endblock %}
+
+{% block content %}
+{% include "system/_tabs.html" %}
+
+<div class="alert alert-info small d-flex gap-2">
+  <i class="bi bi-info-circle mt-1"></i>
+  <div><span>Every branch has its own products and stock, customers and debts, sales, expenses, employees and Audit. Nothing is shared and nothing is added together. Switch branch from the top of any page or from My Profile; staff work only in the branches given to them under Users &amp; Roles.</span></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex align-items-center">
+        <i class="bi bi-shop me-2"></i><span>All branches</span>
+        <span class="badge text-bg-light border ms-2">{{ open_count }}</span>
+      </div>
+      <div class="list-group list-group-flush branch-rows">
+        {% for b in branches %}
+          <div class="list-group-item d-flex flex-column flex-md-row align-items-md-center gap-2 {% if not b.is_active %}opacity-75{% endif %}">
+            <div class="d-flex align-items-center gap-2 flex-grow-1 min-w-0">
+            <div class="branch-mark {% if b.pk == CURRENT_BRANCH.pk %}is-current{% endif %}"><i class="bi bi-shop"></i></div>
+            <div class="flex-grow-1 min-w-0">
+              <div class="fw-semibold text-truncate">
+                {{ b.name }}
+                {% if b.is_main %}<span class="badge text-bg-primary-subtle text-primary-emphasis border ms-1"><span>Main</span></span>{% endif %}
+                {% if b.pk == CURRENT_BRANCH.pk %}<span class="badge text-bg-success ms-1"><span>You are here</span></span>{% endif %}
+                {% if not b.is_active %}<span class="badge text-bg-dark ms-1"><span>Closed</span></span>{% endif %}
+              </div>
+              <div class="text-muted-sm d-flex flex-wrap column-gap-3">
+                {% if b.address %}<span><i class="bi bi-geo-alt me-1"></i>{{ b.address }}</span>{% endif %}
+                {% if b.phone %}<span><i class="bi bi-telephone me-1"></i>{{ b.phone }}</span>{% endif %}
+              </div>
+              <div class="text-muted-sm"><i class="bi bi-people me-1"></i><span>{{ b.staff_count }} staff work here</span></div>
+            </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap justify-content-end flex-shrink-0">
+              {% if b.is_active and b.pk != CURRENT_BRANCH.pk %}
+                <form method="post" action="{% url 'core:branch_switch' %}" class="m-0">
+                  {% csrf_token %}
+                  <input type="hidden" name="branch" value="{{ b.pk }}">
+                  <button class="btn btn-sm btn-outline-primary" type="submit">
+                    <i class="bi bi-box-arrow-in-right me-1"></i><span>Work here</span></button>
+                </form>
+              {% endif %}
+              <a href="{% url 'core:branch_edit' b.pk %}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-pencil me-1"></i><span>Edit</span></a>
+              {% if not b.is_main %}
+                <form method="post" action="{% url 'core:branch_toggle' b.pk %}" class="m-0">
+                  {% csrf_token %}
+                  {% if b.is_active %}
+                    <button class="btn btn-sm btn-outline-danger" type="submit" data-confirm-key="r11.close_confirm"
+                            data-confirm="Close this branch? Its records are kept, but nobody can work in it until it is opened again.">
+                      <i class="bi bi-x-circle me-1"></i><span>Close</span></button>
+                  {% else %}
+                    <button class="btn btn-sm btn-outline-success" type="submit">
+                      <i class="bi bi-arrow-counterclockwise me-1"></i><span>Open again</span></button>
+                  {% endif %}
+                </form>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-plus-lg me-1"></i><span>Add a branch</span></div>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label" for="branchName"><span>Name</span></label>
+            <input class="form-control" id="branchName" name="name" maxlength="120" required
+                   placeholder="e.g. Adama yard" data-i18n-placeholder="r11.ph_branch_name">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="branchAddress"><span>Address</span></label>
+            <input class="form-control" id="branchAddress" name="address" maxlength="255">
+          </div>
+          <div class="mb-1">
+            <label class="form-label" for="branchPhone"><span>Phone</span></label>
+            <input class="form-control" id="branchPhone" name="phone" maxlength="40">
+          </div>
+          <div class="form-text"><span>A new branch starts empty, with its own copy of the default lists.</span></div>
+        </div>
+        <div class="card-footer bg-light text-end">
+          <button class="btn btn-primary btn-sm" type="submit">
+            <i class="bi bi-plus-lg me-1"></i><span>Add branch</span></button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Closing a branch takes it away from everybody working in it - ask first.
+  document.querySelectorAll("[data-confirm]").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      var text = button.getAttribute("data-confirm");
+      if (window.I18N) { text = I18N.t(button.getAttribute("data-confirm-key"), text); }
+      if (!window.confirm(text)) { event.preventDefault(); }
+    });
+  });
+</script>
+{% endblock %}

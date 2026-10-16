@@ -283,6 +283,24 @@ CATALOG: tuple[PermGroup, ...] = (
         ),
     ),
     PermGroup(
+        key="branches",
+        label="Branches",
+        icon="bi-shop",
+        blurb="Each branch keeps books of its own - its own products, "
+              "customers, sales and Audit. These decide who may move between "
+              "them, and who may open and close them.",
+        perms=(
+            Perm("branch.all", "Work in every branch",
+                 "Switch between branches from the account page. Without this "
+                 "a person works only in the branches given to them.",
+                 sensitive=True),
+            Perm("branch.manage", "Add, rename and close branches",
+                 "A closed branch keeps its books, but nobody can work in it "
+                 "until it is opened again.",
+                 sensitive=True),
+        ),
+    ),
+    PermGroup(
         key="admin",
         label="Administration",
         icon="bi-shield-lock",
@@ -470,6 +488,7 @@ PAGE_PERMISSIONS: dict[str, str] = {
     "core:settings": "settings.view",
     "core:access_list": "user.permissions",
     "core:role_list": "role.manage",
+    "core:branch_list": "branch.manage",
 }
 
 #: What it takes to work the hand-over queue: the queue itself AND the sales it

@@ -36,6 +36,49 @@ def business_settings(request):
             else frozenset()
         ),
         "DEBUG": settings.DEBUG,
+        **_branch_context(user),
+    }
+
+
+def _branch_context(user) -> dict:
+    """
+    Which branch the page is in, and where else this person may go.
+
+        CURRENT_BRANCH    the Branch being worked in, or None
+        MY_BRANCHES       the open branches this person may switch to
+        SEVERAL_BRANCHES  whether the business runs more than one - a
+                          one-branch business never sees branch controls
+    """
+    empty = {
+        "CURRENT_BRANCH": None,
+        "MY_BRANCHES": [],
+        "SEVERAL_BRANCHES": False,
+        "MAIN_BRANCH_NAME": "",
+    }
+    if user is None or not getattr(user, "is_authenticated", False):
+        return empty
+    try:
+        from .models import Branch
+
+        mine = list(user.allowed_branches())
+        current = next((b for b in mine if b.pk == user.current_branch_id), None)
+        several = len(mine) > 1 or Branch.objects.filter(is_active=True).count() > 1
+        main_name = ""
+        if several:
+            main_name = next((b.name for b in mine if b.is_main), "") or (
+                Branch.objects.filter(is_main=True).values_list("name", flat=True).first()
+                or ""
+            )
+    except Exception:
+        # The branch table may not exist yet, mid-migration. A page without a
+        # branch switcher beats no page at all.
+        return empty
+    return {
+        "CURRENT_BRANCH": current,
+        "MY_BRANCHES": mine,
+        "SEVERAL_BRANCHES": several,
+        # What "no branch given" means, by the main branch's own name.
+        "MAIN_BRANCH_NAME": main_name,
     }
 
 
@@ -99,6 +142,7 @@ NAV_RULES: tuple[tuple[str, str, str], ...] = (
     ("core", "settings", "settings"),
     ("core", "business_settings", "settings"),
     ("core", "security_settings", "settings"),
+    ("core", "branch_", "settings"),
 )
 
 

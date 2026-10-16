@@ -20,4 +20,9 @@ urlpatterns = [
     path("roles/<int:pk>/", views.role_form, name="role_update"),
     path("roles/<int:pk>/delete/", views.role_delete, name="role_delete"),
     path("roles/<int:pk>/reset/", views.role_reset, name="role_reset"),
+    # Branches - separate books for each shop or yard
+    path("branches/", views.branch_list, name="branch_list"),
+    path("branches/switch/", views.branch_switch, name="branch_switch"),
+    path("branches/<int:pk>/", views.branch_edit, name="branch_edit"),
+    path("branches/<int:pk>/toggle/", views.branch_toggle, name="branch_toggle"),
 ]

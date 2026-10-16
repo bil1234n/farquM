@@ -90,7 +90,8 @@ def series(entries, period: Period, keys) -> list[dict]:
 
 #: Extra facts an item may carry, copied onto its row when present.
 _ROW_EXTRAS = (
-    "party", "note", "in_batch", "target", "quantity", "unit_display", "deleted",
+    "party", "note", "in_batch", "on_sale",
+    "target", "quantity", "unit_display", "deleted",
     "method", "method_display",
     # A delivery, and how it was put right (reports/corrections.py).
     "source", "in_store", "corrected", "cancelled", "recorded_quantity",
@@ -371,6 +372,16 @@ def profit_detail(user, period: Period, filters=None) -> dict:
     ).values_list("transaction__created_at", "unit_cost", "product__audit_cost", "quantity"):
         cost = yours if yours is not None else (unit_cost or ZERO)
         entries.append((local_day(created), "cost", cost * (quantity or 0)))
+    # What the lorries and the loaders charged on those sales cost: part of
+    # the cost of the sale, not a running cost (reports.selectors.goods_cost).
+    for created, services in scoped(
+        Transaction.objects.active().filter(
+            created_at__date__gte=start, created_at__date__lte=end,
+            extra_charge_cost__gt=ZERO,
+        ),
+        user,
+    ).values_list("created_at", "extra_charge_cost"):
+        entries.append((local_day(created), "cost", services or ZERO))
     # Only the running costs his costs do not already hold come off, day by
     # day in the same proportion as in the headline, so the bars add up to it.
     share = (
@@ -379,7 +390,13 @@ def profit_detail(user, period: Period, filters=None) -> dict:
     )
     running_by_category = defaultdict(lambda: [ZERO, 0])
     for spent_on, amount, category in scoped(
-        Expense.objects.between(start, end).filter(production_run__isnull=True), user
+        # A batch's costs and a sale's services are both already inside the
+        # cost of what was sold; taking either off here as well would count
+        # it twice (expenses.services.running_costs).
+        Expense.objects.between(start, end).filter(
+            production_run__isnull=True, extra_charge__isnull=True
+        ),
+        user,
     ).values_list("spent_on", "amount", "category_name"):
         entries.append((spent_on, "running", (amount or ZERO) * share))
         row = running_by_category[category or "-"]
@@ -433,6 +450,8 @@ def profit_detail(user, period: Period, filters=None) -> dict:
         "figures": {
             "revenue": pr["revenue"],
             "cost_of_sold": pr["cost_of_sold"],
+            # Inside cost_of_sold: the lorries and loaders charged on sales.
+            "service_cost": pr["service_cost"],
             "gross": pr["gross"],
             "running_costs": pr["running_costs"],
             "running_total": pr["running_total"],

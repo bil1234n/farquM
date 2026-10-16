@@ -342,6 +342,9 @@ class PeriodTests(TestCase):
         self.assertEqual(resolve_period("90d", today=today).bucket, "week")
         self.assertEqual(resolve_period("365d", today=today).bucket, "month")
         self.assertEqual(resolve_period("nonsense", today=today).key, "90d")
+        # A week: seven days ending today, a candle a day.
+        week = resolve_period("7d", today=today)
+        self.assertEqual((week.start, week.days, week.bucket), (dt.date(2026, 9, 27), 7, "day"))
 
     def test_custom_dates(self):
         today = dt.date(2026, 10, 3)

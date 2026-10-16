@@ -42,7 +42,7 @@ def jsonable(value):
 @permission_classes([requires("costing.view")])
 def audit_report(request):
     """
-    ?range=30d|90d|365d|all, or ?date_from=&date_to=. ?product= picks whose
+    ?range=7d|30d|90d|365d|all, or ?date_from=&date_to=. ?product= picks whose
     batch costs the cost candles follow.
     """
     q = request.query_params

@@ -63,7 +63,11 @@ from core.utils import ZERO, money
 DEC = DecimalField(max_digits=18, decimal_places=4)
 
 #: The range buttons, in the order they are offered. None = since the start.
-RANGES: dict[str, int | None] = {"30d": 30, "90d": 90, "365d": 365, "all": None}
+#: The period buttons, in the order they are shown: a week, a month, three
+#: months, twelve months, everything. Rolling windows ending today.
+RANGES: dict[str, int | None] = {
+    "7d": 7, "30d": 30, "90d": 90, "365d": 365, "all": None,
+}
 DEFAULT_RANGE = "90d"
 
 #: Money-out kinds and stock kinds, in the order (and so the colour) the
@@ -360,6 +364,9 @@ def _out_items(user, period: Period):
     expenses = list(scoped(Expense.objects.between(start, end), user).values(
         "id", "reference", "spent_on", "amount", "category_name", "payee", "notes",
         "employee_id", "employee__name", "production_run_id", "recorded_by_id",
+        # A lorry or loaders hired to serve one sale: real money out, but
+        # already inside the cost of that sale, so the row says which.
+        "extra_charge__transaction__reference",
     ))
     deliveries = list(scoped(
         MaterialMovement.objects.filter(
@@ -414,6 +421,7 @@ def _out_items(user, period: Period):
             "reference": r["reference"] or "",
             "by": names.get(r["recorded_by_id"], ""),
             "in_batch": bool(r["production_run_id"]),
+            "on_sale": r["extra_charge__transaction__reference"] or "",
             "target": None, "quantity": None, "unit_display": "", "unit_cost": None,
             "deleted": False,
             # Corrected or cancelled on the expense itself (expenses app).
@@ -695,6 +703,10 @@ def profit(user, period: Period) -> dict:
         "sales_count": sales["count"],
         "outstanding": sales["outstanding"],
         "cost_of_sold": goods["used"],
+        # Inside cost_of_sold: what the lorries and the loaders charged on
+        # these sales cost. Taken off here, and kept out of the running costs
+        # so it is not taken off twice (expenses.services.running_costs).
+        "service_cost": goods["services"],
         # The running costs this profit takes off; the rest are in his costs.
         "running_costs": taken,
         "running_total": running,

@@ -40,6 +40,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
 
+from core.branching import branch_field, branch_manager
 from core.models import TimeStampedModel, note_tag_field
 from core.permissions import WILDCARD, clean_codes, expand
 from core.utils import avatar_upload_path, validate_avatar_file
@@ -375,6 +376,30 @@ class User(AbstractUser):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
+    # -- Branches (see core.branching) ---------------------------------------
+    #: Where this person works. Empty means the main branch - which is where
+    #: everybody worked before there were branches. Somebody allowed to work
+    #: in every branch (branch.all) is not limited by this list.
+    branches = models.ManyToManyField(
+        "core.Branch",
+        blank=True,
+        related_name="staff",
+        help_text=(
+            "The branches this person works in. Leave empty for the main "
+            "branch only."
+        ),
+    )
+    #: The branch they last switched to. Only honoured while they are still
+    #: allowed in it - see current_branch_id.
+    active_branch = models.ForeignKey(
+        "core.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="The branch this person is working in now.",
+    )
+
     objects = UserManager()
 
     class Meta:
@@ -459,8 +484,83 @@ class User(AbstractUser):
 
     def refresh_access(self):
         """Drop the cached permission set after an edit within one request."""
-        for attr in ("effective_permissions", "role_definition", "data_scope"):
+        for attr in (
+            "effective_permissions",
+            "role_definition",
+            "data_scope",
+            "allowed_branch_ids",
+            "current_branch_id",
+        ):
             self.__dict__.pop(attr, None)
+
+    # -- Branches ------------------------------------------------------------
+    @property
+    def works_in_every_branch(self) -> bool:
+        """The owner and whoever he trusts with every branch's books."""
+        return self.has_access("branch.all")
+
+    @cached_property
+    def allowed_branch_ids(self) -> tuple[int, ...]:
+        """
+        The open branches this person may work in, main branch first.
+
+        Never empty for a saved account. Somebody given no branch at all
+        works in the main branch - that is every account that existed before
+        branches did - and the main branch can never be closed, so there is
+        always somewhere to land. The alternative, "no branch", would mean
+        "no filter", and that is the one answer this must never give.
+        """
+        from core.models import Branch
+
+        if not self.pk:
+            return ()
+        if self.works_in_every_branch:
+            ids = tuple(
+                Branch.objects.filter(is_active=True).values_list("pk", flat=True)
+            )
+            return ids or (Branch.main_id(),)
+        given = list(self.branches.values_list("pk", "is_active"))
+        if not given:
+            return (Branch.main_id(),)
+        # Given branches, but every one of them closed: nowhere to work. NOT
+        # the main branch - closing the Adama yard must not hand its staff
+        # the head office's books. See core.branching.NO_BRANCH.
+        return tuple(pk for pk, is_open in given if is_open)
+
+    def allowed_branches(self):
+        from core.models import Branch
+
+        return Branch.objects.filter(pk__in=self.allowed_branch_ids)
+
+    @cached_property
+    def current_branch_id(self) -> int | None:
+        """
+        The branch this person is working in now.
+
+        core.branching.NO_BRANCH when every branch they were given is closed:
+        never None for a saved account, because None means "no filter".
+        """
+        from core.branching import NO_BRANCH
+
+        if not self.pk:
+            return None
+        allowed = self.allowed_branch_ids
+        if not allowed:
+            return NO_BRANCH
+        if self.active_branch_id in allowed:
+            return self.active_branch_id
+        return allowed[0]
+
+    @property
+    def current_branch(self):
+        from core.models import Branch
+
+        found = self.current_branch_id
+        return Branch.objects.filter(pk=found).first() if found else None
+
+    @property
+    def can_switch_branch(self) -> bool:
+        return len(self.allowed_branch_ids) > 1
 
     @cached_property
     def data_scope(self) -> str:
@@ -627,6 +727,15 @@ class AuditLog(TimeStampedModel):
     )
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=255, blank=True)
+
+    #: The branch the action happened in. Blank for what belongs to the whole
+    #: business - a sign-in, a new account, a changed role - which therefore
+    #: shows in every branch's log. Written by accounts.services.log_action.
+    branch = branch_field(null=True)
+    branch_path = "branch"
+    branch_shared_when_blank = True
+
+    objects = branch_manager()
 
     class Meta:
         ordering = ["-created_at"]

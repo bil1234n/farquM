@@ -18,8 +18,10 @@ from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
+from core.branching import branch_manager
 from core.models import (
     AuthoredModel,
+    BranchModel,
     OwnedModel,
     PersonRecord,
     TimeStampedModel,
@@ -42,7 +44,7 @@ class CustomerQuerySet(models.QuerySet):
         return self.filter(credit_account__outstanding_balance__gt=0)
 
 
-class Customer(PersonRecord, AuthoredModel, OwnedModel):
+class Customer(BranchModel, PersonRecord, AuthoredModel, OwnedModel):
     #: Photographing the card and opening it again are the same job, so the
     #: permission to edit a customer is the one that unlocks it. See
     #: core.models.PersonRecord.
@@ -78,7 +80,7 @@ class Customer(PersonRecord, AuthoredModel, OwnedModel):
     notes = models.TextField(blank=True)
     note_tag = note_tag_field()
 
-    objects = CustomerQuerySet.as_manager()
+    objects = branch_manager(CustomerQuerySet)
 
     class Meta:
         ordering = ["name"]
@@ -90,7 +92,8 @@ class Customer(PersonRecord, AuthoredModel, OwnedModel):
         ]
         constraints = [
             models.UniqueConstraint(
-                fields=["owner", "phone"], name="customer_phone_unique_per_owner"
+                fields=["branch", "owner", "phone"],
+                name="customer_phone_unique_per_branch_owner",
             ),
         ]
 
@@ -197,14 +200,18 @@ class TransactionQuerySet(models.QuerySet):
         dec = models.DecimalField(max_digits=16, decimal_places=2)
         # At the owner's own cost for a product where he has set one.
         cost = line_cost_used("items__")
+        # extra_charge_cost is read off the row, not summed over a second
+        # join: two joins in one aggregate multiply each other's rows, and the
+        # profit on a two-line sale with one extra charge would come out wrong.
         return self.annotate(cost_total=Sum(cost)).annotate(
             profit=models.ExpressionWrapper(
-                F("total_amount") - F("cost_total"), output_field=dec
+                F("total_amount") - F("cost_total") - F("extra_charge_cost"),
+                output_field=dec,
             )
         )
 
 
-class Transaction(OwnedModel, TimeStampedModel):
+class Transaction(BranchModel, OwnedModel, TimeStampedModel):
     # `reference` stays globally unique: it is quoted on printed receipts and
     # written into the stock ledger, so two managers must never issue the same
     # one. Only visibility is partitioned, not the numbering.
@@ -246,6 +253,15 @@ class Transaction(OwnedModel, TimeStampedModel):
     # debt instead of collecting it now. Kept as the seller's stated intent;
     # the money itself lives in amount_paid / balance_due.
     extra_charge_on_debt = models.BooleanField(default=False)
+    # What the business itself paid out for those extras - the driver, the
+    # loaders - when the seller filled in "We paid out". Each pay-out is also
+    # an ordinary Expense (expenses.Expense.extra_charge); this column is
+    # their total, kept on the row so a sale's profit is one subtraction and
+    # never a second join. Zero when nothing was paid out.
+    extra_charge_cost = models.DecimalField(
+        max_digits=14, decimal_places=2, default=ZERO,
+        validators=[MinValueValidator(Decimal("0"))],
+    )
     total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO, db_index=True)
     amount_paid = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO)
     balance_due = models.DecimalField(max_digits=14, decimal_places=2, default=ZERO, db_index=True)
@@ -314,7 +330,8 @@ class Transaction(OwnedModel, TimeStampedModel):
         editable=False,
     )
 
-    objects = TransactionQuerySet.as_manager()
+    objects = branch_manager(TransactionQuerySet)
+    branch_parents = ("customer",)
 
     class Meta:
         ordering = ["-created_at", "-id"]
@@ -352,7 +369,7 @@ class Transaction(OwnedModel, TimeStampedModel):
 
     # -- Derived -------------------------------------------------------------
     def recalculate_totals(self, commit: bool = True):
-        """Recompute money fields from the line items. Single source of truth."""
+        """Recompute money fields from the lines. Single source of truth."""
         agg = self.items.aggregate(s=Sum("line_total"))
         self.subtotal = money(agg["s"] or ZERO)
         self.total_amount = money(
@@ -365,7 +382,8 @@ class Transaction(OwnedModel, TimeStampedModel):
         self.payment_status = self.derive_payment_status()
         if commit:
             self.save(update_fields=[
-                "subtotal", "total_amount", "balance_due", "payment_status", "updated_at",
+                "subtotal", "total_amount",
+                "balance_due", "payment_status", "updated_at",
             ])
         return self
 
@@ -400,7 +418,7 @@ class Transaction(OwnedModel, TimeStampedModel):
         return self.items.aggregate(q=Sum("quantity"))["q"] or 0
 
     @property
-    def total_cost(self) -> Decimal:
+    def goods_cost(self) -> Decimal:
         """
         Cost of the goods on this sale. Admin-facing.
 
@@ -412,6 +430,20 @@ class Transaction(OwnedModel, TimeStampedModel):
         from reports.selectors import line_cost_used
 
         return money(self.items.aggregate(c=Sum(line_cost_used()))["c"] or ZERO)
+
+    @property
+    def total_cost(self) -> Decimal:
+        """
+        What this sale cost the business: the goods, plus what was paid out
+        for the extras charged on it - the lorry, the loaders.
+
+        Those pay-outs are taken off HERE and nowhere else. They are real
+        expenses and sit in the month's money out like any other, but a
+        profit must not take them off twice, so expenses.services.running_costs
+        leaves out anything tied to an extra charge - the same treatment a
+        batch's labour already gets.
+        """
+        return money(self.goods_cost + money(self.extra_charge_cost))
 
     @property
     def gross_profit(self) -> Decimal:
@@ -543,6 +575,9 @@ class TransactionItem(models.Model):
     #: column read, not a join over every hand-over ever made.
     quantity_delivered = models.PositiveIntegerField(default=0, editable=False)
 
+    branch_path = "transaction__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["id"]
         verbose_name = "Sale line item"
@@ -593,6 +628,16 @@ class ExtraCharge(models.Model):
     said. `on_debt` records the seller's choice: collected now, or left owing
     on the customer's debt. The money itself lives in the sale's amount_paid /
     balance_due; this is what the seller said about it.
+
+    TWO AMOUNTS, BECAUSE THERE ARE TWO MOVEMENTS
+    --------------------------------------------
+    `amount` is what the customer is charged. `cost_amount` is what the
+    business paid out for it ("We paid out") - often less, sometimes the
+    same, nothing at all when it is the yard's own lorry and the yard's own
+    men. A pay-out becomes an ordinary Expense (expenses.Expense.extra_charge)
+    so it appears in the month's money out with everything else, and the sale
+    carries the total on its row (Transaction.extra_charge_cost) so a profit
+    is one subtraction, not a join.
     """
 
     transaction = models.ForeignKey(
@@ -601,6 +646,15 @@ class ExtraCharge(models.Model):
     label = models.CharField(max_length=120)
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     on_debt = models.BooleanField(default=False)
+    cost_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, default=ZERO,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="What the business paid out for it. Zero when nothing left.",
+    )
+
+    # A line of a sale lives in that sale's branch.
+    branch_path = "transaction__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["id"]
@@ -608,10 +662,24 @@ class ExtraCharge(models.Model):
             models.CheckConstraint(
                 condition=Q(amount__gt=0), name="extra_charge_amount_positive"
             ),
+            models.CheckConstraint(
+                condition=Q(cost_amount__gte=0),
+                name="extra_charge_cost_not_negative",
+            ),
         ]
 
     def __str__(self):
         return f"{self.label}: {self.amount}"
+
+    @property
+    def profit(self) -> Decimal:
+        """What the business kept on this extra after paying for it."""
+        return money(money(self.amount) - money(self.cost_amount))
+
+    @property
+    def cost_expense(self):
+        """The money-out row for the pay-out, if one was recorded."""
+        return self.expenses.filter(is_voided=False).first()
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +733,9 @@ class Delivery(TimeStampedModel):
     )
     void_reason = models.TextField(blank=True)
 
+    branch_path = "transaction__branch"
+    objects = branch_manager()
+
     class Meta:
         ordering = ["-delivered_at", "-id"]
         verbose_name_plural = "Deliveries"
@@ -697,6 +768,15 @@ class DeliveryLine(models.Model):
         TransactionItem, on_delete=models.PROTECT, related_name="delivery_lines"
     )
     quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    #: Units broken while this line was being handed over - two that failed
+    #: the drop test, three cracked lifting them onto the lorry. The customer
+    #: still leaves with `quantity`; these are EXTRA units, taken off the
+    #: shelf as damage (sales.delivery.record_delivery). Selling 100 and
+    #: breaking 5 on the way out is 105 fewer blocks in the yard.
+    broken = models.PositiveIntegerField(default=0)
+
+    branch_path = "delivery__transaction__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["id"]
@@ -737,6 +817,9 @@ class Receipt(TimeStampedModel):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         related_name="receipts_uploaded", null=True, blank=True,
     )
+
+    branch_path = "transaction__branch"
+    objects = branch_manager()
 
     class Meta:
         ordering = ["-created_at"]

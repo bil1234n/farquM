@@ -728,13 +728,18 @@ def assignable_deciders(user=None):
     people most likely to be the right answer.
     """
     from accounts.models import User
+    from core.branching import current_branch_id
 
     candidates = User.objects.active_staff().select_related()
+    # Only people who work in this branch: a request sent to the other yard
+    # is a request nobody there can see, let alone make.
+    branch_id = current_branch_id()
     people = [
         person
         for person in candidates
         if person.has_access("production.create")
         and person.pk != getattr(user, "pk", None)
+        and (not branch_id or branch_id in person.allowed_branch_ids)
     ]
     people.sort(key=lambda p: (0 if p.is_admin else 1, p.display_name.lower()))
     return people
@@ -771,6 +776,13 @@ def request_production(
         raise ValidationError(
             f"{assigned_to.display_name} cannot record production, so they "
             "cannot act on this request."
+        )
+    from core.branching import current_branch_id
+
+    branch_id = current_branch_id()
+    if branch_id and branch_id not in assigned_to.allowed_branch_ids:
+        raise ValidationError(
+            f"{assigned_to.display_name} does not work in this branch."
         )
     if needed_by is not None and needed_by < timezone.localdate():
         raise ValidationError("The date needed cannot be in the past.")

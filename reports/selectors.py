@@ -116,6 +116,23 @@ def line_cost_used(prefix=""):
     )
 
 
+def service_cost(start, end, user=None) -> Decimal:
+    """
+    What the extras charged on sales cost the business in a period - the
+    lorries hired, the loaders paid (sales.ExtraCharge, "We paid out").
+
+    Read off the sale rows rather than summed over the charge lines, because
+    a second join beside the line items would multiply the two sets of rows
+    against each other.
+    """
+    from sales.models import Transaction
+
+    qs = _apply_user(Transaction.objects.active(), user).filter(
+        created_at__date__gte=start, created_at__date__lte=end
+    )
+    return sum_money(qs, "extra_charge_cost")
+
+
 def goods_cost(start, end, user=None) -> dict:
     """
     The cost of what was sold in a period, both ways, and how much of the
@@ -124,7 +141,18 @@ def goods_cost(start, end, user=None) -> dict:
         used      at his cost where he has set one, else the recorded cost -
                   every profit uses this
         recorded  the cost copied onto each line when it was sold - the books
+        goods     `used` without the services, when something needs the two apart
+        services  what the lorries and loaders charged on those sales cost
         covered   the share of the sales (0 to 1) whose products carry his cost
+
+    `used` and `recorded` BOTH include `services`. A hired lorry is part of
+    what that sale cost however the goods on it are costed, and it is taken
+    off here and only here - expenses.services.running_costs leaves those
+    pay-outs out of the running costs for exactly this reason.
+
+    `covered` stays a question about the goods alone: it decides how much of
+    the running costs the owner's own unit costs already hold, and a lorry
+    hired for one delivery is in neither.
     """
     from sales.models import TransactionItem
 
@@ -142,10 +170,13 @@ def goods_cost(start, end, user=None) -> dict:
             ZERO, output_field=DEC,
         ),
     )
+    services = service_cost(start, end, user=user)
     covered = agg["covered"] / agg["sales"] if agg["sales"] > ZERO else ZERO
     return {
-        "used": money(agg["used"]),
-        "recorded": money(agg["recorded"]),
+        "used": money(agg["used"] + services),
+        "recorded": money(agg["recorded"] + services),
+        "goods": money(agg["used"]),
+        "services": services,
         "covered": min(max(covered, ZERO), Decimal("1")),
     }
 
@@ -194,6 +225,7 @@ def profit_summary(start, end, user=None):
         "cogs_recorded": goods["recorded"],
         "gross_recorded": money(sales["revenue"] - goods["recorded"]),
         "covered": goods["covered"],
+        "service_cost": goods["services"],
     }
 
 

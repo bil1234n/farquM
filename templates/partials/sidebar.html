@@ -26,6 +26,9 @@
     <div class="min-w-0 flex-grow-1">
       <div class="name">{{ BUSINESS_NAME }}</div>
       <div class="sub">{{ user.get_role_display }}</div>
+      {% if SEVERAL_BRANCHES and CURRENT_BRANCH %}
+        <div class="sub sidebar-branch text-truncate"><i class="bi bi-shop me-1"></i>{{ CURRENT_BRANCH.name }}</div>
+      {% endif %}
     </div>
     <button class="sidebar-close" type="button" data-sidebar-close
             aria-label="Close menu" data-i18n-title="r4.close_menu" title="Close menu">
@@ -221,7 +224,7 @@
       {% endif %}
     {% endif %}
 
-    {% if user|can:"user.view,audit.view,settings.view,user.permissions,role.manage" %}
+    {% if user|can:"user.view,audit.view,settings.view,user.permissions,role.manage,branch.manage" %}
       <div class="nav-section">Administration</div>
       {% if user|can:"user.view" %}
         <a class="nav-link {% if NAV == 'users' %}active{% endif %}"
@@ -245,6 +248,11 @@
         <a class="nav-link {% if NAV == 'settings' %}active{% endif %}"
            href="{% url 'core:settings' %}">
           <i class="bi bi-sliders"></i> System Settings
+        </a>
+      {% elif user|can:"branch.manage" %}
+        <a class="nav-link {% if NAV == 'settings' %}active{% endif %}"
+           href="{% url 'core:branch_list' %}">
+          <i class="bi bi-shop-window"></i> Branches
         </a>
       {% endif %}
     {% endif %}

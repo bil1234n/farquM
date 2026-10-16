@@ -103,17 +103,25 @@ class DeliveryViewSet(
                 vehicle=data.get("vehicle", ""),
                 notes=data.get("notes", ""),
                 note_tag=data.get("note_tag"),
+                # Units broken while handing over, per sale line. Extra units
+                # off the shelf as damage; the customer's figures do not move.
+                broken={
+                    entry["item"]: entry["quantity"]
+                    for entry in data.get("broken") or []
+                },
             )
         except (DeliveryError, ValidationError) as exc:
             return _error(exc)
 
         units = sum(line.quantity for line in delivery.lines.all())
+        smashed = sum(line.broken for line in delivery.lines.all())
         log_action(
             AuditAction.CREATE,
             instance=delivery,
             description=(
                 f"Handed over {units} unit(s) of {sale.reference} "
                 f"to {delivery.received_by_name or sale.customer_display}."
+                + (f" {smashed} broken while handing over." if smashed else "")
             ),
         )
         sale.refresh_from_db()

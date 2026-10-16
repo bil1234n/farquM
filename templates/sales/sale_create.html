@@ -186,7 +186,10 @@
             path as any other unpaid balance.
 
             Rows are posted as parallel arrays - extra_label[], extra_amount[],
-            extra_pay[] - exactly like the cart.
+            extra_pay[] - exactly like the cart. Somebody who may record
+            expenses also gets "We paid out" (extra_cost[]): what the business
+            itself paid the driver or the workers. That is recorded as an
+            expense and comes off the sale's profit (sales.models.ExtraCharge).
           {% endcomment %}
           <div class="border rounded p-2 mb-3" id="extraBox">
             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -201,8 +204,13 @@
             <div id="extraRows"></div>
             <div class="form-text" id="extraEmpty">
               Transport, a loading worker... something the customer pays on top of
-              the goods. Click <strong>Add</strong>, and again for each further charge.
+              the goods. Click "Add", and again for each further charge.
             </div>
+            {% if can_record_cost %}
+              <div class="form-text d-none" id="extraCostHint">
+                <span>"We paid out" is what the driver or the workers were actually paid. It is recorded as an expense. Leave it empty when nothing was paid out.</span>
+              </div>
+            {% endif %}
           </div>
           {{ extra_rows|json_script:"extraRowsData" }}
 
@@ -547,7 +555,7 @@ function extraRowsInfo() {
   return {total, debt, count, labels};
 }
 
-function addExtraRow(label, amount, pay) {
+function addExtraRow(label, amount, pay, cost) {
   const wrap = document.createElement('div');
   wrap.className = 'extra-row border rounded p-2 mb-2 bg-body-tertiary';
   wrap.innerHTML = `
@@ -576,13 +584,22 @@ function addExtraRow(label, amount, pay) {
           ${CAN_CREDIT ? '<option value="DEBT">Add to debt</option>' : ''}
         </select>
       </div>
-    </div>`;
+    </div>{% if can_record_cost %}{# Money leaving the business is its own permission; the server ignores this box for anybody else. #}
+    <div class="row g-2 mt-1">
+      <div class="col-6">
+        <label class="form-label small mb-1">We paid out</label>
+        <input type="number" name="extra_cost[]" min="0" step="0.01" placeholder="0.00"
+               class="form-control form-control-sm text-end extra-cost">
+      </div>
+    </div>{% endif %}`;
 
   // Set from script rather than interpolated into the markup, so a label
   // containing a quote cannot break the row.
   wrap.querySelector('.option-select').dataset.valueName = label || '';
   if (amount) wrap.querySelector('.extra-amount').value = amount;
   if (pay === 'DEBT' && CAN_CREDIT) wrap.querySelector('.extra-pay').value = 'DEBT';
+  const costBox = wrap.querySelector('.extra-cost');
+  if (costBox && cost) costBox.value = cost;
 
   wrap.querySelector('.extra-amount').addEventListener('input', recalc);
   wrap.querySelector('.extra-pay').addEventListener('change', recalc);
@@ -602,8 +619,10 @@ function addExtraRow(label, amount, pay) {
 }
 
 function syncExtraEmpty() {
-  $('extraEmpty').classList.toggle(
-    'd-none', document.querySelectorAll('#extraRows .extra-row').length > 0);
+  const rows = document.querySelectorAll('#extraRows .extra-row').length;
+  $('extraEmpty').classList.toggle('d-none', rows > 0);
+  const hint = $('extraCostHint');
+  if (hint) hint.classList.toggle('d-none', rows === 0);
 }
 
 $('addExtraBtn').addEventListener('click', () => addExtraRow());
@@ -937,7 +956,7 @@ if (custSelect.value) selectCustomer(custSelect.value);
 // ...and the extra charges that were typed in, so an error elsewhere on the
 // sale does not cost somebody their rows.
 (JSON.parse($('extraRowsData').textContent) || []).forEach(r =>
-  addExtraRow(r.label, r.amount, r.pay));
+  addExtraRow(r.label, r.amount, r.pay, r.cost));
 
 addRow();
 </script>
