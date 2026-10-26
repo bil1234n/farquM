@@ -11,6 +11,7 @@ from . import (
     production_views,
     request_views,
     views,
+    wipe_views,
 )
 
 app_name = "api"
@@ -69,6 +70,10 @@ urlpatterns = [
     # Access control & settings
     path("access/catalog/", views.permission_catalog, name="permission_catalog"),
     path("settings/", views.system_settings, name="system_settings"),
+
+    # Start the books over: deletes every sale, product, batch and stock
+    # record. Admin only, password required, no undo.
+    path("system/wipe-data/", wipe_views.wipe_data, name="wipe_data"),
 
     # Registration passcodes - the phone's half of Settings -> Security.
     path(
