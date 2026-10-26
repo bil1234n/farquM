@@ -14,6 +14,7 @@ redraw itself in the new branch without a second request. The rules live in
 core/branches.py - this module only translates them to HTTP.
 """
 from rest_framework import status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -26,6 +27,7 @@ from core.branches import (
     switch_branch,
     update_branch,
 )
+from core.branching import remember_session_branch
 from core.models import Branch
 
 from .serializers import UserSerializer
@@ -128,6 +130,10 @@ def branch_switch(request):
         branch = switch_branch(request.user, request.data.get("branch"))
     except BranchError as exc:
         return _refused(exc)
+    # Asked from a browser: that browser works there now. The phone needs
+    # nothing kept - it sends the branch it shows with every request.
+    if isinstance(request.successful_authenticator, SessionAuthentication):
+        remember_session_branch(request, branch.pk)
     return Response(
         {
             "branch": _row(branch),

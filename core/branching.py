@@ -43,6 +43,26 @@ to the main branch, which is exactly what this system did before branches
 existed. The filter is tied to a request, never to the model, so background
 work that genuinely needs every row still gets every row.
 
+EACH PHONE AND EACH BROWSER KEEPS ITS OWN BRANCH
+------------------------------------------------
+The branch used to be ONE value on the account (`User.active_branch`), read
+by every device signed in to it. Switching on the website - or on a second
+phone signed in to the same account - moved this phone too, while its screen
+still said the old branch: it listed the other branch's batches, and a
+material added "in Branch 2" was saved into the main branch's store.
+
+So every request now says which branch it means:
+
+  * the phone sends the branch its screen shows in an `X-Branch` header
+    (core/branch_auth.py);
+  * a browser remembers the branch it chose in its own session.
+
+That branch wins for the request, as long as the person may still work in
+it - nothing is saved on the account. `active_branch` is only where a device
+that says nothing starts: a fresh sign-in, or an old build of the app. Every
+API answer carries the branch that served it in its own `X-Branch` header,
+so the phone can see at once if the two ever disagree.
+
 WHY THE FILTER IS LAZY
 ----------------------
 A form field or a serializer field declared on a class builds its queryset
@@ -330,15 +350,80 @@ def branch_of(instance):
 # ---------------------------------------------------------------------------
 # Making a request's branch the active one
 # ---------------------------------------------------------------------------
+#: The header the phone sends on every request: the id of the branch its
+#: screen is showing. Read by core.branch_auth.
+BRANCH_HEADER = "HTTP_X_BRANCH"
+
+#: Where one browser remembers the branch it chose.
+SESSION_BRANCH_KEY = "faruq_branch"
+
+#: Refused when a phone asks for a branch this person may no longer work in
+#: - it was closed, or they were taken off it - rather than quietly writing
+#: into another branch than the one on their screen.
+BRANCH_UNAVAILABLE_MESSAGE = "This branch is closed or you no longer work in it."
+
+
+def as_branch_id(raw):
+    """A branch id from a header or a session, or None if it is not one."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def pin_branch(user, branch_id) -> None:
+    """
+    Make `branch_id` the branch `user` works in - for THIS request only.
+
+    `User.current_branch_id` is what everything reads: the managers through
+    activate_for_user(), the serializers, the page header, the switcher. So
+    setting it here keeps them all in agreement. Nothing is saved on the
+    account, which is what lets a phone and a browser signed in to the same
+    account work in two different branches at once.
+
+    The caller has already checked the person may work there.
+    """
+    # `current_branch_id` is a cached_property: an instance value overrides
+    # it. setattr rather than __dict__ so it also reaches the user behind
+    # Django's lazy request.user.
+    setattr(user, "current_branch_id", branch_id)
+
+
+def pin_session_branch(request, user) -> None:
+    """The website: work in the branch this browser chose, if still allowed."""
+    session = getattr(request, "session", None)
+    if session is None:
+        return
+    wanted = as_branch_id(session.get(SESSION_BRANCH_KEY))
+    if wanted is None:
+        return
+    if wanted in user.allowed_branch_ids:
+        pin_branch(user, wanted)
+    else:
+        # Closed since, or this person was taken off it: fall back to where
+        # the account starts, and stop asking for it.
+        session.pop(SESSION_BRANCH_KEY, None)
+
+
+def remember_session_branch(request, branch_id) -> None:
+    """After a switch on the website: this browser now works there."""
+    session = getattr(request, "session", None)
+    if session is not None:
+        session[SESSION_BRANCH_KEY] = branch_id
+
+
 class BranchMiddleware:
     """
-    The signed-in user's branch is the active branch for the whole request.
+    The branch this request works in is the active branch for all of it.
 
-    Runs after AuthenticationMiddleware, so a browser session is known here.
-    A phone signs in with a token, which DRF only reads inside the view; the
-    authentication classes below activate the branch there. Either way the
-    value is put back when the response leaves, so nothing leaks into the
-    next request served by the same thread.
+    Runs after AuthenticationMiddleware, so a browser session is known here,
+    and the branch that browser chose is used (see pin_session_branch). A
+    phone signs in with a token, which DRF only reads inside the view; the
+    authentication classes in core/branch_auth.py activate the branch the
+    phone asked for there. Either way the value is put back when the
+    response leaves, so nothing leaks into the next request served by the
+    same thread.
     """
 
     def __init__(self, get_response):
@@ -348,13 +433,20 @@ class BranchMiddleware:
         user = getattr(request, "user", None)
         branch_id = None
         if user is not None and getattr(user, "is_authenticated", False):
+            pin_session_branch(request, user)
             branch_id = getattr(user, "current_branch_id", None)
         token = _active.set(branch_id)
         window = _in_request.set(True)
         try:
             if branch_id == NO_BRANCH and not _open_without_a_branch(request):
                 return _closed_branch_response(request)
-            return self.get_response(request)
+            response = self.get_response(request)
+            # Say which branch answered, so the phone can check it against
+            # the branch on its screen.
+            answered = _active.get()
+            if answered and request.path.startswith("/api/"):
+                response["X-Branch"] = str(answered)
+            return response
         finally:
             _in_request.reset(window)
             _active.reset(token)

@@ -332,6 +332,14 @@ EXACT_AM: dict[str, str] = {
     "Your branch has been closed. Ask the owner to move you to another branch.": (
         "ቅርንጫፍዎ ተዘግቷል። ወደ ሌላ ቅርንጫፍ እንዲያዛውርዎ ባለቤቱን ይጠይቁ።"
     ),
+    "This branch is closed or you no longer work in it.": (
+        "ይህ ቅርንጫፍ ተዘግቷል ወይም ከዚህ በኋላ በዚህ ቅርንጫፍ አይሠሩም።"
+    ),
+    # Delete all data of a branch - api/wipe_views.py.
+    "Type DELETE to confirm.": "ለማረጋገጥ DELETE ብለው ይጻፉ።",
+    "Your password is not correct.": "የይለፍ ቃልዎ ትክክል አይደለም።",
+    "No branch is selected.": "ምንም ቅርንጫፍ አልተመረጠም።",
+    "All data deleted.": "ሁሉም መረጃ ተሰርዟል።",
     "That role no longer exists.": "ያ ሚና ከዚህ በኋላ የለም።",
     "That username is already taken.": "ያ የተጠቃሚ ስም አስቀድሞ ተይዟል።",
     "That person cannot be chosen as a supervisor.": "ያ ሰው እንደ አለቃ ሊመረጥ አይችልም።",

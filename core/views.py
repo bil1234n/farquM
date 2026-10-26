@@ -729,6 +729,7 @@ def _after_switch(request) -> str:
 def branch_switch(request):
     """Move the signed-in person into another branch they work in."""
     from .branches import BranchError, switch_branch
+    from .branching import remember_session_branch
 
     if not request.user.is_authenticated:
         return redirect("accounts:login")
@@ -737,6 +738,9 @@ def branch_switch(request):
     except BranchError as exc:
         messages.error(request, str(exc))
         return redirect("/")
+    # This browser works there now. A phone signed in to the same account
+    # stays in the branch on its own screen (core/branching.py).
+    remember_session_branch(request, branch.pk)
     messages.success(request, f"You are now working in {branch.name}.")
     return redirect(_after_switch(request))
 
